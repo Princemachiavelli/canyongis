@@ -1,0 +1,26 @@
+# Nix
+result
+result-*
+.direnv/
+
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+build/
+dist/
+.venv/
+.pytest_cache/
+.ruff_cache/
+
+# Editors
+.vscode/
+.idea/
+*.swp
+
+# Project outputs
+output/
+*.tif
+!tests/**/*.tif
+*.html
+*.geojson

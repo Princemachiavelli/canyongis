@@ -1,11 +1,12 @@
 from __future__ import annotations
 
-import numpy as np
 import geopandas as gpd
-from rasterio.features import shapes as rio_shapes, geometry_mask
+import numpy as np
+from rasterio.features import geometry_mask
+from rasterio.features import shapes as rio_shapes
 from rasterio.transform import xy as rio_xy
 from scipy import ndimage as ndi
-from shapely.geometry import Point, shape, mapping
+from shapely.geometry import Point, mapping, shape
 
 from .config import Config
 
@@ -14,17 +15,15 @@ def rappel_points_gdf(rappel_heights: np.ndarray, transform, crs) -> gpd.GeoData
     mask = rappel_heights > 0
     labeled, n = ndi.label(mask, structure=np.ones((3, 3), dtype=int))
     if n == 0:
-        return gpd.GeoDataFrame(
-            columns=["drop_height_m", "geometry"], geometry="geometry", crs=crs
-        )
+        return gpd.GeoDataFrame(columns=["drop_height_m", "geometry"], geometry="geometry", crs=crs)
 
     idx = np.arange(1, n + 1)
     max_heights = ndi.maximum(rappel_heights, labels=labeled, index=idx)
     centroids = ndi.center_of_mass(mask, labels=labeled, index=idx)
 
     rows = []
-    for (cy, cx), h in zip(centroids, max_heights):
-        x, y = rio_xy(transform, int(round(cy)), int(round(cx)))
+    for (cy, cx), h in zip(centroids, max_heights, strict=True):
+        x, y = rio_xy(transform, round(cy), round(cx))
         rows.append({"drop_height_m": float(h), "geometry": Point(x, y)})
 
     return gpd.GeoDataFrame(rows, crs=crs)
@@ -68,17 +67,18 @@ def score_routes(
     descents, grades, cliff_counts, length_proxies = [], [], [], []
 
     for poly in drainage.geometry:
-        m = geometry_mask(
-            [mapping(poly)], out_shape=(h, w), transform=transform, invert=True
-        )
+        m = geometry_mask([mapping(poly)], out_shape=(h, w), transform=transform, invert=True)
         vals = elev[m]
         vals = vals[~np.isnan(vals)]
         if vals.size == 0:
-            descents.append(0); grades.append(0); cliff_counts.append(0); length_proxies.append(0)
+            descents.append(0)
+            grades.append(0)
+            cliff_counts.append(0)
+            length_proxies.append(0)
             continue
 
         descent = float(vals.max() - vals.min())
-        length_proxy = poly.area ** 0.5
+        length_proxy = poly.area**0.5
         grade = descent / max(length_proxy, 1.0)
         ccount = 0 if rappel_pts.empty else int(rappel_pts.geometry.within(poly.buffer(30)).sum())
 

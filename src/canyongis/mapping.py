@@ -50,9 +50,7 @@ def render_folium_map(
         ).add_to(m)
 
     if not pts.empty:
-        pts_render = pts.sort_values("drop_height_m", ascending=False).head(
-            cfg.folium_max_points
-        )
+        pts_render = pts.sort_values("drop_height_m", ascending=False).head(cfg.folium_max_points)
         max_h = max(pts_render["drop_height_m"].max(), 1.0)
         fg = folium.FeatureGroup(name="Rappel candidates")
         for _, row in pts_render.iterrows():

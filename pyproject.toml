@@ -11,27 +11,27 @@ requires-python = ">=3.11"
 license = { text = "MIT" }
 authors = [{ name = "Josh Hoffer" }]
 classifiers = [
-    "Development Status :: 3 - Alpha",
-    "Intended Audience :: Science/Research",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: POSIX",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3 :: Only",
-    "Programming Language :: Python :: 3.11",
-    "Programming Language :: Python :: 3.12",
-    "Topic :: Scientific/Engineering :: GIS",
+  "Development Status :: 3 - Alpha",
+  "Intended Audience :: Science/Research",
+  "License :: OSI Approved :: MIT License",
+  "Operating System :: POSIX",
+  "Programming Language :: Python :: 3",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Topic :: Scientific/Engineering :: GIS",
 ]
 dependencies = [
-    "numpy",
-    "scipy",
-    "rasterio",
-    "geopandas",
-    "shapely",
-    "pyproj",
-    "fiona",
-    "folium",
-    "pandas",
-    # pysheds is provided by the Nix environment (built from source)
+  "numpy",
+  "scipy",
+  "rasterio",
+  "geopandas",
+  "shapely",
+  "pyproj",
+  "pyogrio",
+  "folium",
+  "pandas",
+  # pysheds is provided by the Nix environment (built from source)
 ]
 
 [project.optional-dependencies]
@@ -39,6 +39,7 @@ dev = ["ruff", "pytest"]
 
 [project.scripts]
 canyongis = "canyongis.__main__:cli"
+canyongis-validate = "canyongis.validate:cli"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -47,21 +48,20 @@ where = ["src"]
 line-length = 100
 target-version = "py311"
 src = ["src"]
-extend-exclude = ["canyoneering_py.py"]
 
 [tool.ruff.lint]
 select = [
-    "E",    # pycodestyle errors
-    "W",    # pycodestyle warnings
-    "F",    # pyflakes
-    "I",    # isort
-    "B",    # flake8-bugbear
-    "UP",   # pyupgrade
-    "SIM",  # flake8-simplify
-    "RUF",  # ruff-specific
+  "E",   # pycodestyle errors
+  "W",   # pycodestyle warnings
+  "F",   # pyflakes
+  "I",   # isort
+  "B",   # flake8-bugbear
+  "UP",  # pyupgrade
+  "SIM", # flake8-simplify
+  "RUF", # ruff-specific
 ]
 ignore = [
-    "E501",  # line length handled by formatter
+  "E501", # line length handled by formatter
 ]
 
 [tool.ruff.format]

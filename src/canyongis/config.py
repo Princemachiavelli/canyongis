@@ -1,4 +1,5 @@
 from __future__ import annotations
+
 from dataclasses import dataclass
 
 
@@ -14,6 +15,9 @@ class Config:
     min_drop_height: float = 5.0
     max_drop_height: float = 200.0
     local_relief_radius: float = 20.0
+    # Minimum connected cliff-face cluster size (pixels) to emit a rappel point.
+    # Noise filter — small clusters below this are dropped.
+    min_cliff_face_cells: int = 10
 
     # TPI (canyon/ridge detection)
     tpi_radius: float = 200.0
@@ -24,6 +28,9 @@ class Config:
     hand_threshold: float = 20.0
     min_channel_slope: float = 2.0
     flow_accum_threshold: int = 500
+    # Distance (m) from an actual stream cell within which cliff/rappel pixels are considered.
+    # Replaces an earlier 100 m HAND-dilated buffer that over-included hillsides.
+    cliff_buffer_m: float = 30.0
 
     # Route scoring
     min_total_descent: float = 50.0

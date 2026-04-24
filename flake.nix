@@ -15,7 +15,6 @@
       systems = [
         "x86_64-linux"
         "aarch64-linux"
-        "x86_64-darwin"
         "aarch64-darwin"
       ];
 
@@ -27,7 +26,16 @@
       perSystem =
         { config, pkgs, ... }:
         let
-          python = pkgs.python312;
+          # Override the python package set so rasterio and pyogrio share a single
+          # python-matched gdal, avoiding two gdal-3.12.3 builds in the closure.
+          python = pkgs.python313.override {
+            self = python;
+            packageOverrides = pyfinal: pyprev: {
+             #rasterio = pyprev.rasterio.override {
+             #  gdal = pkgs.gdal.override { python3 = pyfinal.python; };
+             #};
+            };
+          };
 
           pysheds = python.pkgs.callPackage ./nix/pysheds.nix { };
 
@@ -43,11 +51,12 @@
               geopandas
               shapely
               pyproj
-              fiona
+              pyogrio
               folium
               pandas
               geojson
               pysheds
+              pytest
             ]
           );
         in
@@ -67,11 +76,16 @@
             inputsFrom = [ config.treefmt.build.devShell ];
             packages = [
               pythonEnv
-              pkgs.gdal
+	      pkgs.gdal
+              #(pkgs.gdalMinimal.overrideAttrs { doCheck = false; })
             ];
             shellHook = ''
+              # Make the in-tree source importable without a `pip install -e .`
+              # (the dev shell only provides deps, not the canyongis package itself).
+              export PYTHONPATH="$PWD/src''${PYTHONPATH:+:$PYTHONPATH}"
               echo "canyongis dev shell"
               echo "  Run:           python -m canyongis <dem.tif> <outdir>"
+              echo "  Validate:      python -m canyongis.validate --kml <kml> --out-dir <dir>"
               echo "  Format:        nix fmt"
               echo "  Reproject DEM: gdalwarp -t_srs EPSG:32612 in.tif utm.tif"
             '';

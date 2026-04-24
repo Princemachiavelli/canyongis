@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import warnings
+
+import geopandas as gpd
 import numpy as np
 import rasterio
 
@@ -23,9 +25,31 @@ def read_dem(path: str):
     if not crs.is_projected:
         warnings.warn(
             "DEM is in a geographic CRS. Meter-based parameters will behave unpredictably. "
-            "Reproject to UTM first: gdalwarp -t_srs EPSG:32612 in.tif out.tif"
+            "Reproject to UTM first: gdalwarp -t_srs EPSG:32612 in.tif out.tif",
+            stacklevel=2,
         )
     return elev, transform, crs, pixel_size
+
+
+def write_vector(gdf: gpd.GeoDataFrame, base_path) -> None:
+    """Write a GeoDataFrame as GPKG (native CRS) and KML (WGS84, for Google Earth)."""
+    from pathlib import Path
+
+    base = Path(base_path)
+    if gdf.empty:
+        log(f"  skipping empty layer: {base.name}")
+        return
+    gdf.to_file(base.with_suffix(".gpkg"), driver="GPKG")
+    try:
+        import fiona
+
+        fiona.supported_drivers["KML"] = "rw"
+    except Exception:
+        pass
+    try:
+        gdf.to_crs("EPSG:4326").to_file(base.with_suffix(".kml"), driver="KML")
+    except Exception as e:
+        log(f"  WARNING: KML write failed for {base.name}: {e}")
 
 
 def write_raster(path: str, arr: np.ndarray, transform, crs, dtype=None) -> None:

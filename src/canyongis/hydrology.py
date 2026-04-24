@@ -1,15 +1,21 @@
 from __future__ import annotations
 
 import numpy as np
-from scipy import ndimage as ndi
-from pysheds.grid import Grid
-from pysheds.view import Raster, ViewFinder
+
+# pysheds 0.5 calls np.in1d, which was removed in NumPy 2.0. np.isin is the
+# documented replacement with the same semantics for 1-D needles.
+if not hasattr(np, "in1d"):
+    np.in1d = np.isin  # type: ignore[attr-defined]
+
+from pysheds.grid import Grid  # noqa: E402
+from pysheds.view import Raster, ViewFinder  # noqa: E402
+from scipy import ndimage as ndi  # noqa: E402
 
 
 def compute_flow_accum(elev: np.ndarray, transform) -> np.ndarray:
     """D8 flow accumulation via pysheds (fill pits → fill depressions → resolve flats → D8)."""
-    nodata = -9999.0
-    data = np.where(np.isnan(elev), nodata, elev).astype(np.float64)
+    nodata = np.float32(-9999.0)
+    data = np.where(np.isnan(elev), nodata, elev).astype(np.float32, copy=False)
     vf = ViewFinder(affine=transform, shape=data.shape, nodata=nodata)
     dem = Raster(data, viewfinder=vf)
     grid = Grid(viewfinder=vf)
@@ -23,8 +29,8 @@ def compute_flow_accum(elev: np.ndarray, transform) -> np.ndarray:
 
 def compute_hand(elev: np.ndarray, stream_mask: np.ndarray) -> np.ndarray:
     """Height Above Nearest Drainage via EDT."""
-    _, (iy, ix) = ndi.distance_transform_edt(
-        ~stream_mask, return_distances=True, return_indices=True
+    iy, ix = ndi.distance_transform_edt(
+        ~stream_mask, return_distances=False, return_indices=True
     )
     hand = (elev - elev[iy, ix]).astype(np.float32)
     hand[stream_mask] = 0.0
