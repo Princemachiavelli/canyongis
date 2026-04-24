@@ -34,7 +34,13 @@ All `Config` fields are exposed as flags. Defaults shown via `--help`:
 ```sh
 canyongis --help
 canyongis dem.tif out/ --hand-threshold 25 --no-folium
+canyongis ropewiki-sync https://ropewiki.com/Willow_Creek_Canyon --cache-dir runs/train-001/cache
 ```
+
+`canyongis ropewiki-sync` downloads Ropewiki-attached KML files through the
+MediaWiki API, rejects KMLs that do not contain a descent track, reuses an
+already-downloaded DEM when one in the manifest/cache fully covers the route,
+and otherwise fetches the matching USGS 1-meter DEM tile through TNM Access.
 
 ## Layout
 

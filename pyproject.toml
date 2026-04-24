@@ -49,6 +49,7 @@ canyongis-validate = "canyongis.validate:cli"
 canyongis-ml-train = "canyongis.ml.cli:train_cli"
 canyongis-ml-predict = "canyongis.ml.cli:predict_cli"
 canyongis-ml-export-features = "canyongis.ml.inspect:export_feature_pngs_cli"
+canyongis-ropewiki-sync = "canyongis.ingest:ingest_ropewiki_cli"
 
 [tool.setuptools.packages.find]
 where = ["src"]

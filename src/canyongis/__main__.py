@@ -7,6 +7,7 @@ import geopandas as gpd
 import rasterio
 from rasterio.warp import transform_bounds
 
+from .ingest import ingest_ropewiki_cli
 from .io import log
 from .mapping import render_folium_map
 from .ml.cli import predict_cli, train_cli
@@ -26,7 +27,9 @@ def _render_map(out_dir: Path, dem_path: str, max_points: int) -> None:
     with rasterio.open(dem_path) as src:
         b = src.bounds
         wgs_bounds = transform_bounds(src.crs, "EPSG:4326", b.left, b.bottom, b.right, b.top)
-    render_folium_map(rappels, centerlines, wgs_bounds, str(out_dir / "canyon_map.html"), max_points)
+    render_folium_map(
+        rappels, centerlines, wgs_bounds, str(out_dir / "canyon_map.html"), max_points
+    )
 
 
 def main(cfg: MLConfig, render_folium: bool) -> None:
@@ -58,6 +61,10 @@ def cli(argv: list[str] | None = None) -> None:
         "export-features",
         help="Export a cached multiband features.tif to viewable PNGs.",
     )
+    sub.add_parser(
+        "ropewiki-sync",
+        help="Download Ropewiki KMLs and matching 1-meter DEMs.",
+    )
 
     # Default pipeline: positional DEM, checkpoint, outdir + optional --no-folium.
     parser.add_argument("dem", nargs="?", type=Path, help="Path to input DEM GeoTIFF.")
@@ -65,7 +72,9 @@ def cli(argv: list[str] | None = None) -> None:
     parser.add_argument("outdir", nargs="?", type=Path, help="Output directory.")
     parser.add_argument("--no-folium", action="store_true", help="Skip Folium HTML map render.")
     parser.add_argument(
-        "--folium-max-points", type=int, default=MLConfig().folium_max_points,
+        "--folium-max-points",
+        type=int,
+        default=MLConfig().folium_max_points,
         help="Maximum number of rappel points to render on the map.",
     )
 
@@ -80,13 +89,17 @@ def cli(argv: list[str] | None = None) -> None:
     if args.command == "export-features":
         export_feature_pngs_cli(extra)
         return
+    if args.command == "ropewiki-sync":
+        ingest_ropewiki_cli(extra)
+        return
 
     if not (args.dem and args.checkpoint and args.outdir):
         parser.error(
             "Usage: canyongis DEM CHECKPOINT OUTDIR [--no-folium]\n"
             "   or: canyongis train ...\n"
             "   or: canyongis predict ...\n"
-            "   or: canyongis export-features ..."
+            "   or: canyongis export-features ...\n"
+            "   or: canyongis ropewiki-sync ..."
         )
 
     cfg = MLConfig(
