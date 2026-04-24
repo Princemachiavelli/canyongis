@@ -2,74 +2,117 @@
 
 ## Overview
 
-`canyongis` analyzes high-resolution Digital Elevation Model (DEM) data to identify candidate canyoneering routes. The pipeline derives terrain and hydrology products from a projected DEM (1–10 m), combines them into masks that highlight canyon-like features, and scores potential routes by descent, grade, and cliff density. Outputs include GeoTIFF rasters, GeoPackage vectors, and an interactive Folium HTML map.
+`canyongis` detects canyon/drainage features in high-resolution Digital Elevation Models (DEMs) using a supervised deep learning model trained on KML annotations. A multi-task U-Net consumes a 6-channel feature stack derived from the DEM and produces two outputs: a canyon probability raster and a rappel/cliff-drop keypoint heatmap. Vector centerlines and rappel points are extracted from the rasters. Outputs include GeoTIFF rasters, GeoPackage/KML vectors, and an optional interactive Folium HTML map.
+
+The earlier rule-based detector (`masks.py`, hand-tuned thresholds on slope, TPI, HAND, flow accumulation) has been replaced. The terrain and hydrology modules remain as feature extractors for the model.
 
 ## Pipeline Stages
 
 1. **Input & Preprocessing**
    - Read DEM (single-band, projected CRS).
-   - Validate resolution and CRS; optionally resample or clip.
-   - Fill depressions and resolve flats to ensure continuous flow.
+   - Validate resolution and CRS; warn on geographic CRS.
+   - Fill NaNs and depressions so flow routing produces a continuous network.
 
-2. **Terrain Analysis**
-   - **Slope**: Compute local slope (degrees) to identify steep terrain.
-   - **Topographic Position Index (TPI)**: Measure local elevation relative to a neighborhood to distinguish ridges, valleys, and midslope positions.
-   - **Local Relief**: Calculate elevation range within a moving window to highlight areas of high vertical relief.
+2. **Feature Stack Construction** (`ml/features.py`)
+   Six channels per pixel, all z-score normalized with per-channel statistics cached at training time:
+   1. Elevation detrended (`elev − uniform_filter(elev, 500 m)`)
+   2. Slope (Horn method, degrees)
+   3. TPI (Topographic Position Index, 200 m radius)
+   4. Local relief (max−min in a 20 m window)
+   5. HAND (clipped to [0, 100 m], `log1p`)
+   6. `log1p(flow_accum)` (D8 via pysheds)
 
-3. **Hydrologic Analysis**
-   - **D8 Flow Accumulation**: Compute upslope contributing area using the D8 algorithm (pysheds). High accumulation indicates stream channels.
-   - **Height Above Nearest Drainage (HAND)**: Estimate vertical distance to the nearest drainage cell to separate hillslopes from channels.
+3. **Label Generation** (`ml/labels.py`)
+   - Parse KML files with `validate.parse_kml` (reuses the existing classifier that separates descent lines, approaches, and rappel points by name).
+   - Rasterize descent polylines to a 1 px-wide mask, then apply a distance-transform Gaussian (`y = exp(-0.5 * (d / σ)²)`) to produce soft labels that tolerate label offset error.
+   - Rasterize rappel/drop-in points and blur into a keypoint heatmap.
+   - `σ` is configurable per KML via the manifest (higher for less precise traces).
 
-4. **Mask Generation**
-   - **Channel Mask**: Combine flow accumulation and HAND thresholds to extract likely channel cells.
-   - **Cliff/Rappel Mask**: Use slope and local relief to locate near-vertical drops suitable for rappelling.
-   - **Rappel Points**: Identify discrete candidate anchor points along cliffs.
+4. **Model** (`ml/model.py`)
+   - U-Net backbone via `segmentation_models_pytorch` with a **ResNet-18 encoder** (default; fits 8 GB VRAM at batch 6–8 × 256² with AMP, and runs on macOS MPS at batch 4 fp32). ResNet-34 is a config switch for when data scales to thousands of KMLs.
+   - Two 1×1-conv heads on top of the decoder: `head_canyon` (segmentation) and `head_rappel` (keypoint heatmap).
 
-5. **Vectorization & Routing**
-   - **Drainage Polygons**: Polygonize channel masks and compute geometric properties (length, sinuosity, width).
-   - **Route Scoring**: Generate candidate routes (e.g., along-channel paths), scoring by:
-     - Total descent (favoring deeper canyons).
-     - Average grade (penalizing excessively steep or flat sections).
-     - Cliff count and spacing (balancing technical interest with safety).
-   - Export routes as vector features with scores and metadata.
+5. **Loss & Training** (`ml/losses.py`, `ml/train.py`)
+   - **Canyon loss** = `0.5 · soft-BCE-PU + 0.5 · soft-clDice`. Soft-BCE-PU down-weights the negative term by `(1 − π)` so unlabeled pixels aren't treated as strong negatives (positive-unlabeled learning framing). Soft-clDice (Shit et al. 2021) preserves thin-curvilinear topology.
+   - **Rappel loss** = focal loss (γ=2) on the keypoint heatmap.
+   - AdamW, cosine LR schedule with warmup, AMP on CUDA only (MPS autocast is unreliable as of torch 2.2).
+   - **Spatial K-fold cross-validation** (default K=5). Super-tiles (512×512 px) are hashed into folds so neighboring tiles never span the train/val boundary — critical when the KML pool is small.
+   - Positive-biased tile sampling via `WeightedRandomSampler` (80% of draws come from tiles with label mass).
+   - Encoder frozen for the first 20 epochs to stabilize the heads on tiny data.
 
-6. **Output & Visualization**
-   - **Rasters**: Slope, TPI, local relief, flow accumulation, HAND, and masks as GeoTIFFs.
-   - **Vectors**: GeoPackage containing rappel points, drainage polygons, and candidate routes.
-   - **Folium Map**: Interactive HTML map overlaying key layers for exploration.
+6. **Inference & Vectorization** (`ml/predict.py`)
+   - Sliding 256×256 window with 64 px overlap.
+   - Per-window prediction is accumulated into a full-raster output with a **2D Hann × Gaussian blending window** (`σ = tile/6`), dividing by the summed weight at the end to suppress tile seams.
+   - Outputs: `canyon_prob.tif`, `rappel_prob.tif`.
+   - Centerlines: threshold `canyon_prob ≥ 0.5` → `skimage.morphology.skeletonize` → custom pixel-path tracer that splits at branch points → shapely LineStrings → GPKG + KML.
+   - Rappel points: `skimage.feature.peak_local_max` on the heatmap with `min_distance = 4 m / pixel_size`.
 
-## Key Algorithms & Tools
+7. **Visualization** (`mapping.py`)
+   - Folium HTML map with Esri Topo + Satellite base layers, centerlines as GeoJSON, and rappel points as color-coded circle markers sorted by probability.
 
-- **Slope**: Finite difference or Horn’s method (via GDAL/rasterio) to compute gradient magnitude.
-- **TPI**: Difference between cell elevation and mean elevation of a circular or annular neighborhood; configurable radius.
-- **Local Relief**: Max–min elevation within a moving window (e.g., 3×3 to 15×15 cells).
-- **D8 Flow Accumulation**: pysheds implementation; each cell flows to its steepest downslope neighbor; accumulation counts contributing upslope cells.
-- **HAND**: For each cell, compute elevation difference to the nearest downstream cell identified as part of a drainage network (often via thresholded flow accumulation).
-- **Depression Filling & Flat Resolution**: Preprocessing steps to ensure continuous flow paths (commonly via priority-flood or similar).
-- **Mask Thresholding**: Empirical or configurable thresholds on slope, TPI, flow accumulation, and HAND to isolate channels and cliffs.
-- **Polygonization & Vector Analysis**: GDAL polygonization of binary masks; geometric and network-based scoring of routes.
+## Module Layout
 
-## Configuration
+```
+src/canyongis/
+  __main__.py          # top-level CLI; chains run_inference + folium render
+  io.py                # read_dem, write_raster, write_vector, log
+  terrain.py           # compute_slope, compute_tpi, compute_local_relief, fill_nans
+  hydrology.py         # compute_flow_accum (pysheds), compute_hand (EDT)
+  mapping.py           # render_folium_map (ML output schema)
+  validate.py          # KML parser + post-hoc detection scoring
+  vectors.py           # score_routes (generic descent/grade/cliff-count scorer)
+  config.py            # thin shim re-exporting MLConfig as Config for back-compat
+  ml/
+    config.py          # MLConfig dataclass — all ML tunables, auto-exposed via argparse
+    device.py          # get_device() → cuda > mps > cpu; amp_enabled()
+    features.py        # build_feature_stack; compute_norm_stats; apply_norm
+    labels.py          # build_labels_from_kml (polylines → soft label + rappel heatmap)
+    dataset.py         # ManifestEntry, prepare_cache, build_tile_index,
+                       # SpatialKFoldSplitter, TileDataset, make_weighted_sampler
+    augment.py         # albumentations pipeline tuned for DEM channels
+    model.py           # CanyonUNet (SMP U-Net + two heads)
+    losses.py          # soft_bce_pu, soft_dice, soft_cldice, focal_loss, MultiTaskLoss
+    train.py           # run_training, train_fold — K-fold driver
+    predict.py         # run_inference, tiled sliding-window, skeleton → polylines
+    cli.py             # canyongis-ml-train, canyongis-ml-predict entry points
+```
 
-All tunables are exposed via `Config` in `config.py` and CLI flags, including:
-- Slope and TPI neighborhood sizes.
-- Flow accumulation and HAND thresholds for channel detection.
-- Slope and relief thresholds for cliff/rappel masks.
-- Route scoring weights (descent, grade, cliff count).
-- Output format options (e.g., disable Folium map).
+## Manifest Format
 
-## Dependencies
+Training consumes a JSON manifest of `{kml_path, dem_path, label_sigma_m?, rappel_sigma_m?, precision_tier?}` entries:
 
-- **GDAL/rasterio**: DEM I/O and raster algebra.
-- **pysheds**: D8 flow accumulation and related hydrologic routines.
-- **NumPy/SciPy**: Array operations and neighborhood statistics.
-- **GeoPandas/Shapely**: Vectorization and geometric analysis.
-- **Folium**: Interactive map rendering.
-- **Nix**: Reproducible environment and packaging.
+```json
+[
+  {"kml_path": "/data/kml/foo.kml", "dem_path": "/data/dem/foo.tif", "label_sigma_m": 5.0, "precision_tier": "high"},
+  {"kml_path": "/data/kml/bar.kml", "dem_path": "/data/dem/bar.tif", "label_sigma_m": 15.0, "precision_tier": "low"}
+]
+```
+
+Per-entry `label_sigma_m` widens the Gaussian falloff for less precise KMLs, absorbing their offset error without downweighting them out of the training set.
+
+## CLIs
+
+```
+canyongis-ml-train MANIFEST OUTDIR [--tile-size 256] [--epochs 60] ...
+canyongis-ml-predict DEM CHECKPOINT OUTDIR
+canyongis DEM CHECKPOINT OUTDIR [--no-folium]           # inference + Folium render
+canyongis train  ...                                     # sub-delegates to ml-train
+canyongis predict ...                                    # sub-delegates to ml-predict
+canyongis-validate --kml GROUND_TRUTH.kml --out-dir OUT  # post-hoc scoring
+```
+
+## Key Dependencies
+
+- **PyTorch ≥ 2.2** with CUDA 12.x (Linux) or MPS (macOS) — provided by the Nix flake.
+- **segmentation-models-pytorch** — U-Net + pretrained encoders.
+- **albumentations** — multi-target augmentation synced across image + label + keypoint masks.
+- **scikit-image** — skeletonization and peak detection.
+- **rasterio, geopandas, shapely, pyproj, pyogrio, folium** — geospatial I/O and rendering.
+- **pysheds** — D8 flow accumulation; provided via Nix, not pip.
 
 ## Extensibility
 
-- Additional terrain indices (e.g., curvature, aspect) can be added in `terrain.py`.
-- Alternative flow algorithms (D∞, MFD) can be integrated via pysheds or similar.
-- Custom mask combinations and scoring functions can be implemented in `masks.py` and `vectors.py`.
-- New output formats (e.g., vector tiles) can be added in `io.py` and `mapping.py`.
+- Swap encoders by setting `MLConfig.encoder_name` (any encoder SMP supports — `resnet34`, `efficientnet-b0`, etc.).
+- Add feature channels: extend `features.build_feature_stack` and update `MLConfig.channel_names()` and `in_channels`.
+- Alternate loss weights via `MLConfig.canyon_loss_weight`, `rappel_loss_weight`, `bce_cldice_ratio`.
+- Spatial split seed via `MLConfig.spatial_seed` for reproducibility experiments.

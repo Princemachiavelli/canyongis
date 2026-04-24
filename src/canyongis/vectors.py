@@ -3,54 +3,7 @@ from __future__ import annotations
 import geopandas as gpd
 import numpy as np
 from rasterio.features import geometry_mask
-from rasterio.features import shapes as rio_shapes
-from rasterio.transform import xy as rio_xy
-from scipy import ndimage as ndi
-from shapely.geometry import Point, mapping, shape
-
-from .config import Config
-
-
-def rappel_points_gdf(rappel_heights: np.ndarray, transform, crs) -> gpd.GeoDataFrame:
-    mask = rappel_heights > 0
-    labeled, n = ndi.label(mask, structure=np.ones((3, 3), dtype=int))
-    if n == 0:
-        return gpd.GeoDataFrame(columns=["drop_height_m", "geometry"], geometry="geometry", crs=crs)
-
-    idx = np.arange(1, n + 1)
-    max_heights = ndi.maximum(rappel_heights, labels=labeled, index=idx)
-    centroids = ndi.center_of_mass(mask, labels=labeled, index=idx)
-
-    rows = []
-    for (cy, cx), h in zip(centroids, max_heights, strict=True):
-        x, y = rio_xy(transform, round(cy), round(cx))
-        rows.append({"drop_height_m": float(h), "geometry": Point(x, y)})
-
-    return gpd.GeoDataFrame(rows, crs=crs)
-
-
-def drainage_polys_gdf(
-    tpi: np.ndarray,
-    hand: np.ndarray,
-    slope: np.ndarray,
-    transform,
-    crs,
-    cfg: Config,
-) -> gpd.GeoDataFrame:
-    mask = (
-        (tpi < cfg.tpi_canyon_thresh)
-        & (hand < cfg.hand_threshold)
-        & (slope > cfg.min_channel_slope)
-    ).astype(np.uint8)
-
-    geoms = [
-        shape(geom)
-        for geom, val in rio_shapes(mask, mask=mask.astype(bool), transform=transform)
-        if val == 1
-    ]
-    if not geoms:
-        return gpd.GeoDataFrame(columns=["geometry"], geometry="geometry", crs=crs)
-    return gpd.GeoDataFrame({"geometry": geoms}, crs=crs)
+from shapely.geometry import mapping
 
 
 def score_routes(
@@ -58,8 +11,12 @@ def score_routes(
     rappel_pts: gpd.GeoDataFrame,
     elev: np.ndarray,
     transform,
-    cfg: Config,
 ) -> gpd.GeoDataFrame:
+    """Score drainage polygons by total descent, grade, and cliff proximity count.
+
+    Generic over the source of `drainage` (polygons) and `rappel_pts` (points) —
+    works with ML-derived centerlines buffered into polygons.
+    """
     if drainage.empty:
         return drainage.assign(total_descent_m=[], grade=[], cliff_count=[], length_proxy_m=[])
 

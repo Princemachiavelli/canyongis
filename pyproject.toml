@@ -31,7 +31,13 @@ dependencies = [
   "pyogrio",
   "folium",
   "pandas",
-  # pysheds is provided by the Nix environment (built from source)
+  # pysheds is provided by the Nix environment (built from source).
+  # ML stack — also provided by the Nix flake (torch with CUDA 12.x / MPS).
+  "torch>=2.2",
+  "segmentation-models-pytorch",
+  "albumentations",
+  "scikit-image",
+  "tqdm",
 ]
 
 [project.optional-dependencies]
@@ -40,6 +46,9 @@ dev = ["ruff", "pytest"]
 [project.scripts]
 canyongis = "canyongis.__main__:cli"
 canyongis-validate = "canyongis.validate:cli"
+canyongis-ml-train = "canyongis.ml.cli:train_cli"
+canyongis-ml-predict = "canyongis.ml.cli:predict_cli"
+canyongis-ml-export-features = "canyongis.ml.inspect:export_feature_pngs_cli"
 
 [tool.setuptools.packages.find]
 where = ["src"]
@@ -69,4 +78,7 @@ quote-style = "double"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra"
+addopts = "-ra -m 'not slow'"
+markers = [
+  "slow: end-to-end tests that train a model (run with `pytest -m slow` or `-m ''`)",
+]

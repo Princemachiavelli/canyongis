@@ -24,16 +24,30 @@
       ];
 
       perSystem =
-        { config, pkgs, ... }:
+        { config, system, ... }:
         let
+          pkgs = import inputs.nixpkgs {
+            inherit system;
+            config = {
+              allowUnfree = true;
+              allowUnfreePredicate = true;
+              cudaSupport = (system == "x86_64-linux");
+              cudaCapabilities = [ "8.6" ];
+            };
+          };
+
           # Override the python package set so rasterio and pyogrio share a single
           # python-matched gdal, avoiding two gdal-3.12.3 builds in the closure.
           python = pkgs.python313.override {
             self = python;
             packageOverrides = pyfinal: pyprev: {
-             #rasterio = pyprev.rasterio.override {
-             #  gdal = pkgs.gdal.override { python3 = pyfinal.python; };
-             #};
+              segmentation_models_pytorch = pyfinal.callPackage ./nix/segmentation-models-pytorch.nix {
+                torch = pyfinal.torch;
+                torchvision = pyfinal.torchvision;
+              };
+              #rasterio = pyprev.rasterio.override {
+              #  gdal = pkgs.gdal.override { python3 = pyfinal.python; };
+              #};
             };
           };
 
@@ -41,30 +55,16 @@
 
           canyongis = python.pkgs.callPackage ./nix/package.nix {
             inherit pysheds;
+            torch = python.pkgs.torch;
+            segmentation_models_pytorch = python.pkgs.segmentation_models_pytorch;
           };
-
-          pythonEnv = python.withPackages (
-            ps: with ps; [
-              numpy
-              scipy
-              rasterio
-              geopandas
-              shapely
-              pyproj
-              pyogrio
-              folium
-              pandas
-              geojson
-              pysheds
-              pytest
-            ]
-          );
         in
         {
           packages = {
             default = canyongis;
             canyongis = canyongis;
             inherit pysheds;
+            segmentation_models_pytorch = python.pkgs.segmentation_models_pytorch;
           };
 
           apps.default = {
@@ -73,11 +73,13 @@
           };
 
           devShells.default = pkgs.mkShell {
-            inputsFrom = [ config.treefmt.build.devShell ];
+            inputsFrom = [
+              canyongis
+              config.treefmt.build.devShell
+            ];
             packages = [
-              pythonEnv
-	      pkgs.gdal
-              #(pkgs.gdalMinimal.overrideAttrs { doCheck = false; })
+              pkgs.gdal
+              python.pkgs.pytest
             ];
             shellHook = ''
               # Make the in-tree source importable without a `pip install -e .`

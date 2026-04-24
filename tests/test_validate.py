@@ -9,6 +9,7 @@ import pytest
 from shapely.geometry import LineString, Point
 
 from canyongis.validate import (
+    RAPPEL_POINT_PATTERN,
     _classify,
     _describe_heights,
     parse_kml,
@@ -18,6 +19,7 @@ from canyongis.validate import (
 import numpy as np
 
 FIXTURE_KML = Path.home() / "Downloads" / "Great_Falls_of_the_Fox.kml"
+FIXTURE_KML_FOX = Path.home() / "Downloads" / "Fantastic_Mr._Fox_Canyon.kml"
 
 
 def test_classifier_heuristics():
@@ -128,3 +130,85 @@ def test_score_points_inside_outside(tmp_path):
     assert rep.rappel_points["outside"]["count"] == 2
     assert rep.rappel_points["inside"]["heights"]["median"] == 30.0
     assert rep.rappel_points["outside"]["heights"]["min"] == 200.0
+
+
+def test_rappel_point_pattern_recognition():
+    assert RAPPEL_POINT_PATTERN.search("160ft rappel")
+    assert RAPPEL_POINT_PATTERN.search("Final rappel")
+    assert RAPPEL_POINT_PATTERN.search("Rappel sequence start")
+    assert RAPPEL_POINT_PATTERN.search("Drop in")
+    assert RAPPEL_POINT_PATTERN.search("Canyon Drop-in")
+    assert RAPPEL_POINT_PATTERN.search("Pour-off 1")
+    # Not rappel points:
+    assert not RAPPEL_POINT_PATTERN.search("Approach")
+    assert not RAPPEL_POINT_PATTERN.search("Parking")
+    assert not RAPPEL_POINT_PATTERN.search("Summit")
+
+
+@pytest.mark.skipif(
+    not FIXTURE_KML_FOX.exists(), reason="Fantastic_Mr._Fox_Canyon.kml not present"
+)
+def test_parse_fantastic_mr_fox_kml():
+    feats = parse_kml(FIXTURE_KML_FOX)
+    # Three classified lines: Descent (+Exit is approach), Approach, Exit.
+    desc_names = set(feats.descent_lines["name"])
+    appr_names = set(feats.approach_lines["name"])
+    assert "Descent" in desc_names
+    assert "Approach" in appr_names
+    assert "Exit" in appr_names
+
+    gt = feats.rappel_points()
+    gt_names = set(gt["name"])
+    # Rappel-named waypoints should all be picked up.
+    assert "160ft rappel" in gt_names
+    assert "Rappel sequence start" in gt_names
+    assert "End rappel sequence" in gt_names
+    assert "Final rappel" in gt_names
+    assert "Drop in" in gt_names
+    # Non-rappel points should NOT be in the ground-truth set.
+    assert "Park" not in gt_names
+    assert "Summit" not in gt_names
+    assert "Shuttle parking" not in gt_names
+
+
+def test_ground_truth_rappels_scoring(tmp_path):
+    """Detections near each ground-truth rappel count as hits."""
+    crs = "EPSG:26911"
+    # Ground-truth rappels at two locations
+    gt_coords_utm = [(400000, 3790000), (400100, 3790050)]
+    # Build a KML in WGS84
+    from pyproj import Transformer
+    t = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
+    kml_coords = [t.transform(x, y) for x, y in gt_coords_utm]
+
+    kml = tmp_path / "synth.kml"
+    kml.write_text(
+        '<?xml version="1.0"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document>'
+        f'<Placemark><name>Rappel 1</name><Point><coordinates>{kml_coords[0][0]},{kml_coords[0][1]},0</coordinates></Point></Placemark>'
+        f'<Placemark><name>Rappel 2</name><Point><coordinates>{kml_coords[1][0]},{kml_coords[1][1]},0</coordinates></Point></Placemark>'
+        '</Document></kml>'
+    )
+
+    # Detections: one 10m from Rappel 1 (HIT), one 100m from Rappel 2 (miss)
+    det = gpd.GeoDataFrame(
+        {
+            "drop_height_m": [15.0, 30.0],
+            "geometry": [Point(400010, 3790000), Point(400200, 3790050)],
+        },
+        crs=crs,
+    )
+    out = tmp_path / "out"
+    out.mkdir()
+    det.to_file(out / "rappel_points.gpkg", driver="GPKG")
+
+    rep = validate_run(kml, out, rappel_match_m=25.0)
+    assert rep.ground_truth_rappels is not None
+    gt = rep.ground_truth_rappels
+    assert gt["count"] == 2
+    # Rappel 1 should be a hit (10m away, within 25m); Rappel 2 should miss (100m).
+    matches = {m["name"]: m for m in gt["matches"]}
+    assert matches["Rappel 1"]["hit"] is True
+    assert matches["Rappel 1"]["nearest_m"] == pytest.approx(10.0, abs=0.1)
+    assert matches["Rappel 2"]["hit"] is False
+    assert matches["Rappel 2"]["nearest_m"] == pytest.approx(100.0, abs=0.1)
+    assert gt["match_rate"] == 0.5

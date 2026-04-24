@@ -9,7 +9,7 @@ def test_package_imports():
     import canyongis
 
     expected = {
-        "Config",
+        "MLConfig",
         "read_dem",
         "write_raster",
         "compute_slope",
@@ -17,22 +17,23 @@ def test_package_imports():
         "compute_local_relief",
         "compute_flow_accum",
         "compute_hand",
-        "make_masks",
-        "rappel_points_gdf",
-        "drainage_polys_gdf",
-        "score_routes",
+        "build_feature_stack",
+        "build_labels_from_kml",
+        "run_training",
+        "run_inference",
         "render_folium_map",
     }
     assert expected.issubset(set(canyongis.__all__))
 
 
-def test_config_defaults_are_sane():
-    from canyongis import Config
+def test_mlconfig_defaults_are_sane():
+    from canyongis import MLConfig
 
-    cfg = Config()
-    assert cfg.cliff_slope_min < cfg.cliff_slope_max
-    assert cfg.min_drop_height < cfg.max_drop_height
-    assert cfg.flow_accum_threshold > 0
+    cfg = MLConfig()
+    assert cfg.in_channels == 6
+    assert len(cfg.channel_names()) == cfg.in_channels
+    assert cfg.tile_size > 0
+    assert 0.0 < cfg.label_sigma_m < 50.0
 
 
 def test_compute_slope_flat_is_zero():
@@ -49,7 +50,7 @@ def test_compute_slope_ramp_matches_arctan():
     from canyongis import compute_slope
 
     n = 32
-    elev = np.tile(np.arange(n, dtype=np.float32), (n, 1))  # rises 1 unit per pixel in x
+    elev = np.tile(np.arange(n, dtype=np.float32), (n, 1))
     slope = compute_slope(elev, pixel_size=1.0)
     interior = slope[2:-2, 2:-2]
     assert np.allclose(interior, 45.0, atol=0.5)

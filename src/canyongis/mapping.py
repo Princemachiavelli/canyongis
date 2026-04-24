@@ -3,19 +3,23 @@ from __future__ import annotations
 import folium
 import geopandas as gpd
 
-from .config import Config
 from .io import log
 
 
 def render_folium_map(
     rappel_pts: gpd.GeoDataFrame,
-    candidate_routes: gpd.GeoDataFrame,
+    centerlines: gpd.GeoDataFrame,
     dem_bounds,
     out_path: str,
-    cfg: Config,
+    max_points: int = 500,
 ) -> None:
+    """Render a Folium HTML map of ML-detected centerlines and rappel points.
+
+    `centerlines` is expected to have `mean_prob` and `length_m` columns (from the
+    ML predict pipeline). `rappel_pts` is expected to have a `prob` column.
+    """
     pts = rappel_pts.to_crs("EPSG:4326") if not rappel_pts.empty else rappel_pts
-    rts = candidate_routes.to_crs("EPSG:4326") if not candidate_routes.empty else candidate_routes
+    lines = centerlines.to_crs("EPSG:4326") if not centerlines.empty else centerlines
 
     minx, miny, maxx, maxy = dem_bounds
     center = [(miny + maxy) / 2, (minx + maxx) / 2]
@@ -32,39 +36,34 @@ def render_folium_map(
         name="Satellite",
     ).add_to(m)
 
-    if not rts.empty:
+    if not lines.empty:
+        tooltip_fields = [c for c in ("mean_prob", "length_m") if c in lines.columns]
         folium.GeoJson(
-            rts.__geo_interface__,
-            name="Candidate routes",
-            style_function=lambda _: {
-                "color": "#00b4d8",
-                "weight": 2,
-                "fillColor": "#00b4d8",
-                "fillOpacity": 0.25,
-            },
+            lines.__geo_interface__,
+            name="ML centerlines",
+            style_function=lambda _: {"color": "#00b4d8", "weight": 3},
             tooltip=folium.GeoJsonTooltip(
-                fields=["total_descent_m", "grade", "cliff_count"],
-                aliases=["Descent (m)", "Grade", "Cliffs"],
+                fields=tooltip_fields,
+                aliases=[f.replace("_", " ") for f in tooltip_fields],
                 localize=True,
-            ),
+            ) if tooltip_fields else None,
         ).add_to(m)
 
     if not pts.empty:
-        pts_render = pts.sort_values("drop_height_m", ascending=False).head(cfg.folium_max_points)
-        max_h = max(pts_render["drop_height_m"].max(), 1.0)
+        prob_col = "prob" if "prob" in pts.columns else None
+        pts_render = pts if prob_col is None else pts.sort_values(prob_col, ascending=False).head(max_points)
         fg = folium.FeatureGroup(name="Rappel candidates")
         for _, row in pts_render.iterrows():
-            h = row["drop_height_m"]
-            norm = min(h / max_h, 1.0)
-            color = f"#ff{int(255 * (1 - norm)):02x}00"
+            p = float(row[prob_col]) if prob_col else 1.0
+            color = f"#ff{int(255 * (1 - p)):02x}00"
             folium.CircleMarker(
                 location=[row.geometry.y, row.geometry.x],
-                radius=max(3, min(10, h / 3)),
+                radius=max(3, min(10, 3 + 7 * p)),
                 color=color,
                 fill=True,
                 fillColor=color,
                 fillOpacity=0.85,
-                popup=f"Estimated drop: {h:.1f} m",
+                popup=f"p = {p:.2f}",
             ).add_to(fg)
         fg.add_to(m)
 

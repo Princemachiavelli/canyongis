@@ -35,7 +35,7 @@ def compute_tpi(
     *,
     filled: np.ndarray | None = None,
 ) -> np.ndarray:
-    """TPI = elevation minus square focal mean. Uses a separable box filter (O(N))."""
+    """TPI (Topographic Position Index) = elevation minus square focal mean. Uses a separable box filter (O(N))."""
     r_px = meters_to_px(radius_m, pixel_size)
     if filled is None:
         filled = fill_nans(elev)

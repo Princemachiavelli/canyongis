@@ -1,6 +1,7 @@
 {
   lib,
   buildPythonPackage,
+  albumentations,
   setuptools,
   folium,
   geojson,
@@ -12,7 +13,11 @@
   pysheds,
   rasterio,
   scipy,
+  scikit-image,
+  segmentation_models_pytorch,
   shapely,
+  torch,
+  tqdm,
 }:
 
 buildPythonPackage {
@@ -31,6 +36,7 @@ buildPythonPackage {
   build-system = [ setuptools ];
 
   dependencies = [
+    albumentations
     folium
     geojson
     geopandas
@@ -41,7 +47,11 @@ buildPythonPackage {
     pysheds
     rasterio
     scipy
+    scikit-image
+    segmentation_models_pytorch
     shapely
+    torch
+    tqdm
   ];
 
   doCheck = false;

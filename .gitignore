@@ -24,3 +24,8 @@ output/
 !tests/**/*.tif
 *.html
 *.geojson
+out
+out*
+*.png
+*.tif
+*.xml
