@@ -60,6 +60,7 @@
           };
         in
         {
+	  legacyPackages = pkgs;
           packages = {
             default = canyongis;
             canyongis = canyongis;

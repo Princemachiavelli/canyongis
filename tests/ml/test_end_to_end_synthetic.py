@@ -15,10 +15,8 @@ import pytest
 import rasterio
 from pyproj import Transformer
 from rasterio.transform import from_origin
-from shapely.geometry import LineString
 
 from canyongis.ml.config import MLConfig
-
 
 pytestmark = pytest.mark.slow
 
@@ -82,6 +80,7 @@ def test_e2e_train_then_predict(tmp_path: Path):
         early_stop_patience=99,
         grad_accum_steps=1,
         batch_size_cpu=2,
+        cache_workers=1,
         num_workers=0,
         encoder_name="resnet18",
         encoder_weights=None,  # skip ImageNet download
@@ -122,4 +121,4 @@ def test_e2e_train_then_predict(tmp_path: Path):
     assert prob.shape == (128, 128)
     assert prob.dtype == np.float32
     # Values should be in [0, 1].
-    assert 0.0 <= prob.min() and prob.max() <= 1.0
+    assert prob.min() >= 0.0 and prob.max() <= 1.0

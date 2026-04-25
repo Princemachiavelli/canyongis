@@ -34,7 +34,7 @@ class MLConfig:
     # --- Model ---
     encoder_name: str = "resnet18"
     encoder_weights: str | None = "imagenet"
-    in_channels: int = 6
+    in_channels: int = 7
     decoder_channels: tuple[int, ...] = (256, 128, 64, 32, 16)
 
     # --- Loss ---
@@ -57,6 +57,7 @@ class MLConfig:
     lr: float = 1e-4
     weight_decay: float = 1e-4
     early_stop_patience: int = 10
+    cache_workers: int = 2
     num_workers: int = 2
 
     # --- Augmentation ---
@@ -94,6 +95,7 @@ class MLConfig:
             "local_relief",
             "hand_log1p",
             "flow_accum_log1p",
+            "distance_to_drainage_log1p",
         ]
 
     def __post_init__(self) -> None:

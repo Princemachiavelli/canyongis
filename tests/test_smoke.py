@@ -30,7 +30,7 @@ def test_mlconfig_defaults_are_sane():
     from canyongis import MLConfig
 
     cfg = MLConfig()
-    assert cfg.in_channels == 6
+    assert cfg.in_channels == 7
     assert len(cfg.channel_names()) == cfg.in_channels
     assert cfg.tile_size > 0
     assert 0.0 < cfg.label_sigma_m < 50.0

@@ -2,7 +2,7 @@
 
 ## Overview
 
-`canyongis` detects canyon/drainage features in high-resolution Digital Elevation Models (DEMs) using a supervised deep learning model trained on KML annotations. A multi-task U-Net consumes a 6-channel feature stack derived from the DEM and produces two outputs: a canyon probability raster and a rappel/cliff-drop keypoint heatmap. Vector centerlines and rappel points are extracted from the rasters. Outputs include GeoTIFF rasters, GeoPackage/KML vectors, and an optional interactive Folium HTML map.
+`canyongis` detects canyon/drainage features in high-resolution Digital Elevation Models (DEMs) using a supervised deep learning model trained on KML annotations. A multi-task U-Net consumes a 7-channel feature stack derived from the DEM and produces two outputs: a canyon probability raster and a rappel/cliff-drop keypoint heatmap. Vector centerlines and rappel points are extracted from the rasters. Outputs include GeoTIFF rasters, GeoPackage/KML vectors, and an optional interactive Folium HTML map.
 
 The earlier rule-based detector (`masks.py`, hand-tuned thresholds on slope, TPI, HAND, flow accumulation) has been replaced. The terrain and hydrology modules remain as feature extractors for the model.
 
@@ -14,13 +14,14 @@ The earlier rule-based detector (`masks.py`, hand-tuned thresholds on slope, TPI
    - Fill NaNs and depressions so flow routing produces a continuous network.
 
 2. **Feature Stack Construction** (`ml/features.py`)
-   Six channels per pixel, all z-score normalized with per-channel statistics cached at training time:
+   Seven channels per pixel, all z-score normalized with per-channel statistics cached at training time:
    1. Elevation detrended (`elev − uniform_filter(elev, 500 m)`)
    2. Slope (Horn method, degrees)
    3. TPI (Topographic Position Index, 200 m radius)
    4. Local relief (max−min in a 20 m window)
    5. HAND (clipped to [0, 100 m], `log1p`)
    6. `log1p(flow_accum)` (D8 via pysheds)
+   7. `log1p(distance_to_drainage_m)` from the thresholded flow-accumulation stream mask
 
 3. **Label Generation** (`ml/labels.py`)
    - Parse KML files with `validate.parse_kml` (reuses the existing classifier that separates descent lines, approaches, and rappel points by name).
@@ -115,4 +116,5 @@ canyongis-validate --kml GROUND_TRUTH.kml --out-dir OUT  # post-hoc scoring
 - Swap encoders by setting `MLConfig.encoder_name` (any encoder SMP supports — `resnet34`, `efficientnet-b0`, etc.).
 - Add feature channels: extend `features.build_feature_stack` and update `MLConfig.channel_names()` and `in_channels`.
 - Alternate loss weights via `MLConfig.canyon_loss_weight`, `rappel_loss_weight`, `bce_cldice_ratio`.
+- Parallel cache preparation via `MLConfig.cache_workers` (default 2), separate from training DataLoader workers.
 - Spatial split seed via `MLConfig.spatial_seed` for reproducibility experiments.

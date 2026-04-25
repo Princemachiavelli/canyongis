@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import multiprocessing as mp
+from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -16,7 +18,6 @@ from ..io import log, read_dem, write_raster
 from .config import MLConfig
 from .features import apply_norm, build_feature_stack
 from .labels import build_labels_from_kml
-
 
 # -----------------------------------------------------------------------------
 # Manifest
@@ -59,11 +60,72 @@ def _cache_paths(cache_dir: Path, dem_id: str) -> dict[str, Path]:
     }
 
 
+def _cache_feature_count(paths: dict[str, Path]) -> int | None:
+    if not paths["features"].exists() or not paths["canyon"].exists():
+        return None
+    with rasterio.open(paths["features"]) as src:
+        return src.count
+
+
+def _prepare_cache_entry(entry: ManifestEntry, cache_dir: str | Path, cfg: MLConfig) -> str:
+    cache_dir = Path(cache_dir)
+    paths = _cache_paths(cache_dir, entry.dem_id)
+    paths["dir"].mkdir(parents=True, exist_ok=True)
+
+    log(f"preparing cache for {entry.dem_path}")
+    elev, transform, crs, pixel_size = read_dem(entry.dem_path)
+    stack = build_feature_stack(elev, transform, pixel_size, cfg)  # (C, H, W)
+    canyon_y, rappel_y = build_labels_from_kml(
+        entry.kml_path,
+        transform,
+        crs,
+        elev.shape,
+        pixel_size,
+        cfg,
+        label_sigma_m=entry.label_sigma_m,
+        rappel_sigma_m=entry.rappel_sigma_m,
+    )
+    valid_dem = np.isfinite(elev)
+    canyon_y = np.where(valid_dem, canyon_y, 0.0).astype(np.float32, copy=False)
+    rappel_y = np.where(valid_dem, rappel_y, 0.0).astype(np.float32, copy=False)
+
+    # Write features as a multi-band GeoTIFF (one band per channel).
+    with rasterio.open(
+        paths["features"], "w",
+        driver="GTiff", height=elev.shape[0], width=elev.shape[1],
+        count=stack.shape[0], dtype="float32",
+        crs=crs, transform=transform,
+        compress="deflate", predictor=2, tiled=True,
+    ) as dst:
+        for i in range(stack.shape[0]):
+            dst.write(stack[i], i + 1)
+
+    write_raster(paths["canyon"], canyon_y, transform, crs, dtype="float32")
+    write_raster(paths["rappel"], rappel_y, transform, crs, dtype="float32")
+
+    paths["meta"].write_text(
+        json.dumps(
+            {
+                "dem_path": entry.dem_path,
+                "kml_path": entry.kml_path,
+                "pixel_size": pixel_size,
+                "shape": list(elev.shape),
+                "crs": str(crs),
+                "label_sigma_m": entry.label_sigma_m,
+                "rappel_sigma_m": entry.rappel_sigma_m,
+                "precision_tier": entry.precision_tier,
+            },
+            indent=2,
+        )
+    )
+    return entry.dem_id
+
+
 def prepare_cache(manifest: list[ManifestEntry], cache_dir: str | Path, cfg: MLConfig) -> None:
     """Precompute feature stacks and label rasters for every manifest entry.
 
     Writes one subdirectory per DEM under `cache_dir` containing:
-      - features.tif (6-band float32)
+      - features.tif (cfg.in_channels-band float32)
       - canyon_label.tif (float32, soft label)
       - rappel_label.tif (float32, heatmap)
       - meta.json (transform, crs, pixel_size, shape)
@@ -71,56 +133,47 @@ def prepare_cache(manifest: list[ManifestEntry], cache_dir: str | Path, cfg: MLC
     cache_dir = Path(cache_dir)
     cache_dir.mkdir(parents=True, exist_ok=True)
 
+    pending: list[ManifestEntry] = []
+    seen_dem_ids: set[str] = set()
     for entry in manifest:
+        if entry.dem_id in seen_dem_ids:
+            log(f"cache duplicate skipped: {entry.dem_id} ({entry.dem_path})")
+            continue
+        seen_dem_ids.add(entry.dem_id)
+
         paths = _cache_paths(cache_dir, entry.dem_id)
         paths["dir"].mkdir(parents=True, exist_ok=True)
-        if paths["features"].exists() and paths["canyon"].exists():
-            log(f"cache hit: {entry.dem_id} ({entry.dem_path})")
-            continue
-
-        log(f"preparing cache for {entry.dem_path}")
-        elev, transform, crs, pixel_size = read_dem(entry.dem_path)
-        stack = build_feature_stack(elev, transform, pixel_size, cfg)  # (C, H, W)
-        canyon_y, rappel_y = build_labels_from_kml(
-            entry.kml_path,
-            transform,
-            crs,
-            elev.shape,
-            pixel_size,
-            cfg,
-            label_sigma_m=entry.label_sigma_m,
-            rappel_sigma_m=entry.rappel_sigma_m,
-        )
-
-        # Write features as a multi-band GeoTIFF (one band per channel).
-        with rasterio.open(
-            paths["features"], "w",
-            driver="GTiff", height=elev.shape[0], width=elev.shape[1],
-            count=stack.shape[0], dtype="float32",
-            crs=crs, transform=transform,
-            compress="deflate", predictor=2, tiled=True,
-        ) as dst:
-            for i in range(stack.shape[0]):
-                dst.write(stack[i], i + 1)
-
-        write_raster(paths["canyon"], canyon_y, transform, crs, dtype="float32")
-        write_raster(paths["rappel"], rappel_y, transform, crs, dtype="float32")
-
-        paths["meta"].write_text(
-            json.dumps(
-                {
-                    "dem_path": entry.dem_path,
-                    "kml_path": entry.kml_path,
-                    "pixel_size": pixel_size,
-                    "shape": list(elev.shape),
-                    "crs": str(crs),
-                    "label_sigma_m": entry.label_sigma_m,
-                    "rappel_sigma_m": entry.rappel_sigma_m,
-                    "precision_tier": entry.precision_tier,
-                },
-                indent=2,
+        feature_count = _cache_feature_count(paths)
+        if feature_count is not None:
+            if feature_count == cfg.in_channels:
+                log(f"cache hit: {entry.dem_id} ({entry.dem_path})")
+                continue
+            log(
+                f"cache stale: {entry.dem_id} has {feature_count} feature bands, "
+                f"expected {cfg.in_channels}; rebuilding"
             )
-        )
+        pending.append(entry)
+
+    if not pending:
+        return
+
+    cache_workers = max(1, int(cfg.cache_workers))
+    if cache_workers == 1 or len(pending) == 1:
+        for entry in pending:
+            _prepare_cache_entry(entry, cache_dir, cfg)
+        return
+
+    workers = min(cache_workers, len(pending))
+    log(f"preparing {len(pending)} DEM caches with {workers} workers")
+    mp_context = mp.get_context("spawn")
+    with ProcessPoolExecutor(max_workers=workers, mp_context=mp_context) as pool:
+        futures = {
+            pool.submit(_prepare_cache_entry, entry, cache_dir, cfg): entry for entry in pending
+        }
+        for future in as_completed(futures):
+            entry = futures[future]
+            dem_id = future.result()
+            log(f"cache ready: {dem_id} ({entry.dem_path})")
 
 
 # -----------------------------------------------------------------------------

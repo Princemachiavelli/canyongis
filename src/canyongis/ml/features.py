@@ -14,7 +14,7 @@ def build_feature_stack(
     pixel_size: float,
     cfg: MLConfig,
 ) -> np.ndarray:
-    """Compute the 6-channel input stack from a raw DEM.
+    """Compute the DEM-derived input stack from a raw DEM.
 
     Channels (in order matching MLConfig.channel_names()):
       0. elev detrended (elev - uniform_filter(elev, detrend_radius_m))
@@ -23,8 +23,9 @@ def build_feature_stack(
       3. local relief (local_relief_radius_m)
       4. HAND clipped [0, hand_clip_m] then log1p
       5. log1p(flow_accum)
+      6. log1p(distance_to_drainage_m)
 
-    Returns float32 array of shape (6, H, W). NaNs are replaced channel-wise.
+    Returns float32 array of shape (C, H, W). NaNs are replaced channel-wise.
     """
     filled = fill_nans(elev)
     nan_mask = np.isnan(elev)
@@ -43,10 +44,14 @@ def build_feature_stack(
         # Fallback: use top-1% cells so HAND is defined everywhere.
         stream_mask = flow_accum >= np.nanpercentile(flow_accum, 99)
     hand = compute_hand(filled, stream_mask)
+    distance_to_drainage = (
+        ndi.distance_transform_edt(~stream_mask).astype(np.float32) * np.float32(pixel_size)
+    )
 
     hand_clipped = np.clip(hand, 0.0, cfg.hand_clip_m)
     hand_log = np.log1p(hand_clipped).astype(np.float32)
     flow_log = np.log1p(np.clip(flow_accum, 0.0, None)).astype(np.float32)
+    distance_log = np.log1p(distance_to_drainage).astype(np.float32)
 
     # Replace NaNs in each channel with 0 (downstream normalization will handle scale).
     channels = [
@@ -56,6 +61,7 @@ def build_feature_stack(
         np.nan_to_num(local_relief, nan=0.0),
         hand_log,
         flow_log,
+        distance_log,
     ]
     stack = np.stack(channels, axis=0).astype(np.float32)
 
@@ -65,7 +71,7 @@ def build_feature_stack(
 
 
 def compute_norm_stats(stacks: list[np.ndarray]) -> dict[str, list[float]]:
-    """Compute per-channel mean and std across a list of (6, H, W) stacks.
+    """Compute per-channel mean and std across a list of (C, H, W) stacks.
 
     Used at training time; the result is persisted as norm.json and consumed at inference.
     """
