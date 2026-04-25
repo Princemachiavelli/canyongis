@@ -13,6 +13,7 @@ from .mapping import render_folium_map
 from .ml.cli import predict_cli, train_cli
 from .ml.config import MLConfig
 from .ml.inspect import export_feature_pngs_cli
+from .ml.manifest_mosaic import mosaic_manifest_cli
 from .ml.predict import run_inference
 
 
@@ -65,6 +66,10 @@ def cli(argv: list[str] | None = None) -> None:
         "ropewiki-sync",
         help="Download Ropewiki KMLs and matching 1-meter DEMs.",
     )
+    sub.add_parser(
+        "mosaic-manifest",
+        help="Build one buffered DEM mosaic per KML and update a training manifest.",
+    )
 
     # Default pipeline: positional DEM, checkpoint, outdir + optional --no-folium.
     parser.add_argument("dem", nargs="?", type=Path, help="Path to input DEM GeoTIFF.")
@@ -92,6 +97,9 @@ def cli(argv: list[str] | None = None) -> None:
     if args.command == "ropewiki-sync":
         ingest_ropewiki_cli(extra)
         return
+    if args.command == "mosaic-manifest":
+        mosaic_manifest_cli(extra)
+        return
 
     if not (args.dem and args.checkpoint and args.outdir):
         parser.error(
@@ -99,7 +107,8 @@ def cli(argv: list[str] | None = None) -> None:
             "   or: canyongis train ...\n"
             "   or: canyongis predict ...\n"
             "   or: canyongis export-features ...\n"
-            "   or: canyongis ropewiki-sync ..."
+            "   or: canyongis ropewiki-sync ...\n"
+            "   or: canyongis mosaic-manifest ..."
         )
 
     cfg = MLConfig(

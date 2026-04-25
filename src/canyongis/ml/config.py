@@ -67,6 +67,7 @@ class MLConfig:
 
     # --- Inference ---
     prob_threshold: float = 0.5
+    min_centerline_length_m: float = 10.0
     rappel_peak_min_distance_m: float = 4.0
 
     # --- Route scoring (carried over from old Config) ---

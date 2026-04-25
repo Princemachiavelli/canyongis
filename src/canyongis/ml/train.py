@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import math
+import os
 from pathlib import Path
 from typing import Any
 
@@ -210,6 +211,17 @@ def train_fold(
     return {"fold": fold_idx, "best_cldice": best_cldice, "history": history}
 
 
+def _write_best_checkpoint_link(out_dir: Path, best_result: dict[str, Any]) -> Path:
+    best_ckpt = out_dir / f"fold{best_result['fold']}" / "best.pt"
+    link_path = out_dir / "best.pt"
+    if link_path.exists() or link_path.is_symlink():
+        if link_path.is_dir():
+            raise RuntimeError(f"cannot replace directory with checkpoint symlink: {link_path}")
+        link_path.unlink()
+    link_path.symlink_to(os.path.relpath(best_ckpt, start=out_dir))
+    return link_path
+
+
 def run_training(cfg: MLConfig) -> dict[str, Any]:
     """Top-level training driver: manifest → K folds → aggregated report."""
     out_dir = Path(cfg.out_dir)
@@ -233,10 +245,19 @@ def run_training(cfg: MLConfig) -> dict[str, Any]:
             continue
         results.append(train_fold(k, cache_dir, records, tr, va, cfg, out_dir))
 
+    best_result = max(results, key=lambda r: r["best_cldice"]) if results else None
+    best_link = _write_best_checkpoint_link(out_dir, best_result) if best_result else None
     summary = {
         "mean_cldice": float(np.mean([r["best_cldice"] for r in results])) if results else 0.0,
+        "best_fold": best_result["fold"] if best_result else None,
+        "best_checkpoint": str(best_link) if best_link else None,
         "folds": results,
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2))
+    if best_result:
+        log(
+            f"best checkpoint: fold {best_result['fold']} "
+            f"clDice={best_result['best_cldice']:.4f} -> {best_link}"
+        )
     log(f"done. mean val clDice = {summary['mean_cldice']:.4f}")
     return summary

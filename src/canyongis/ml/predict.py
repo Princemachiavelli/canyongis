@@ -7,7 +7,6 @@ from typing import Any
 
 import geopandas as gpd
 import numpy as np
-import rasterio
 import torch
 from rasterio.transform import xy as rio_xy
 from shapely.geometry import LineString, Point
@@ -19,7 +18,6 @@ from .config import MLConfig
 from .device import amp_enabled, get_device
 from .features import apply_norm, build_feature_stack
 from .model import build_model
-
 
 # -----------------------------------------------------------------------------
 # Tiled sliding-window inference with Gaussian-blended stitching
@@ -67,7 +65,7 @@ def predict_tiled(
     """
     model.eval()
     use_amp = amp_enabled(device)
-    c, h, w = stack.shape
+    _, h, w = stack.shape
     tile = cfg.tile_size
     overlap = cfg.predict_overlap
 
@@ -114,7 +112,7 @@ def predict_tiled(
 def _skeleton_to_paths(skel: np.ndarray) -> list[list[tuple[int, int]]]:
     """Convert a binary skeleton to pixel paths. Branches split into separate paths."""
     ys, xs = np.where(skel)
-    pixels = set(zip(ys.tolist(), xs.tolist()))
+    pixels = set(zip(ys.tolist(), xs.tolist(), strict=True))
     if not pixels:
         return []
 
@@ -170,7 +168,11 @@ def _skeleton_to_paths(skel: np.ndarray) -> list[list[tuple[int, int]]]:
 
 
 def centerlines_to_gdf(
-    canyon_prob: np.ndarray, transform, crs, threshold: float
+    canyon_prob: np.ndarray,
+    transform,
+    crs,
+    threshold: float,
+    min_length_m: float = 0.0,
 ) -> gpd.GeoDataFrame:
     binary = canyon_prob >= threshold
     if not binary.any():
@@ -184,8 +186,11 @@ def centerlines_to_gdf(
         coords = [rio_xy(transform, y, x) for (y, x) in path]
         probs = [float(canyon_prob[y, x]) for (y, x) in path]
         line = LineString(coords)
+        length_m = float(line.length)
+        if length_m < min_length_m:
+            continue
         rows.append(
-            {"mean_prob": float(np.mean(probs)), "length_m": float(line.length), "geometry": line}
+            {"mean_prob": float(np.mean(probs)), "length_m": length_m, "geometry": line}
         )
     if not rows:
         return gpd.GeoDataFrame(columns=["mean_prob", "length_m", "geometry"], geometry="geometry", crs=crs)
@@ -199,7 +204,7 @@ def rappel_peaks_to_gdf(
     pixel_size: float,
     cfg: MLConfig,
 ) -> gpd.GeoDataFrame:
-    min_distance = max(1, int(round(cfg.rappel_peak_min_distance_m / max(pixel_size, 1e-6))))
+    min_distance = max(1, round(cfg.rappel_peak_min_distance_m / max(pixel_size, 1e-6)))
     peaks = peak_local_max(
         rappel_prob, min_distance=min_distance, threshold_abs=cfg.prob_threshold
     )
@@ -261,7 +266,13 @@ def run_inference(cfg: MLConfig) -> dict[str, Any]:
     write_raster(out_dir / "rappel_prob.tif", rappel_prob, transform, crs, dtype="float32")
 
     log("vectorizing centerlines and rappel peaks")
-    centerlines = centerlines_to_gdf(canyon_prob, transform, crs, cfg.prob_threshold)
+    centerlines = centerlines_to_gdf(
+        canyon_prob,
+        transform,
+        crs,
+        cfg.prob_threshold,
+        min_length_m=cfg.min_centerline_length_m,
+    )
     rappels = rappel_peaks_to_gdf(rappel_prob, transform, crs, pixel_size, cfg)
     write_vector(centerlines, out_dir / "canyon_centerlines")
     write_vector(rappels, out_dir / "rappel_points")

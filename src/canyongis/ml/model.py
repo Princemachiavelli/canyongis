@@ -10,9 +10,9 @@ from .config import MLConfig
 class CanyonUNet(nn.Module):
     """SMP U-Net with two 1x1-conv heads for canyon probability and rappel heatmap.
 
-    The underlying SMP U-Net is constructed with `classes=1` (so its final decoder
-    outputs one feature map at 1x stride). We replace that single head with two
-    parallel 1x1 convs operating on the decoder's penultimate features.
+    The underlying SMP U-Net is constructed with `classes=decoder_channels[-1]`,
+    so its final segmentation head returns a small feature map at 1x stride. Two
+    parallel 1x1 convs turn that feature map into task-specific logits.
     """
 
     def __init__(self, cfg: MLConfig) -> None:

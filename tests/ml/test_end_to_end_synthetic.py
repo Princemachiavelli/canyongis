@@ -97,12 +97,16 @@ def test_e2e_train_then_predict(tmp_path: Path):
     # Checkpoint exists for at least fold 0.
     ckpt = out_dir / "fold0" / "best.pt"
     assert ckpt.exists(), "fold0 checkpoint not written"
+    best_ckpt = out_dir / "best.pt"
+    assert best_ckpt.is_symlink(), "best checkpoint symlink not written"
+    assert best_ckpt.exists(), "best checkpoint symlink target missing"
+    assert summary["best_checkpoint"] == str(best_ckpt)
 
     # --- predict ---
     predict_out = tmp_path / "predict"
     pcfg = MLConfig(
         dem_path=str(dem_path),
-        checkpoint_path=str(ckpt),
+        checkpoint_path=str(best_ckpt),
         out_dir=str(predict_out),
         tile_size=64,
         predict_overlap=16,

@@ -1,8 +1,9 @@
 from __future__ import annotations
 
 import numpy as np
+from affine import Affine
 
-from canyongis.ml.predict import _blend_window, _iter_tiles, _skeleton_to_paths
+from canyongis.ml.predict import _blend_window, _iter_tiles, _skeleton_to_paths, centerlines_to_gdf
 
 
 def test_blend_window_strictly_positive():
@@ -52,3 +53,20 @@ def test_skeleton_to_paths_branching_splits():
     paths = _skeleton_to_paths(skel)
     # Should produce at least 2 segments (branch point at (2, 8)).
     assert len(paths) >= 2
+
+
+def test_centerlines_to_gdf_filters_short_segments():
+    canyon_prob = np.zeros((16, 16), dtype=np.float32)
+    canyon_prob[4, 2:5] = 0.9
+    canyon_prob[10, 2:14] = 0.9
+
+    gdf = centerlines_to_gdf(
+        canyon_prob,
+        Affine.translation(0, 0) * Affine.scale(1, -1),
+        None,
+        threshold=0.5,
+        min_length_m=10.0,
+    )
+
+    assert len(gdf) == 1
+    assert gdf.iloc[0].length_m >= 10.0

@@ -1,426 +1,398 @@
 [
   {
-    "kml_path": "/Users/jhoffer/Downloads/bt_dem_left/Silver_on_the_Side.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x38y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "/Users/jhoffer/Downloads/bt_dem_left/Stone_Plus_One.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x38y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "/Users/jhoffer/Downloads/bt_dem_left/Vogel_Canyon_(Passana_Branch_of_Sunyata_Fork).kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x38y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "/Users/jhoffer/Downloads/bt_dem_right/Fall_Creek.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "/Users/jhoffer/Downloads/bt_dem_right/Fantastic_Mr._Fox_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "/Users/jhoffer/Downloads/bt_dem_right/Great_Falls_of_the_Fox.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "/Users/jhoffer/Downloads/bt_dem_right/White_Oak_(Upper).kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Fish_Fork.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x43y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Great_Falls_of_the_Fox.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Allison_Mine_Loop.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x43y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Lytle_Creek_%28Middle_Fork%29.kml",
-    "dem_path": "data/ropewiki/dem/Lytle_Creek_Middle_Fork_1m_mosaic.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Bonita_Canyon_%28Lytle_Creek_Area%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x45y379_San_Bernadino_County_Flood_Control_Lidar.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Little_Santa_Anita_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x40y379_CA_2025LosAngelesPostWildfire_C25.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Rubio_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y379_CA_2025LosAngelesPostWildfire_C25.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Cucamonga_Canyon_%28Upper%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x44y379_San_Bernadino_County_Flood_Control_Lidar.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Suicide_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x38y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Muir_Ravine_%28Middle%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y379_CA_2025LosAngelesPostWildfire_C25.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Rockets_Red_Glare_Gulch.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Fall_Creek.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y380_CA_LosAngeles_B23.tif"
-  },
-  {
     "kml_path": "data/ropewiki/kml/Silver_on_the_Side.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x38y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Bailey_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x40y379_CA_2025LosAngelesPostWildfire_C25.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Rubio_Canyon_%28East_Fork%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y379_CA_2025LosAngelesPostWildfire_C25.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Supercloud_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Josephine_Creek.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Sheep_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x44y379_San_Bernadino_County_Flood_Control_Lidar.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Coyote_Canyon_%28Left_Fork%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y379_CA_2025LosAngelesPostWildfire_C25.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Muir_Ravine_%28West%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y379_CA_2025LosAngelesPostWildfire_C25.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Silver_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x38y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Iron_Fork_%28North_and_South%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x42y380_CA_LosAngeles_B23.tif"
+    "dem_path": "data/ropewiki/dem/mosaic/Silver_on_the_Side_buffer2000m.tif"
   },
   {
     "kml_path": "data/ropewiki/kml/Stone_Plus_One.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x38y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Hastings_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x40y379_CA_2025LosAngelesPostWildfire_C25.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Deer_Spring_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/White_Oak_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Clark_Gulch.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x43y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Pasadena_Glen.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x40y379_CA_2025LosAngelesPostWildfire_C25.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Hiker_Bob_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x40y379_CA_2025LosAngelesPostWildfire_C25.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Chiquita_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y379_CA_2025LosAngelesPostWildfire_C25.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Eaton_%28East_Branch%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y379_CA_2025LosAngelesPostWildfire_C25.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Alpine_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y379_CA_2025LosAngelesPostWildfire_C25.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Green_Mountain_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x45y379_San_Bernadino_County_Flood_Control_Lidar.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Classic_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Fantastic_Mr._Fox_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Tongva_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y379_CA_2025LosAngelesPostWildfire_C25.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Coyote_Canyon_%28Right_Fork%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y379_CA_2025LosAngelesPostWildfire_C25.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Falling_Leaf_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x43y379_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Nerf_Herder_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Brown_Dam_%28via_Ken_Burton_trail%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y379_CA_2025LosAngelesPostWildfire_C25.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Las_Flores_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y379_CA_2025LosAngelesPostWildfire_C25.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/George_Gulch.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Pine_Canyon_%28San_Gabriels_Front_Range%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y379_CA_2025LosAngelesPostWildfire_C25.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/CCC_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Fusier_Canyon_%28Lower%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x38y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Pine_Canyon_%28Arroyo_Seco_region%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y379_CA_2025LosAngelesPostWildfire_C25.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Rockbound_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x42y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Spring_Canyon_%28Lytle_Creek_Area%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x45y379_San_Bernadino_County_Flood_Control_Lidar.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Hall_Beckley_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x38y379_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Dark_Side_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x38y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Rubio_Canyon_%28Upper%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y379_CA_2025LosAngelesPostWildfire_C25.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Das_Pfeife_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/May_Canyon_%28Left_Fork%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x36y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Muir_Ravine_%28East%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y379_CA_2025LosAngelesPostWildfire_C25.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Fox_Canyon_%28Lower%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Saucer_Branch.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y379_CA_2025LosAngelesPostWildfire_C25.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Bear_Creek_%28San_Gabriel_Mountains%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x41y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Dry_Taco_Ravine.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y379_CA_2025LosAngelesPostWildfire_C25.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Axis_Mundi_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Bull_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x44y379_San_Bernadino_County_Flood_Control_Lidar.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Casada_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Fusier_Canyon_%28Left_Fork%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x38y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Vasquez_Creek.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x38y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/White_Oak_%28Upper%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Napoleon_Falls.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Tunnel_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y379_CA_2025LosAngelesPostWildfire_C25.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Alimony_Creek.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Kinneloa_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x40y379_CA_2025LosAngelesPostWildfire_C25.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Bear_Cloud_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Lytle_Creek_%28South_Fork%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x44y379_San_Bernadino_County_Flood_Control_Lidar.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Sutton_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x38y379_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Trail_Gulch.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x38y380_CA_LosAngeles_B23.tif"
-  },
-  {
-    "kml_path": "data/ropewiki/kml/Vogel_Canyon_%28Anicca_Fork%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x38y380_CA_LosAngeles_B23.tif"
+    "dem_path": "data/ropewiki/dem/mosaic/Stone_Plus_One_buffer2000m.tif"
   },
   {
     "kml_path": "data/ropewiki/kml/Vogel_Canyon_%28Passana_Branch_of_Sunyata_Fork%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x38y380_CA_LosAngeles_B23.tif"
+    "dem_path": "data/ropewiki/dem/mosaic/Vogel_Canyon_Passana_Branch_of_Sunyata_Fork_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Fall_Creek.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Fall_Creek_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Fantastic_Mr._Fox_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Fantastic_Mr._Fox_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Great_Falls_of_the_Fox.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Great_Falls_of_the_Fox_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/White_Oak_%28Upper%29.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/White_Oak_Upper_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Fish_Fork.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Fish_Fork_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Allison_Mine_Loop.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Allison_Mine_Loop_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Lytle_Creek_%28Middle_Fork%29.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Lytle_Creek_Middle_Fork_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Bonita_Canyon_%28Lytle_Creek_Area%29.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Bonita_Canyon_Lytle_Creek_Area_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Little_Santa_Anita_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Little_Santa_Anita_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Rubio_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Rubio_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Cucamonga_Canyon_%28Upper%29.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Cucamonga_Canyon_Upper_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Suicide_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Suicide_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Muir_Ravine_%28Middle%29.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Muir_Ravine_Middle_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Rockets_Red_Glare_Gulch.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Rockets_Red_Glare_Gulch_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Bailey_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Bailey_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Rubio_Canyon_%28East_Fork%29.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Rubio_Canyon_East_Fork_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Supercloud_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Supercloud_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Josephine_Creek.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Josephine_Creek_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Sheep_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Sheep_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Coyote_Canyon_%28Left_Fork%29.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Coyote_Canyon_Left_Fork_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Muir_Ravine_%28West%29.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Muir_Ravine_West_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Silver_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Silver_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Iron_Fork_%28North_and_South%29.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Iron_Fork_North_and_South_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Hastings_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Hastings_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Deer_Spring_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Deer_Spring_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/White_Oak_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/White_Oak_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Clark_Gulch.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Clark_Gulch_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Pasadena_Glen.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Pasadena_Glen_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Hiker_Bob_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Hiker_Bob_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Chiquita_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Chiquita_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Eaton_%28East_Branch%29.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Eaton_East_Branch_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Alpine_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Alpine_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Green_Mountain_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Green_Mountain_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Classic_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Classic_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Tongva_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Tongva_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Coyote_Canyon_%28Right_Fork%29.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Coyote_Canyon_Right_Fork_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Falling_Leaf_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Falling_Leaf_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Nerf_Herder_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Nerf_Herder_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Brown_Dam_%28via_Ken_Burton_trail%29.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Brown_Dam_via_Ken_Burton_trail_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Las_Flores_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Las_Flores_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/George_Gulch.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/George_Gulch_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Pine_Canyon_%28San_Gabriels_Front_Range%29.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Pine_Canyon_San_Gabriels_Front_Range_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/CCC_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/CCC_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Fusier_Canyon_%28Lower%29.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Fusier_Canyon_Lower_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Pine_Canyon_%28Arroyo_Seco_region%29.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Pine_Canyon_Arroyo_Seco_region_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Rockbound_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Rockbound_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Spring_Canyon_%28Lytle_Creek_Area%29.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Spring_Canyon_Lytle_Creek_Area_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Hall_Beckley_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Hall_Beckley_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Dark_Side_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Dark_Side_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Rubio_Canyon_%28Upper%29.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Rubio_Canyon_Upper_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Das_Pfeife_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Das_Pfeife_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/May_Canyon_%28Left_Fork%29.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/May_Canyon_Left_Fork_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Muir_Ravine_%28East%29.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Muir_Ravine_East_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Fox_Canyon_%28Lower%29.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Fox_Canyon_Lower_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Saucer_Branch.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Saucer_Branch_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Bear_Creek_%28San_Gabriel_Mountains%29.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Bear_Creek_San_Gabriel_Mountains_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Dry_Taco_Ravine.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Dry_Taco_Ravine_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Axis_Mundi_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Axis_Mundi_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Bull_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Bull_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Casada_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Casada_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Fusier_Canyon_%28Left_Fork%29.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Fusier_Canyon_Left_Fork_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Vasquez_Creek.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Vasquez_Creek_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Napoleon_Falls.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Napoleon_Falls_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Tunnel_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Tunnel_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Alimony_Creek.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Alimony_Creek_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Kinneloa_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Kinneloa_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Bear_Cloud_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Bear_Cloud_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Lytle_Creek_%28South_Fork%29.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Lytle_Creek_South_Fork_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Sutton_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Sutton_Canyon_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Trail_Gulch.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Trail_Gulch_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Vogel_Canyon_%28Anicca_Fork%29.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Vogel_Canyon_Anicca_Fork_buffer2000m.tif"
   },
   {
     "kml_path": "data/ropewiki/kml/Stonyvale_Gulch.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x38y380_CA_LosAngeles_B23.tif"
+    "dem_path": "data/ropewiki/dem/mosaic/Stonyvale_Gulch_buffer2000m.tif"
   },
   {
     "kml_path": "data/ropewiki/kml/Cascade_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x43y379_CA_LosAngeles_B23.tif"
+    "dem_path": "data/ropewiki/dem/mosaic/Cascade_Canyon_buffer2000m.tif"
   },
   {
     "kml_path": "data/ropewiki/kml/El_Prieto_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y379_CA_2025LosAngelesPostWildfire_C25.tif"
+    "dem_path": "data/ropewiki/dem/mosaic/El_Prieto_Canyon_buffer2000m.tif"
   },
   {
     "kml_path": "data/ropewiki/kml/Schvaterfall_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x42y380_CA_LosAngeles_B23.tif"
+    "dem_path": "data/ropewiki/dem/mosaic/Schvaterfall_Canyon_buffer2000m.tif"
   },
   {
     "kml_path": "data/ropewiki/kml/Little_Santa_Anita_Canyon_%28Upper%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x40y379_CA_2025LosAngelesPostWildfire_C25.tif"
+    "dem_path": "data/ropewiki/dem/mosaic/Little_Santa_Anita_Canyon_Upper_buffer2000m.tif"
   },
   {
     "kml_path": "data/ropewiki/kml/Brennen_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y380_CA_LosAngeles_B23.tif"
+    "dem_path": "data/ropewiki/dem/mosaic/Brennen_Canyon_buffer2000m.tif"
   },
   {
     "kml_path": "data/ropewiki/kml/Crimmas_Skeletor_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x41y379_CA_LosAngeles_B23.tif"
+    "dem_path": "data/ropewiki/dem/mosaic/Crimmas_Skeletor_Canyon_buffer2000m.tif"
   },
   {
     "kml_path": "data/ropewiki/kml/Fusier_Canyon_%28Middle_Fork%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x38y380_CA_LosAngeles_B23.tif"
+    "dem_path": "data/ropewiki/dem/mosaic/Fusier_Canyon_Middle_Fork_buffer2000m.tif"
   },
   {
     "kml_path": "data/ropewiki/kml/Little_Fox_Creek.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y380_CA_LosAngeles_B23.tif"
+    "dem_path": "data/ropewiki/dem/mosaic/Little_Fox_Creek_buffer2000m.tif"
   },
   {
     "kml_path": "data/ropewiki/kml/Trail_Canyon_Prospect.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x38y380_CA_LosAngeles_B23.tif"
+    "dem_path": "data/ropewiki/dem/mosaic/Trail_Canyon_Prospect_buffer2000m.tif"
   },
   {
     "kml_path": "data/ropewiki/kml/Holcomb_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x42y381_CA_LosAngeles_B23.tif"
+    "dem_path": "data/ropewiki/dem/mosaic/Holcomb_Canyon_buffer2000m.tif"
   },
   {
     "kml_path": "data/ropewiki/kml/Wildwood_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x38y380_CA_LosAngeles_B23.tif"
+    "dem_path": "data/ropewiki/dem/mosaic/Wildwood_Canyon_buffer2000m.tif"
   },
   {
     "kml_path": "data/ropewiki/kml/Vogel_Canyon_%28Left_Fork%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x38y380_CA_LosAngeles_B23.tif"
+    "dem_path": "data/ropewiki/dem/mosaic/Vogel_Canyon_Left_Fork_buffer2000m.tif"
   },
   {
     "kml_path": "data/ropewiki/kml/Cucamonga_Canyon_%28Lower%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x44y379_San_Bernadino_County_Flood_Control_Lidar.tif"
+    "dem_path": "data/ropewiki/dem/mosaic/Cucamonga_Canyon_Lower_buffer2000m.tif"
   },
   {
     "kml_path": "data/ropewiki/kml/Galt%27s_Gulch.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x38y380_CA_LosAngeles_B23.tif"
+    "dem_path": "data/ropewiki/dem/mosaic/Galt_s_Gulch_buffer2000m.tif"
   },
   {
     "kml_path": "data/ropewiki/kml/Fish_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x41y379_CA_LosAngeles_B23.tif"
+    "dem_path": "data/ropewiki/dem/mosaic/Fish_Canyon_buffer2000m.tif"
   },
   {
     "kml_path": "data/ropewiki/kml/Camp_Five_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y380_CA_LosAngeles_B23.tif"
+    "dem_path": "data/ropewiki/dem/mosaic/Camp_Five_Canyon_buffer2000m.tif"
   },
   {
     "kml_path": "data/ropewiki/kml/Barrister_von_Nedla.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x38y380_CA_LosAngeles_B23.tif"
+    "dem_path": "data/ropewiki/dem/mosaic/Barrister_von_Nedla_buffer2000m.tif"
   },
   {
     "kml_path": "data/ropewiki/kml/Devil_Gulch.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x42y380_CA_LosAngeles_B23.tif"
+    "dem_path": "data/ropewiki/dem/mosaic/Devil_Gulch_buffer2000m.tif"
   },
   {
     "kml_path": "data/ropewiki/kml/BMX_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x40y379_CA_2025LosAngelesPostWildfire_C25.tif"
+    "dem_path": "data/ropewiki/dem/mosaic/BMX_Canyon_buffer2000m.tif"
   },
   {
     "kml_path": "data/ropewiki/kml/Fusier_Canyon_%28Main%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x38y380_CA_LosAngeles_B23.tif"
+    "dem_path": "data/ropewiki/dem/mosaic/Fusier_Canyon_Main_buffer2000m.tif"
   },
   {
     "kml_path": "data/ropewiki/kml/May_Canyon_%28Middle_Fork%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x36y380_CA_LosAngeles_B23.tif"
+    "dem_path": "data/ropewiki/dem/mosaic/May_Canyon_Middle_Fork_buffer2000m.tif"
   },
   {
     "kml_path": "data/ropewiki/kml/Pipe_Canyon.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x38y380_CA_LosAngeles_B23.tif"
+    "dem_path": "data/ropewiki/dem/mosaic/Pipe_Canyon_buffer2000m.tif"
   },
   {
     "kml_path": "data/ropewiki/kml/Bramble_Canyon_%28Fox_Creek%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x39y380_CA_LosAngeles_B23.tif"
+    "dem_path": "data/ropewiki/dem/mosaic/Bramble_Canyon_Fox_Creek_buffer2000m.tif"
   },
   {
     "kml_path": "data/ropewiki/kml/May_Canyon_%28Right_Fork%29.kml",
-    "dem_path": "data/ropewiki/dem/USGS_1M_11_x36y380_CA_LosAngeles_B23.tif"
+    "dem_path": "data/ropewiki/dem/mosaic/May_Canyon_Right_Fork_buffer2000m.tif"
   }
 ]
