@@ -10,8 +10,11 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import rasterio
+from rasterio.features import rasterize
 from rasterio.warp import transform_bounds
+from shapely.geometry import LineString, MultiLineString, box
 
 from .io import log
 from .validate import parse_kml
@@ -211,14 +214,70 @@ def dem_covers_bounds(
     )
 
 
+def dem_descent_coverage_counts(kml_path: str | Path, dem_path: str | Path) -> tuple[int, int]:
+    features = parse_kml(kml_path)
+    if features.descent_lines.empty:
+        raise ValueError(f"KML has no descent lines: {kml_path}")
+
+    with rasterio.open(dem_path) as src:
+        descent = features.descent_lines.to_crs(src.crs)
+        dem_bounds = box(*src.bounds)
+        descent_bounds = box(*descent.total_bounds)
+        if not dem_bounds.covers(descent_bounds):
+            raise ValueError(f"DEM bounds do not fully cover descent bounds: {kml_path} -> {dem_path}")
+
+        geoms = [
+            (geom, 1)
+            for geom in descent.geometry
+            if isinstance(geom, (LineString, MultiLineString)) and not geom.is_empty
+        ]
+        if not geoms:
+            raise ValueError(f"KML has no rasterizable descent geometries: {kml_path}")
+
+        line_mask = rasterize(
+            geoms,
+            out_shape=(src.height, src.width),
+            transform=src.transform,
+            fill=0,
+            dtype=np.uint8,
+            all_touched=True,
+        )
+        line_pixels = int(line_mask.sum())
+        if line_pixels == 0:
+            raise ValueError(f"descent line rasterizes to zero pixels: {kml_path} -> {dem_path}")
+
+        arr = src.read(1, masked=True)
+        mask = np.ma.getmaskarray(arr)
+        values = np.asarray(arr.filled(np.nan), dtype=np.float32)
+        valid_dem = (~mask) & np.isfinite(values)
+        valid_line_pixels = int((valid_dem & (line_mask == 1)).sum())
+
+    return valid_line_pixels, line_pixels
+
+
+def dem_has_valid_descent_coverage(kml_path: str | Path, dem_path: str | Path) -> bool:
+    valid_line_pixels, line_pixels = dem_descent_coverage_counts(kml_path, dem_path)
+    return valid_line_pixels == line_pixels
+
+
 def find_covering_dem(
-    dem_paths: list[str | Path], bounds_wgs84: tuple[float, float, float, float]
+    dem_paths: list[str | Path],
+    bounds_wgs84: tuple[float, float, float, float],
+    kml_path: str | Path | None = None,
 ) -> Path | None:
     best: tuple[float, Path] | None = None
     for dem_path in dem_paths:
         try:
             if not dem_covers_bounds(dem_path, bounds_wgs84):
                 continue
+            if kml_path is not None:
+                valid, total = dem_descent_coverage_counts(kml_path, dem_path)
+                if valid != total:
+                    log(
+                        f"skipping DEM with nodata under descent track: {dem_path} "
+                        f"({valid}/{total} valid descent pixels)"
+                    )
+                    continue
             with rasterio.open(dem_path) as src:
                 area = _dem_area(src.bounds)
         except Exception:
@@ -274,6 +333,15 @@ def choose_tnm_product(
 ) -> dict[str, Any]:
     if not items:
         raise RuntimeError("TNM returned no 1-meter DEM products for the KML extent")
+    candidates = _rank_tnm_products(items, bounds_wgs84)
+    if not candidates:
+        raise RuntimeError("TNM returned no 1-meter DEM products with download URLs")
+    return candidates[0]
+
+
+def _rank_tnm_products(
+    items: list[dict[str, Any]], bounds_wgs84: tuple[float, float, float, float]
+) -> list[dict[str, Any]]:
     containing = []
     for item in items:
         item_bounds = _extract_bounds(item)
@@ -284,16 +352,13 @@ def choose_tnm_product(
             and item_bounds[1] <= bounds_wgs84[1]
             and item_bounds[2] >= bounds_wgs84[2]
             and item_bounds[3] >= bounds_wgs84[3]
-        ):
+            ):
             containing.append(item)
     candidates = containing or items
     candidates.sort(key=lambda item: str(item.get("title", "")))
     candidates.sort(key=lambda item: str(item.get("publicationDate", "")), reverse=True)
     candidates.sort(key=lambda item: _item_download_url(item) is None)
-    chosen = candidates[0]
-    if _item_download_url(chosen) is None:
-        raise RuntimeError(f"TNM product lacks a download URL: {chosen.get('title', '<unknown>')}")
-    return chosen
+    return [item for item in candidates if _item_download_url(item) is not None]
 
 
 def _bounds_from_kml(kml_path: str | Path) -> tuple[float, float, float, float]:
@@ -405,7 +470,7 @@ def ingest_ropewiki_page(
             )
 
     dem_candidates = list_local_dem_paths(manifest_path, cache_dirs, dem_dir)
-    existing_dem = find_covering_dem(dem_candidates, bounds_wgs84)
+    existing_dem = find_covering_dem(dem_candidates, bounds_wgs84, inspect_kml_path)
     if existing_dem is not None:
         return IngestResult(
             source=source,
@@ -418,9 +483,8 @@ def ingest_ropewiki_page(
         )
 
     items = query_tnm_products(bounds_wgs84)
-    try:
-        chosen = choose_tnm_product(items, bounds_wgs84)
-    except RuntimeError as exc:
+    candidates = _rank_tnm_products(items, bounds_wgs84)
+    if not candidates:
         return IngestResult(
             source=source,
             page_title=page_title,
@@ -428,25 +492,54 @@ def ingest_ropewiki_page(
             kml_url=kml_url,
             kml_path=str(kml_path),
             status="skipped_no_dem",
-            message=str(exc),
+            message="TNM returned no 1-meter DEM products with download URLs",
         )
-    dem_url = _item_download_url(chosen)
-    assert dem_url is not None
-    dem_name = _safe_filename(dem_url, f"{page_title}.tif")
-    dem_path = Path(dem_dir) / dem_name
-    if not dry_run and not dem_path.exists():
-        log(f"downloading DEM: {dem_url}")
-        dem_path.parent.mkdir(parents=True, exist_ok=True)
-        _download_file(dem_url, dem_path)
+    coverage_errors: list[str] = []
+    for chosen in candidates:
+        dem_url = _item_download_url(chosen)
+        assert dem_url is not None
+        dem_name = _safe_filename(dem_url, f"{page_title}.tif")
+        dem_path = Path(dem_dir) / dem_name
+        if not dry_run and not dem_path.exists():
+            log(f"downloading DEM: {dem_url}")
+            dem_path.parent.mkdir(parents=True, exist_ok=True)
+            _download_file(dem_url, dem_path)
+        if dry_run:
+            return IngestResult(
+                source=source,
+                page_title=page_title,
+                page_url=page_url,
+                kml_url=kml_url,
+                kml_path=str(kml_path),
+                dem_path=str(dem_path),
+                sciencebase_id=chosen.get("sourceId") or chosen.get("sourceid"),
+                status="planned_download",
+            )
+        try:
+            if dem_has_valid_descent_coverage(inspect_kml_path, dem_path):
+                return IngestResult(
+                    source=source,
+                    page_title=page_title,
+                    page_url=page_url,
+                    kml_url=kml_url,
+                    kml_path=str(kml_path),
+                    dem_path=str(dem_path),
+                    sciencebase_id=chosen.get("sourceId") or chosen.get("sourceid"),
+                    status="downloaded_dem",
+                )
+            valid, total = dem_descent_coverage_counts(inspect_kml_path, dem_path)
+            coverage_errors.append(f"{dem_path} ({valid}/{total} valid descent pixels)")
+        except Exception as exc:
+            coverage_errors.append(f"{dem_path} ({exc})")
+    detail = "; ".join(coverage_errors)
     return IngestResult(
         source=source,
         page_title=page_title,
         page_url=page_url,
         kml_url=kml_url,
         kml_path=str(kml_path),
-        dem_path=str(dem_path),
-        sciencebase_id=chosen.get("sourceId") or chosen.get("sourceid"),
-        status="downloaded_dem" if not dry_run else "planned_download",
+        status="skipped_no_dem",
+        message=f"TNM DEM products lacked complete valid descent coverage: {detail}",
     )
 
 

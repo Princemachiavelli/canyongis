@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from dataclasses import fields
 from pathlib import Path
 
@@ -48,6 +49,18 @@ def _cfg_from_args(args: argparse.Namespace, defaults: MLConfig) -> MLConfig:
     return MLConfig(**kwargs)
 
 
+def _explicit_config_overrides(argv: list[str], skip: set[str]) -> set[str]:
+    config_keys = {f.name for f in fields(MLConfig()) if f.name not in skip}
+    overrides: set[str] = set()
+    for arg in argv:
+        if not arg.startswith("--"):
+            continue
+        key = arg[2:].split("=", 1)[0].replace("-", "_")
+        if key in config_keys:
+            overrides.add(key)
+    return overrides
+
+
 def train_cli(argv: list[str] | None = None) -> None:
     defaults = MLConfig()
     p = argparse.ArgumentParser(
@@ -65,6 +78,7 @@ def train_cli(argv: list[str] | None = None) -> None:
 
 
 def predict_cli(argv: list[str] | None = None) -> None:
+    raw_argv = sys.argv[1:] if argv is None else argv
     defaults = MLConfig()
     p = argparse.ArgumentParser(
         prog="canyongis-ml-predict",
@@ -74,9 +88,14 @@ def predict_cli(argv: list[str] | None = None) -> None:
     p.add_argument("checkpoint", type=Path, help="Path to best.pt or best_full.pt.")
     p.add_argument("outdir", type=Path, help="Output directory.")
     _add_config_flags(p, defaults, skip={"manifest_path", "out_dir", "dem_path", "checkpoint_path"})
-    args = p.parse_args(argv)
+    args = p.parse_args(raw_argv)
     cfg = _cfg_from_args(args, defaults)
     cfg.dem_path = str(args.dem)
     cfg.checkpoint_path = str(args.checkpoint)
     cfg.out_dir = str(args.outdir)
+    cfg._cli_overrides = _explicit_config_overrides(  # type: ignore[attr-defined]
+        raw_argv,
+        skip={"manifest_path", "out_dir", "dem_path", "checkpoint_path"},
+    )
+    cfg._use_checkpoint_defaults = True  # type: ignore[attr-defined]
     run_inference(cfg)

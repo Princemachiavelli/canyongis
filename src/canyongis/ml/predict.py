@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import gc
 import json
+from dataclasses import fields
 from pathlib import Path
 from typing import Any
 
@@ -222,6 +223,22 @@ def rappel_peaks_to_gdf(
 # -----------------------------------------------------------------------------
 
 
+def _apply_checkpoint_defaults(cfg: MLConfig, saved_cfg: dict[str, Any]) -> None:
+    """Use training config as prediction defaults, preserving explicit CLI overrides."""
+    if not getattr(cfg, "_use_checkpoint_defaults", False):
+        return
+
+    skip = {"manifest_path", "out_dir", "dem_path", "checkpoint_path"}
+    explicit = set(getattr(cfg, "_cli_overrides", set()))
+    valid_keys = {f.name for f in fields(MLConfig())}
+    for key, value in saved_cfg.items():
+        if key in skip or key in explicit or key not in valid_keys:
+            continue
+        if key == "decoder_channels" and isinstance(value, list):
+            value = tuple(value)
+        setattr(cfg, key, value)
+
+
 def run_inference(cfg: MLConfig) -> dict[str, Any]:
     """Read DEM → features → model → rasters → vectors. Writes outputs under cfg.out_dir."""
     out_dir = Path(cfg.out_dir)
@@ -231,6 +248,7 @@ def run_inference(cfg: MLConfig) -> dict[str, Any]:
     ckpt = torch.load(cfg.checkpoint_path, map_location="cpu", weights_only=False)
     # Prefer checkpoint's saved cfg dict for architecture fields (encoder, channels).
     saved_cfg_dict = ckpt.get("cfg", {})
+    _apply_checkpoint_defaults(cfg, saved_cfg_dict)
     arch_keys = ("encoder_name", "in_channels", "decoder_channels", "encoder_weights")
     for k in arch_keys:
         if k in saved_cfg_dict:

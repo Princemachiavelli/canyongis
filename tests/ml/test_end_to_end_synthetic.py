@@ -94,6 +94,11 @@ def test_e2e_train_then_predict(tmp_path: Path):
 
     summary = run_training(cfg)
     assert "mean_cldice" in summary
+    train_cfg_path = out_dir / "training_config.json"
+    assert train_cfg_path.exists(), "training config JSON not written"
+    train_cfg = json.loads(train_cfg_path.read_text())
+    assert train_cfg["tile_size"] == 64
+    assert train_cfg["predict_overlap"] == 16
     # Checkpoint exists for at least fold 0.
     ckpt = out_dir / "fold0" / "best.pt"
     assert ckpt.exists(), "fold0 checkpoint not written"
@@ -104,19 +109,9 @@ def test_e2e_train_then_predict(tmp_path: Path):
 
     # --- predict ---
     predict_out = tmp_path / "predict"
-    pcfg = MLConfig(
-        dem_path=str(dem_path),
-        checkpoint_path=str(best_ckpt),
-        out_dir=str(predict_out),
-        tile_size=64,
-        predict_overlap=16,
-        encoder_weights=None,
-    )
+    from canyongis.ml.cli import predict_cli
 
-    from canyongis.ml.predict import run_inference
-
-    stats = run_inference(pcfg)
-    assert "centerlines" in stats
+    predict_cli([str(dem_path), str(best_ckpt), str(predict_out)])
     assert (predict_out / "canyon_prob.tif").exists()
     assert (predict_out / "rappel_prob.tif").exists()
 

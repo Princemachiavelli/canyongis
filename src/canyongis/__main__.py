@@ -7,6 +7,7 @@ import geopandas as gpd
 import rasterio
 from rasterio.warp import transform_bounds
 
+from .geomorphons import geomorphons_cli
 from .ingest import ingest_ropewiki_cli
 from .io import log
 from .mapping import render_folium_map
@@ -70,6 +71,10 @@ def cli(argv: list[str] | None = None) -> None:
         "mosaic-manifest",
         help="Build one buffered DEM mosaic per KML and update a training manifest.",
     )
+    sub.add_parser(
+        "geomorphons",
+        help="Export GRASS r.geomorphon rasters for a DEM.",
+    )
 
     # Default pipeline: positional DEM, checkpoint, outdir + optional --no-folium.
     parser.add_argument("dem", nargs="?", type=Path, help="Path to input DEM GeoTIFF.")
@@ -100,6 +105,9 @@ def cli(argv: list[str] | None = None) -> None:
     if args.command == "mosaic-manifest":
         mosaic_manifest_cli(extra)
         return
+    if args.command == "geomorphons":
+        geomorphons_cli(extra)
+        return
 
     if not (args.dem and args.checkpoint and args.outdir):
         parser.error(
@@ -108,7 +116,8 @@ def cli(argv: list[str] | None = None) -> None:
             "   or: canyongis predict ...\n"
             "   or: canyongis export-features ...\n"
             "   or: canyongis ropewiki-sync ...\n"
-            "   or: canyongis mosaic-manifest ..."
+            "   or: canyongis mosaic-manifest ...\n"
+            "   or: canyongis geomorphons ..."
         )
 
     cfg = MLConfig(
@@ -118,6 +127,8 @@ def cli(argv: list[str] | None = None) -> None:
         folium_max_points=args.folium_max_points,
         render_folium=not args.no_folium,
     )
+    cfg._cli_overrides = {"folium_max_points", "render_folium"}  # type: ignore[attr-defined]
+    cfg._use_checkpoint_defaults = True  # type: ignore[attr-defined]
     main(cfg, render_folium=not args.no_folium)
 
 

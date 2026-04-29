@@ -2,6 +2,7 @@
   lib,
   buildPythonPackage,
   albumentations,
+  grass,
   setuptools,
   folium,
   geojson,
@@ -52,6 +53,16 @@ buildPythonPackage {
     shapely
     torch
     tqdm
+  ];
+
+  makeWrapperArgs = [
+    "--set-default"
+    "NUMBA_CACHE_DIR"
+    "/tmp/canyongis-numba-cache"
+    "--prefix"
+    "PATH"
+    ":"
+    (lib.makeBinPath [ grass ])
   ];
 
   doCheck = false;

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import os
+from dataclasses import asdict
 from pathlib import Path
 from typing import Any
 
@@ -188,7 +189,7 @@ def train_fold(
             torch.save(
                 {
                     "model_state": model.state_dict(),
-                    "cfg": cfg.__dict__,
+                    "cfg": asdict(cfg),
                     "norm_stats": stats,
                     "epoch": epoch,
                     "val_cldice": val_cldice,
@@ -226,6 +227,8 @@ def run_training(cfg: MLConfig) -> dict[str, Any]:
     """Top-level training driver: manifest → K folds → aggregated report."""
     out_dir = Path(cfg.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    cfg_dict = asdict(cfg)
+    (out_dir / "training_config.json").write_text(json.dumps(cfg_dict, indent=2))
     cache_dir = out_dir / "cache"
 
     manifest: list[ManifestEntry] = load_manifest(cfg.manifest_path)

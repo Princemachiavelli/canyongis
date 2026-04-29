@@ -79,6 +79,7 @@
               config.treefmt.build.devShell
             ];
             packages = [
+              pkgs.grass
               pkgs.gdal
               python.pkgs.pytest
             ];
