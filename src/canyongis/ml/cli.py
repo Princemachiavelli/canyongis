@@ -17,20 +17,28 @@ def _add_config_flags(p: argparse.ArgumentParser, defaults: MLConfig, skip: set[
             continue
         val = getattr(defaults, f.name)
         if isinstance(val, tuple):
-            # decoder_channels etc. Expose as comma-separated ints.
+            item_type = float if any(isinstance(x, float) for x in val) else int
             p.add_argument(
                 f"--{f.name.replace('_', '-')}",
-                type=lambda s: tuple(int(x) for x in s.split(",")),
+                type=lambda s, item_type=item_type: tuple(item_type(x) for x in s.split(",")),
                 default=val,
                 help=f"(default: {','.join(map(str, val))})",
             )
         elif isinstance(val, bool):
-            p.add_argument(
+            group = p.add_mutually_exclusive_group()
+            group.add_argument(
                 f"--{f.name.replace('_', '-')}",
+                dest=f.name,
                 action="store_true",
-                default=val,
                 help=f"(default: {val})",
             )
+            group.add_argument(
+                f"--no-{f.name.replace('_', '-')}",
+                dest=f.name,
+                action="store_false",
+                help=argparse.SUPPRESS if not val else f"(default: {val})",
+            )
+            p.set_defaults(**{f.name: val})
         else:
             p.add_argument(
                 f"--{f.name.replace('_', '-')}",

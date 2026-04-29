@@ -11,6 +11,12 @@ class MLConfig:
     detrend_radius_m: float = 500.0
     hand_clip_m: float = 100.0
     flow_accum_stream_threshold: int = 200
+    use_geomorphons: bool = False
+    geomorphon_search_m: tuple[float, ...] = (30.0,)
+    geomorphon_skip_m: float = 0.0
+    geomorphon_flat_deg: float = 1.0
+    geomorphon_dist_m: float = 0.0
+    geomorphon_auto_generate: bool = True
 
     # --- Labels ---
     label_sigma_m: float = 5.0
@@ -97,11 +103,31 @@ class MLConfig:
             "hand_log1p",
             "flow_accum_log1p",
             "distance_to_drainage_log1p",
+            *self.geomorphon_channel_names(),
         ]
 
+    def geomorphon_channel_names(self) -> list[str]:
+        if not self.use_geomorphons:
+            return []
+        names: list[str] = []
+        for search_m in self.geomorphon_search_m:
+            scale = f"{search_m:g}m"
+            names.extend(
+                [
+                    f"geomorphon_{scale}_ridge_spur",
+                    f"geomorphon_{scale}_hollow_valley",
+                    f"geomorphon_{scale}_positive",
+                    f"geomorphon_{scale}_negative",
+                    f"geomorphon_{scale}_intensity",
+                ]
+            )
+        return names
+
     def __post_init__(self) -> None:
-        if self.in_channels != len(self.channel_names()):
+        expected = len(self.channel_names())
+        if self.in_channels == 7 and expected != 7:
+            self.in_channels = expected
+        if self.in_channels != expected:
             raise ValueError(
-                f"in_channels={self.in_channels} does not match channel_names count "
-                f"{len(self.channel_names())}"
+                f"in_channels={self.in_channels} does not match channel_names count {expected}"
             )

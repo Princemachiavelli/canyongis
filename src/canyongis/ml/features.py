@@ -1,11 +1,17 @@
 from __future__ import annotations
 
+from pathlib import Path
+
 import numpy as np
+import rasterio
 from scipy import ndimage as ndi
 
+from ..geomorphons import export_geomorphons
 from ..hydrology import compute_flow_accum, compute_hand
 from ..terrain import compute_local_relief, compute_slope, compute_tpi, fill_nans, meters_to_px
 from .config import MLConfig
+
+GEOMORPHON_OUTPUTS = ("forms", "positive", "negative", "intensity")
 
 
 def build_feature_stack(
@@ -13,6 +19,7 @@ def build_feature_stack(
     transform,
     pixel_size: float,
     cfg: MLConfig,
+    dem_path: str | Path | None = None,
 ) -> np.ndarray:
     """Compute the DEM-derived input stack from a raw DEM.
 
@@ -24,6 +31,7 @@ def build_feature_stack(
       4. HAND clipped [0, hand_clip_m] then log1p
       5. log1p(flow_accum)
       6. log1p(distance_to_drainage_m)
+      7+. optional geomorphon channels from precomputed GRASS r.geomorphon rasters
 
     Returns float32 array of shape (C, H, W). NaNs are replaced channel-wise.
     """
@@ -44,8 +52,8 @@ def build_feature_stack(
         # Fallback: use top-1% cells so HAND is defined everywhere.
         stream_mask = flow_accum >= np.nanpercentile(flow_accum, 99)
     hand = compute_hand(filled, stream_mask)
-    distance_to_drainage = (
-        ndi.distance_transform_edt(~stream_mask).astype(np.float32) * np.float32(pixel_size)
+    distance_to_drainage = ndi.distance_transform_edt(~stream_mask).astype(np.float32) * np.float32(
+        pixel_size
     )
 
     hand_clipped = np.clip(hand, 0.0, cfg.hand_clip_m)
@@ -63,11 +71,98 @@ def build_feature_stack(
         flow_log,
         distance_log,
     ]
+    channels.extend(_build_geomorphon_channels(dem_path, elev.shape, transform, cfg))
     stack = np.stack(channels, axis=0).astype(np.float32)
 
     # Propagate the NaN mask as an extra-invalid zero region (optional consumers may read this).
     stack[:, nan_mask] = 0.0
     return stack
+
+
+def geomorphon_sidecar_dir(dem_path: str | Path, search_m: float) -> Path:
+    dem_path = Path(dem_path)
+    return dem_path.with_suffix("").with_name(f"{dem_path.stem}.geomorphons") / f"{search_m:g}m"
+
+
+def _ensure_geomorphon_outputs(dem_path: str | Path, search_m: float, cfg: MLConfig) -> Path:
+    out_dir = geomorphon_sidecar_dir(dem_path, search_m)
+    missing = [
+        name for name in GEOMORPHON_OUTPUTS if not (out_dir / f"geomorphon_{name}.tif").exists()
+    ]
+    if not missing:
+        return out_dir
+    if not cfg.geomorphon_auto_generate:
+        raise FileNotFoundError(
+            f"missing geomorphon raster(s) for {dem_path} at {search_m:g}m: {', '.join(missing)}"
+        )
+    export_geomorphons(
+        dem_path,
+        out_dir,
+        search_m=search_m,
+        skip_m=cfg.geomorphon_skip_m,
+        flat_deg=cfg.geomorphon_flat_deg,
+        dist_m=cfg.geomorphon_dist_m,
+        outputs=GEOMORPHON_OUTPUTS,
+    )
+    return out_dir
+
+
+def _read_geomorphon_band(path: Path, shape: tuple[int, int], transform) -> np.ndarray:
+    with rasterio.open(path) as src:
+        if src.shape != shape:
+            raise ValueError(
+                f"geomorphon raster shape mismatch: {path} has {src.shape}, expected {shape}"
+            )
+        if not np.allclose(tuple(src.transform), tuple(transform), atol=1e-6):
+            raise ValueError(f"geomorphon raster transform mismatch: {path}")
+        arr = src.read(1, masked=True)
+    data = np.asarray(arr.filled(np.nan), dtype=np.float32)
+    data[~np.isfinite(data)] = 0.0
+    return data
+
+
+def _build_geomorphon_channels(
+    dem_path: str | Path | None,
+    shape: tuple[int, int],
+    transform,
+    cfg: MLConfig,
+) -> list[np.ndarray]:
+    if not cfg.use_geomorphons:
+        return []
+    if dem_path is None:
+        raise ValueError("dem_path is required when use_geomorphons=True")
+
+    channels: list[np.ndarray] = []
+    for search_m in cfg.geomorphon_search_m:
+        out_dir = _ensure_geomorphon_outputs(dem_path, search_m, cfg)
+        forms = _read_geomorphon_band(out_dir / "geomorphon_forms.tif", shape, transform)
+        positive = _read_geomorphon_band(out_dir / "geomorphon_positive.tif", shape, transform)
+        negative = _read_geomorphon_band(out_dir / "geomorphon_negative.tif", shape, transform)
+        intensity = _read_geomorphon_band(out_dir / "geomorphon_intensity.tif", shape, transform)
+
+        ridge_spur = np.isin(forms.astype(np.uint8), (3, 5)).astype(np.float32)
+        hollow_valley = np.isin(forms.astype(np.uint8), (7, 9)).astype(np.float32)
+        channels.extend(
+            [
+                ridge_spur,
+                hollow_valley,
+                positive.astype(np.float32, copy=False),
+                negative.astype(np.float32, copy=False),
+                intensity.astype(np.float32, copy=False),
+            ]
+        )
+    return channels
+
+
+def feature_stack_signature(cfg: MLConfig) -> dict[str, object]:
+    return {
+        "channel_names": cfg.channel_names(),
+        "use_geomorphons": cfg.use_geomorphons,
+        "geomorphon_search_m": list(cfg.geomorphon_search_m),
+        "geomorphon_skip_m": cfg.geomorphon_skip_m,
+        "geomorphon_flat_deg": cfg.geomorphon_flat_deg,
+        "geomorphon_dist_m": cfg.geomorphon_dist_m,
+    }
 
 
 def compute_norm_stats(stacks: list[np.ndarray]) -> dict[str, list[float]]:

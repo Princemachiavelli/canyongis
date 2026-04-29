@@ -7,6 +7,7 @@ from rasterio.transform import from_origin
 
 from canyongis.ml.config import MLConfig
 from canyongis.ml.dataset import ManifestEntry, SpatialKFoldSplitter, TileRecord, prepare_cache
+from canyongis.ml.features import feature_stack_signature
 
 
 def _make_records(n_super: int, n_folds_worth: int = 5) -> list[TileRecord]:
@@ -16,7 +17,11 @@ def _make_records(n_super: int, n_folds_worth: int = 5) -> list[TileRecord]:
         for t in range(n_folds_worth):
             recs.append(
                 TileRecord(
-                    dem_id="demA", row=s * 256, col=t * 128, super_tile_id=super_id, has_positive=False
+                    dem_id="demA",
+                    row=s * 256,
+                    col=t * 128,
+                    super_tile_id=super_id,
+                    has_positive=False,
                 )
             )
     return recs
@@ -104,3 +109,10 @@ def test_prepare_cache_masks_labels_outside_valid_dem(tmp_path):
     assert canyon[:24].max() > 0.0
     assert canyon[24:40].max() == 0.0
     assert canyon[40:].max() > 0.0
+
+
+def test_feature_stack_signature_changes_with_geomorphon_config():
+    base = feature_stack_signature(MLConfig())
+    geom = feature_stack_signature(MLConfig(use_geomorphons=True, geomorphon_search_m=(10.0, 30.0)))
+    assert base != geom
+    assert len(geom["channel_names"]) == 17

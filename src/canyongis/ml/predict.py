@@ -177,7 +177,9 @@ def centerlines_to_gdf(
 ) -> gpd.GeoDataFrame:
     binary = canyon_prob >= threshold
     if not binary.any():
-        return gpd.GeoDataFrame(columns=["mean_prob", "length_m", "geometry"], geometry="geometry", crs=crs)
+        return gpd.GeoDataFrame(
+            columns=["mean_prob", "length_m", "geometry"], geometry="geometry", crs=crs
+        )
     skel = skeletonize(binary)
     paths = _skeleton_to_paths(skel)
     rows = []
@@ -190,11 +192,11 @@ def centerlines_to_gdf(
         length_m = float(line.length)
         if length_m < min_length_m:
             continue
-        rows.append(
-            {"mean_prob": float(np.mean(probs)), "length_m": length_m, "geometry": line}
-        )
+        rows.append({"mean_prob": float(np.mean(probs)), "length_m": length_m, "geometry": line})
     if not rows:
-        return gpd.GeoDataFrame(columns=["mean_prob", "length_m", "geometry"], geometry="geometry", crs=crs)
+        return gpd.GeoDataFrame(
+            columns=["mean_prob", "length_m", "geometry"], geometry="geometry", crs=crs
+        )
     return gpd.GeoDataFrame(rows, crs=crs)
 
 
@@ -206,9 +208,7 @@ def rappel_peaks_to_gdf(
     cfg: MLConfig,
 ) -> gpd.GeoDataFrame:
     min_distance = max(1, round(cfg.rappel_peak_min_distance_m / max(pixel_size, 1e-6)))
-    peaks = peak_local_max(
-        rappel_prob, min_distance=min_distance, threshold_abs=cfg.prob_threshold
-    )
+    peaks = peak_local_max(rappel_prob, min_distance=min_distance, threshold_abs=cfg.prob_threshold)
     if peaks.size == 0:
         return gpd.GeoDataFrame(columns=["prob", "geometry"], geometry="geometry", crs=crs)
     rows = []
@@ -270,7 +270,7 @@ def run_inference(cfg: MLConfig) -> dict[str, Any]:
     elev, transform, crs, pixel_size = read_dem(cfg.dem_path)
 
     log("building feature stack")
-    stack = build_feature_stack(elev, transform, pixel_size, cfg)
+    stack = build_feature_stack(elev, transform, pixel_size, cfg, dem_path=cfg.dem_path)
 
     log("running tiled inference")
     canyon_prob, rappel_prob = predict_tiled(model, stack, cfg, device, norm_stats)

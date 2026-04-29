@@ -16,7 +16,7 @@ from torch.utils.data import Dataset
 
 from ..io import log, read_dem, write_raster
 from .config import MLConfig
-from .features import apply_norm, build_feature_stack
+from .features import apply_norm, build_feature_stack, feature_stack_signature
 from .labels import build_labels_from_kml
 
 # -----------------------------------------------------------------------------
@@ -67,6 +67,17 @@ def _cache_feature_count(paths: dict[str, Path]) -> int | None:
         return src.count
 
 
+def _cache_feature_signature(paths: dict[str, Path]) -> dict[str, Any] | None:
+    if not paths["meta"].exists():
+        return None
+    try:
+        meta = json.loads(paths["meta"].read_text())
+    except json.JSONDecodeError:
+        return None
+    signature = meta.get("feature_stack")
+    return signature if isinstance(signature, dict) else None
+
+
 def _prepare_cache_entry(entry: ManifestEntry, cache_dir: str | Path, cfg: MLConfig) -> str:
     cache_dir = Path(cache_dir)
     paths = _cache_paths(cache_dir, entry.dem_id)
@@ -74,7 +85,9 @@ def _prepare_cache_entry(entry: ManifestEntry, cache_dir: str | Path, cfg: MLCon
 
     log(f"preparing cache for {entry.dem_path}")
     elev, transform, crs, pixel_size = read_dem(entry.dem_path)
-    stack = build_feature_stack(elev, transform, pixel_size, cfg)  # (C, H, W)
+    stack = build_feature_stack(
+        elev, transform, pixel_size, cfg, dem_path=entry.dem_path
+    )  # (C, H, W)
     canyon_y, rappel_y = build_labels_from_kml(
         entry.kml_path,
         transform,
@@ -91,11 +104,18 @@ def _prepare_cache_entry(entry: ManifestEntry, cache_dir: str | Path, cfg: MLCon
 
     # Write features as a multi-band GeoTIFF (one band per channel).
     with rasterio.open(
-        paths["features"], "w",
-        driver="GTiff", height=elev.shape[0], width=elev.shape[1],
-        count=stack.shape[0], dtype="float32",
-        crs=crs, transform=transform,
-        compress="deflate", predictor=2, tiled=True,
+        paths["features"],
+        "w",
+        driver="GTiff",
+        height=elev.shape[0],
+        width=elev.shape[1],
+        count=stack.shape[0],
+        dtype="float32",
+        crs=crs,
+        transform=transform,
+        compress="deflate",
+        predictor=2,
+        tiled=True,
     ) as dst:
         for i in range(stack.shape[0]):
             dst.write(stack[i], i + 1)
@@ -114,6 +134,7 @@ def _prepare_cache_entry(entry: ManifestEntry, cache_dir: str | Path, cfg: MLCon
                 "label_sigma_m": entry.label_sigma_m,
                 "rappel_sigma_m": entry.rappel_sigma_m,
                 "precision_tier": entry.precision_tier,
+                "feature_stack": feature_stack_signature(cfg),
             },
             indent=2,
         )
@@ -144,14 +165,19 @@ def prepare_cache(manifest: list[ManifestEntry], cache_dir: str | Path, cfg: MLC
         paths = _cache_paths(cache_dir, entry.dem_id)
         paths["dir"].mkdir(parents=True, exist_ok=True)
         feature_count = _cache_feature_count(paths)
+        feature_signature = _cache_feature_signature(paths)
+        expected_signature = feature_stack_signature(cfg)
         if feature_count is not None:
-            if feature_count == cfg.in_channels:
+            if feature_count == cfg.in_channels and feature_signature == expected_signature:
                 log(f"cache hit: {entry.dem_id} ({entry.dem_path})")
                 continue
-            log(
-                f"cache stale: {entry.dem_id} has {feature_count} feature bands, "
-                f"expected {cfg.in_channels}; rebuilding"
-            )
+            if feature_count != cfg.in_channels:
+                log(
+                    f"cache stale: {entry.dem_id} has {feature_count} feature bands, "
+                    f"expected {cfg.in_channels}; rebuilding"
+                )
+            else:
+                log(f"cache stale: {entry.dem_id} feature stack settings changed; rebuilding")
         pending.append(entry)
 
     if not pending:
@@ -219,9 +245,7 @@ def build_tile_index(cache_dir: str | Path, cfg: MLConfig) -> list[TileRecord]:
                 has_pos = bool(patch.max() > cfg.positive_threshold)
                 sid = f"{dem_id}:{r // super_px}:{c // super_px}"
                 records.append(
-                    TileRecord(
-                        dem_id=dem_id, row=r, col=c, super_tile_id=sid, has_positive=has_pos
-                    )
+                    TileRecord(dem_id=dem_id, row=r, col=c, super_tile_id=sid, has_positive=has_pos)
                 )
     return records
 
