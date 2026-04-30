@@ -5,6 +5,7 @@ import json
 import math
 import multiprocessing as mp
 import os
+import shutil
 import tempfile
 import traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
@@ -57,6 +58,7 @@ def _cache_paths(cache_dir: Path, dem_id: str) -> dict[str, Path]:
     d = cache_dir / dem_id
     return {
         "dir": d,
+        "zarr": d / "cache.zarr",
         "features": d / "features.tif",
         "canyon": d / "canyon_label.tif",
         "rappel": d / "rappel_label.tif",
@@ -64,7 +66,24 @@ def _cache_paths(cache_dir: Path, dem_id: str) -> dict[str, Path]:
     }
 
 
-def _cache_feature_count(paths: dict[str, Path]) -> int | None:
+def _cache_format(cfg: MLConfig) -> str:
+    cache_format = cfg.cache_format.strip().lower()
+    if cache_format not in {"zarr", "geotiff"}:
+        raise ValueError(f"unsupported cache_format={cfg.cache_format!r}; use zarr or geotiff")
+    return cache_format
+
+
+def _cache_feature_count(paths: dict[str, Path], cfg: MLConfig) -> int | None:
+    if _cache_format(cfg) == "zarr":
+        if not paths["zarr"].exists():
+            return None
+        import zarr
+
+        root = zarr.open_group(paths["zarr"], mode="r")
+        if "features" not in root:
+            return None
+        return int(root["features"].shape[0])
+
     if not paths["features"].exists() or not paths["canyon"].exists():
         return None
     with rasterio.open(paths["features"]) as src:
@@ -83,9 +102,19 @@ def _cache_feature_signature(paths: dict[str, Path]) -> dict[str, Any] | None:
 
 
 def _cache_storage_signature(cfg: MLConfig) -> dict[str, Any]:
+    cache_format = _cache_format(cfg)
+    compress = cfg.cache_compress.strip().lower()
+    if cache_format == "zarr":
+        block_size = _resolved_cache_block_size(cfg)
+        return {
+            "format": "zarr",
+            "compress": compress,
+            "feature_chunks": [cfg.in_channels, block_size, block_size],
+            "label_chunks": [block_size, block_size],
+        }
     return {
         "format": "geotiff",
-        "compress": cfg.cache_compress.lower(),
+        "compress": compress,
         "block_size": _resolved_cache_block_size(cfg),
     }
 
@@ -126,6 +155,15 @@ def _cache_storage_options(cfg: MLConfig) -> dict[str, Any]:
     )
 
 
+def _zarr_compressors(cfg: MLConfig):
+    compress = cfg.cache_compress.strip().lower()
+    if compress in {"", "none", "no", "false"}:
+        return None
+    raise ValueError(
+        f"unsupported zarr cache_compress={cfg.cache_compress!r}; use none for zarr cache"
+    )
+
+
 def _cache_storage_matches(paths: dict[str, Path], cfg: MLConfig) -> bool:
     if not paths["meta"].exists():
         return False
@@ -160,6 +198,72 @@ def _write_cache_raster(
         dst.write(arr.astype(dtype, copy=False), 1)
 
 
+def _write_zarr_cache(
+    paths: dict[str, Path],
+    stack: np.ndarray,
+    canyon_y: np.ndarray,
+    rappel_y: np.ndarray,
+    cfg: MLConfig,
+) -> None:
+    import zarr
+
+    if paths["zarr"].exists():
+        shutil.rmtree(paths["zarr"])
+
+    block_size = _resolved_cache_block_size(cfg)
+    compressors = _zarr_compressors(cfg)
+    root = zarr.open_group(paths["zarr"], mode="w")
+    root.create_array(
+        "features",
+        data=stack.astype(np.float32, copy=False),
+        chunks=(stack.shape[0], block_size, block_size),
+        compressors=compressors,
+        overwrite=True,
+    )
+    root.create_array(
+        "canyon",
+        data=canyon_y.astype(np.float32, copy=False),
+        chunks=(block_size, block_size),
+        compressors=compressors,
+        overwrite=True,
+    )
+    root.create_array(
+        "rappel",
+        data=rappel_y.astype(np.float32, copy=False),
+        chunks=(block_size, block_size),
+        compressors=compressors,
+        overwrite=True,
+    )
+
+
+def _write_geotiff_cache(
+    paths: dict[str, Path],
+    stack: np.ndarray,
+    canyon_y: np.ndarray,
+    rappel_y: np.ndarray,
+    transform,
+    crs,
+    cfg: MLConfig,
+) -> None:
+    with rasterio.open(
+        paths["features"],
+        "w",
+        driver="GTiff",
+        height=stack.shape[1],
+        width=stack.shape[2],
+        count=stack.shape[0],
+        dtype="float32",
+        crs=crs,
+        transform=transform,
+        **_cache_storage_options(cfg),
+    ) as dst:
+        for i in range(stack.shape[0]):
+            dst.write(stack[i], i + 1)
+
+    _write_cache_raster(paths["canyon"], canyon_y, transform, crs, cfg, dtype="float32")
+    _write_cache_raster(paths["rappel"], rappel_y, transform, crs, cfg, dtype="float32")
+
+
 def _prepare_cache_entry(entry: ManifestEntry, cache_dir: str | Path, cfg: MLConfig) -> str:
     cache_dir = Path(cache_dir)
     paths = _cache_paths(cache_dir, entry.dem_id)
@@ -184,24 +288,10 @@ def _prepare_cache_entry(entry: ManifestEntry, cache_dir: str | Path, cfg: MLCon
     canyon_y = np.where(valid_dem, canyon_y, 0.0).astype(np.float32, copy=False)
     rappel_y = np.where(valid_dem, rappel_y, 0.0).astype(np.float32, copy=False)
 
-    # Write features as a multi-band GeoTIFF (one band per channel).
-    with rasterio.open(
-        paths["features"],
-        "w",
-        driver="GTiff",
-        height=elev.shape[0],
-        width=elev.shape[1],
-        count=stack.shape[0],
-        dtype="float32",
-        crs=crs,
-        transform=transform,
-        **_cache_storage_options(cfg),
-    ) as dst:
-        for i in range(stack.shape[0]):
-            dst.write(stack[i], i + 1)
-
-    _write_cache_raster(paths["canyon"], canyon_y, transform, crs, cfg, dtype="float32")
-    _write_cache_raster(paths["rappel"], rappel_y, transform, crs, cfg, dtype="float32")
+    if _cache_format(cfg) == "zarr":
+        _write_zarr_cache(paths, stack, canyon_y, rappel_y, cfg)
+    else:
+        _write_geotiff_cache(paths, stack, canyon_y, rappel_y, transform, crs, cfg)
 
     paths["meta"].write_text(
         json.dumps(
@@ -288,7 +378,7 @@ def prepare_cache(manifest: list[ManifestEntry], cache_dir: str | Path, cfg: MLC
 
         paths = _cache_paths(cache_dir, entry.dem_id)
         paths["dir"].mkdir(parents=True, exist_ok=True)
-        feature_count = _cache_feature_count(paths)
+        feature_count = _cache_feature_count(paths, cfg)
         feature_signature = _cache_feature_signature(paths)
         expected_signature = feature_stack_signature(cfg)
         storage_matches = _cache_storage_matches(paths, cfg)
@@ -370,11 +460,20 @@ def build_tile_index(cache_dir: str | Path, cfg: MLConfig) -> list[TileRecord]:
 
     for dem_id in _list_cached_dem_ids(cache_dir):
         paths = _cache_paths(cache_dir, dem_id)
-        if not paths["canyon"].exists():
-            continue
-        with rasterio.open(paths["canyon"]) as src:
-            h, w = src.height, src.width
-            canyon_full = src.read(1)  # small enough to hold one at a time
+        if _cache_format(cfg) == "zarr":
+            if not paths["zarr"].exists():
+                continue
+            import zarr
+
+            root = zarr.open_group(paths["zarr"], mode="r")
+            canyon_full = np.asarray(root["canyon"][:], dtype=np.float32)
+            h, w = canyon_full.shape
+        else:
+            if not paths["canyon"].exists():
+                continue
+            with rasterio.open(paths["canyon"]) as src:
+                h, w = src.height, src.width
+                canyon_full = src.read(1)  # small enough to hold one at a time
 
         for r in range(0, h - tile + 1, stride):
             for c in range(0, w - tile + 1, stride):
@@ -385,6 +484,23 @@ def build_tile_index(cache_dir: str | Path, cfg: MLConfig) -> list[TileRecord]:
                     TileRecord(dem_id=dem_id, row=r, col=c, super_tile_id=sid, has_positive=has_pos)
                 )
     return records
+
+
+def read_cache_feature_tile(cache_dir: str | Path, rec: TileRecord, cfg: MLConfig) -> np.ndarray:
+    paths = _cache_paths(Path(cache_dir), rec.dem_id)
+    tile = cfg.tile_size
+    if _cache_format(cfg) == "zarr":
+        import zarr
+
+        root = zarr.open_group(paths["zarr"], mode="r")
+        return np.asarray(
+            root["features"][:, rec.row : rec.row + tile, rec.col : rec.col + tile],
+            dtype=np.float32,
+        )
+
+    win = Window(rec.col, rec.row, tile, tile)
+    with rasterio.open(paths["features"]) as src:
+        return src.read(window=win).astype(np.float32)
 
 
 # -----------------------------------------------------------------------------
@@ -435,31 +551,53 @@ class TileDataset(Dataset):
         self.norm_stats = norm_stats
         self.indices = list(range(len(records))) if indices is None else list(indices)
         self.transform = transform
-        self._src_cache: dict[str, dict[str, rasterio.io.DatasetReader]] = {}
+        self._src_cache: dict[str, dict[str, Any]] = {}
 
     def __len__(self) -> int:
         return len(self.indices)
 
-    def _sources(self, dem_id: str) -> dict[str, rasterio.io.DatasetReader]:
+    def _sources(self, dem_id: str) -> dict[str, Any]:
         # Lazy-open; each worker has its own instance (DataLoader forks).
         if dem_id not in self._src_cache:
             paths = _cache_paths(self.cache_dir, dem_id)
-            self._src_cache[dem_id] = {
-                "features": rasterio.open(paths["features"]),
-                "canyon": rasterio.open(paths["canyon"]),
-                "rappel": rasterio.open(paths["rappel"]),
-            }
+            if _cache_format(self.cfg) == "zarr":
+                import zarr
+
+                root = zarr.open_group(paths["zarr"], mode="r")
+                self._src_cache[dem_id] = {
+                    "format": "zarr",
+                    "features": root["features"],
+                    "canyon": root["canyon"],
+                    "rappel": root["rappel"],
+                }
+            else:
+                self._src_cache[dem_id] = {
+                    "format": "geotiff",
+                    "features": rasterio.open(paths["features"]),
+                    "canyon": rasterio.open(paths["canyon"]),
+                    "rappel": rasterio.open(paths["rappel"]),
+                }
         return self._src_cache[dem_id]
 
     def __getitem__(self, idx: int) -> dict[str, torch.Tensor]:
         rec = self.records[self.indices[idx]]
         tile = self.cfg.tile_size
-        win = Window(rec.col, rec.row, tile, tile)
         src = self._sources(rec.dem_id)
 
-        feat = src["features"].read(window=win).astype(np.float32)  # (C, H, W)
-        canyon = src["canyon"].read(1, window=win).astype(np.float32)  # (H, W)
-        rappel = src["rappel"].read(1, window=win).astype(np.float32)  # (H, W)
+        if src["format"] == "zarr":
+            row = rec.row
+            col = rec.col
+            feat = np.asarray(
+                src["features"][:, row : row + tile, col : col + tile],
+                dtype=np.float32,
+            )
+            canyon = np.asarray(src["canyon"][row : row + tile, col : col + tile], dtype=np.float32)
+            rappel = np.asarray(src["rappel"][row : row + tile, col : col + tile], dtype=np.float32)
+        else:
+            win = Window(rec.col, rec.row, tile, tile)
+            feat = src["features"].read(window=win).astype(np.float32)  # (C, H, W)
+            canyon = src["canyon"].read(1, window=win).astype(np.float32)  # (H, W)
+            rappel = src["rappel"].read(1, window=win).astype(np.float32)  # (H, W)
 
         feat = apply_norm(feat, self.norm_stats)
 
@@ -484,7 +622,8 @@ class TileDataset(Dataset):
     def close(self) -> None:
         for srcs in self._src_cache.values():
             for s in srcs.values():
-                s.close()
+                if hasattr(s, "close"):
+                    s.close()
         self._src_cache.clear()
 
 

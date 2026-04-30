@@ -16,8 +16,10 @@ from canyongis.ml.dataset import (
     _cache_worker_init,
     _prewarm_shared_hydrology_numba_cache,
     _resolved_cache_block_size,
+    build_tile_index,
     make_weighted_sampler,
     prepare_cache,
+    read_cache_feature_tile,
 )
 from canyongis.ml.features import feature_stack_signature
 
@@ -114,26 +116,89 @@ def test_prepare_cache_masks_labels_outside_valid_dem(tmp_path):
         MLConfig(cache_workers=1),
     )
 
-    features_path = next(cache_dir.glob("*/features.tif"))
-    canyon_path = next(cache_dir.glob("*/canyon_label.tif"))
+    zarr_path = next(cache_dir.glob("*/cache.zarr"))
     meta_path = next(cache_dir.glob("*/meta.json"))
-    with rasterio.open(features_path) as src:
-        assert src.compression is None
-        assert src.block_shapes[0] == (128, 128)
-    with rasterio.open(canyon_path) as src:
-        assert src.compression is None
-        assert src.block_shapes[0] == (128, 128)
-        canyon = src.read(1)
+    import zarr
+
+    root = zarr.open_group(zarr_path, mode="r")
+    assert root["features"].shape == (MLConfig().in_channels, h, w)
+    assert root["features"].chunks == (MLConfig().in_channels, 128, 128)
+    assert root["canyon"].chunks == (128, 128)
+    canyon = np.asarray(root["canyon"][:], dtype=np.float32)
     meta = json.loads(meta_path.read_text())
     assert meta["cache_storage"] == {
-        "format": "geotiff",
+        "format": "zarr",
         "compress": "none",
-        "block_size": 128,
+        "feature_chunks": [MLConfig().in_channels, 128, 128],
+        "label_chunks": [128, 128],
     }
 
     assert canyon[:24].max() > 0.0
     assert canyon[24:40].max() == 0.0
     assert canyon[40:].max() > 0.0
+
+    tile_cfg = MLConfig(tile_size=16, train_stride=8)
+    records = build_tile_index(cache_dir, tile_cfg)
+    assert records
+    tile = read_cache_feature_tile(cache_dir, records[0], tile_cfg)
+    assert tile.shape == (tile_cfg.in_channels, tile_cfg.tile_size, tile_cfg.tile_size)
+
+
+def test_prepare_cache_supports_geotiff_fallback(tmp_path):
+    h = w = 32
+    pixel = 1.0
+    transform = from_origin(500000.0, 4100000.0 + h * pixel, pixel, pixel)
+    crs = rasterio.crs.CRS.from_epsg(26911)
+    yy, xx = np.mgrid[:h, :w].astype(np.float32)
+    elev = (100.0 - yy - 0.1 * xx).astype(np.float32)
+
+    dem_path = tmp_path / "dem.tif"
+    with rasterio.open(
+        dem_path,
+        "w",
+        driver="GTiff",
+        height=h,
+        width=w,
+        count=1,
+        dtype="float32",
+        crs=crs,
+        transform=transform,
+        nodata=-9999.0,
+    ) as dst:
+        dst.write(elev, 1)
+
+    t = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
+    line_utm = [
+        (transform.c + 8 * pixel, transform.f - 4 * pixel),
+        (transform.c + 8 * pixel, transform.f - 24 * pixel),
+    ]
+    line_wgs = [t.transform(x, y) for x, y in line_utm]
+    coords = " ".join(f"{x},{y},0" for x, y in line_wgs)
+    kml_path = tmp_path / "trace.kml"
+    kml_path.write_text(
+        '<?xml version="1.0"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document>'
+        f"<Placemark><name>Full Descent</name><LineString><coordinates>{coords}"
+        "</coordinates></LineString></Placemark></Document></kml>"
+    )
+
+    cfg = MLConfig(cache_workers=1, tile_size=16, train_stride=16, cache_format="geotiff")
+    cache_dir = tmp_path / "cache"
+    prepare_cache([ManifestEntry(kml_path=str(kml_path), dem_path=str(dem_path))], cache_dir, cfg)
+
+    features_path = next(cache_dir.glob("*/features.tif"))
+    canyon_path = next(cache_dir.glob("*/canyon_label.tif"))
+    with rasterio.open(features_path) as src:
+        assert src.count == cfg.in_channels
+        assert src.compression is None
+        assert src.block_shapes[0] == (16, 16)
+    with rasterio.open(canyon_path) as src:
+        assert src.compression is None
+        assert src.block_shapes[0] == (16, 16)
+
+    records = build_tile_index(cache_dir, cfg)
+    assert records
+    tile = read_cache_feature_tile(cache_dir, records[0], cfg)
+    assert tile.shape == (cfg.in_channels, cfg.tile_size, cfg.tile_size)
 
 
 def test_feature_stack_signature_changes_with_geomorphon_config():
@@ -187,7 +252,7 @@ def test_prepare_cache_supports_multiple_workers(tmp_path):
     cache_dir = tmp_path / "cache"
     prepare_cache(entries, cache_dir, MLConfig(cache_workers=2, tile_size=16))
 
-    assert len(list(cache_dir.glob("*/features.tif"))) == 2
+    assert len(list(cache_dir.glob("*/cache.zarr"))) == 2
 
 
 def test_cache_worker_init_respects_existing_numba_cache_dir(monkeypatch, tmp_path):

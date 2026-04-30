@@ -20,6 +20,7 @@
   shapely,
   torch,
   tqdm,
+  zarr,
 }:
 
 buildPythonPackage {
@@ -55,6 +56,7 @@ buildPythonPackage {
     shapely
     torch
     tqdm
+    zarr
   ];
 
   makeWrapperArgs = [

@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Any
 
 import numpy as np
-import rasterio
 import torch
 from torch.utils.data import DataLoader
 
@@ -21,11 +20,11 @@ from .dataset import (
     SpatialKFoldSplitter,
     TileDataset,
     TileRecord,
-    _cache_paths,
     build_tile_index,
     load_manifest,
     make_weighted_sampler,
     prepare_cache,
+    read_cache_feature_tile,
 )
 from .device import amp_enabled, batch_size_for, describe_device, get_device, grad_scaler_enabled
 from .features import compute_norm_stats
@@ -40,18 +39,12 @@ def _sample_norm_stats(
     max_samples: int = 64,
 ) -> dict[str, list[float]]:
     """Pull up to `max_samples` tile patches and compute per-channel stats."""
-    from rasterio.windows import Window
-
     rng = np.random.default_rng(0)
     idxs = rng.choice(len(train_records), size=min(max_samples, len(train_records)), replace=False)
     stacks: list[np.ndarray] = []
     for i in idxs:
         rec = train_records[int(i)]
-        paths = _cache_paths(cache_dir, rec.dem_id)
-        win = Window(rec.col, rec.row, cfg.tile_size, cfg.tile_size)
-        with rasterio.open(paths["features"]) as src:
-            arr = src.read(window=win).astype(np.float32)
-        stacks.append(arr)
+        stacks.append(read_cache_feature_tile(cache_dir, rec, cfg))
     return compute_norm_stats(stacks)
 
 

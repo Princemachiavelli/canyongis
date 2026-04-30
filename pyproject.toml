@@ -32,6 +32,7 @@ dependencies = [
   "folium",
   "Pillow",
   "pandas",
+  "zarr",
   # pysheds is provided by the Nix environment (built from source).
   # ML stack — also provided by the Nix flake (torch with CUDA 12.x / MPS).
   "torch>=2.2",

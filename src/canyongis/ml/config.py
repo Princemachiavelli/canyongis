@@ -65,6 +65,7 @@ class MLConfig:
     weight_decay: float = 1e-4
     early_stop_patience: int = 10
     cache_workers: int = 2
+    cache_format: str = "zarr"
     cache_compress: str = "none"
     cache_block_size: int = 0
     num_workers: int = 2
