@@ -30,6 +30,7 @@ dependencies = [
   "pyproj",
   "pyogrio",
   "folium",
+  "Pillow",
   "pandas",
   # pysheds is provided by the Nix environment (built from source).
   # ML stack — also provided by the Nix flake (torch with CUDA 12.x / MPS).
@@ -52,6 +53,7 @@ canyongis-ml-export-features = "canyongis.ml.inspect:export_feature_pngs_cli"
 canyongis-ropewiki-sync = "canyongis.ingest:ingest_ropewiki_cli"
 canyongis-mosaic-manifest = "canyongis.ml.manifest_mosaic:mosaic_manifest_cli"
 canyongis-geomorphons = "canyongis.geomorphons:geomorphons_cli"
+canyongis-geomorphon-previews = "canyongis.geomorphon_preview:geomorphon_previews_cli"
 
 [tool.setuptools.packages.find]
 where = ["src"]

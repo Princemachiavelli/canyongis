@@ -117,7 +117,7 @@ def _read_geomorphon_band(path: Path, shape: tuple[int, int], transform) -> np.n
         if not np.allclose(tuple(src.transform), tuple(transform), atol=1e-6):
             raise ValueError(f"geomorphon raster transform mismatch: {path}")
         arr = src.read(1, masked=True)
-    data = np.asarray(arr.filled(np.nan), dtype=np.float32)
+    data = np.asarray(np.ma.filled(arr.astype(np.float32), np.nan), dtype=np.float32)
     data[~np.isfinite(data)] = 0.0
     return data
 

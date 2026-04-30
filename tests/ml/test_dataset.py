@@ -13,6 +13,8 @@ from canyongis.ml.dataset import (
     SpatialKFoldSplitter,
     TileRecord,
     _cache_worker_init,
+    _prewarm_shared_hydrology_numba_cache,
+    make_weighted_sampler,
     prepare_cache,
 )
 from canyongis.ml.features import feature_stack_signature
@@ -181,3 +183,37 @@ def test_cache_worker_init_respects_existing_numba_cache_dir(monkeypatch, tmp_pa
 
     assert os.environ["NUMBA_CACHE_DIR"] == str(shared_cache)
     assert shared_cache.exists()
+
+
+def test_prewarm_shared_hydrology_numba_cache_uses_configured_cache(monkeypatch, tmp_path):
+    shared_cache = tmp_path / "numba-shared"
+    monkeypatch.setenv("NUMBA_CACHE_DIR", str(shared_cache))
+
+    import canyongis.hydrology as hydrology
+
+    call: dict[str, object] = {}
+
+    def fake_compute_flow_accum(elev, transform, *, fill_depressions=True):
+        call["shape"] = elev.shape
+        call["fill_depressions"] = fill_depressions
+        return np.zeros_like(elev, dtype=np.float32)
+
+    monkeypatch.setattr(hydrology, "compute_flow_accum", fake_compute_flow_accum)
+
+    _prewarm_shared_hydrology_numba_cache(MLConfig())
+
+    assert shared_cache.exists()
+    assert call == {"shape": (64, 64), "fill_depressions": True}
+
+
+def test_make_weighted_sampler_can_limit_samples_per_epoch():
+    records = [
+        TileRecord("dem", 0, 0, "a", False),
+        TileRecord("dem", 0, 1, "a", True),
+        TileRecord("dem", 0, 2, "a", False),
+        TileRecord("dem", 0, 3, "a", True),
+    ]
+
+    sampler = make_weighted_sampler(records, [0, 1, 2, 3], MLConfig(train_samples_per_epoch=2))
+
+    assert sampler.num_samples == 2

@@ -66,8 +66,14 @@ class MLConfig:
     early_stop_patience: int = 10
     cache_workers: int = 2
     num_workers: int = 2
+    dataloader_prefetch_factor: int = 2
+    dataloader_persistent_workers: bool = True
+    train_samples_per_epoch: int = 0
+    val_samples_per_epoch: int = 0
+    train_log_interval_batches: int = 100
 
     # --- Augmentation ---
+    elastic_transform_prob: float = 0.3
     elev_noise_std_m: float = 0.3
     elev_drift_m: float = 5.0
     random_erasing_prob: float = 0.05

@@ -17,7 +17,7 @@ def build_train_transform(cfg: MLConfig) -> A.Compose:
             A.HorizontalFlip(p=0.5),
             A.VerticalFlip(p=0.5),
             A.RandomRotate90(p=0.5),
-            A.ElasticTransform(alpha=40, sigma=6, p=0.3),
+            A.ElasticTransform(alpha=40, sigma=6, p=cfg.elastic_transform_prob),
             A.GaussNoise(std_range=(cfg.elev_noise_std_m, cfg.elev_noise_std_m), p=0.3),
             # Additive "DEM drift" on channel 0 only would need a custom transform;
             # instead we rely on z-score normalization to absorb small drifts.
@@ -32,5 +32,6 @@ def build_train_transform(cfg: MLConfig) -> A.Compose:
     )
 
 
-def build_eval_transform(cfg: MLConfig) -> A.Compose:  # noqa: ARG001
+def build_eval_transform(cfg: MLConfig) -> A.Compose:
+    _ = cfg
     return A.Compose([], additional_targets={"canyon": "mask", "rappel": "mask"})

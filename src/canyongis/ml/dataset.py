@@ -159,6 +159,25 @@ def _cache_worker_init() -> None:
     import canyongis.hydrology  # noqa: F401
 
 
+def _prewarm_shared_hydrology_numba_cache(cfg: MLConfig) -> None:
+    if not cfg.flow_fill_depressions:
+        return
+    cache_dir = os.environ.get("NUMBA_CACHE_DIR")
+    if not cache_dir:
+        return
+
+    Path(cache_dir).mkdir(parents=True, exist_ok=True)
+
+    from rasterio.transform import from_origin
+
+    from ..hydrology import compute_flow_accum
+
+    yy, xx = np.mgrid[:64, :64].astype(np.float32)
+    elev = (100.0 - yy - 0.1 * xx).astype(np.float32)
+    transform = from_origin(0.0, 64.0, 1.0, 1.0)
+    compute_flow_accum(elev, transform, fill_depressions=True)
+
+
 def _prepare_cache_entry_worker(entry: ManifestEntry, cache_dir: str | Path, cfg: MLConfig) -> str:
     try:
         return _prepare_cache_entry(entry, cache_dir, cfg)
@@ -218,6 +237,7 @@ def prepare_cache(manifest: list[ManifestEntry], cache_dir: str | Path, cfg: MLC
 
     workers = min(cache_workers, len(pending))
     log(f"preparing {len(pending)} DEM caches with {workers} workers")
+    _prewarm_shared_hydrology_numba_cache(cfg)
     mp_context = mp.get_context("spawn")
     with ProcessPoolExecutor(
         max_workers=workers,
@@ -387,6 +407,10 @@ def make_weighted_sampler(
     records: list[TileRecord], indices: list[int], cfg: MLConfig
 ) -> torch.utils.data.WeightedRandomSampler:
     """positive_tile_ratio fraction of draws should come from positive tiles."""
+    num_samples = len(indices)
+    if cfg.train_samples_per_epoch > 0:
+        num_samples = min(num_samples, cfg.train_samples_per_epoch)
+
     pos_ratio = cfg.positive_tile_ratio
     weights = np.zeros(len(indices), dtype=np.float64)
     pos_count = sum(1 for i in indices if records[i].has_positive)
@@ -399,5 +423,5 @@ def make_weighted_sampler(
         for local, global_idx in enumerate(indices):
             weights[local] = pos_w if records[global_idx].has_positive else neg_w
     return torch.utils.data.WeightedRandomSampler(
-        weights=weights.tolist(), num_samples=len(indices), replacement=True
+        weights=weights.tolist(), num_samples=num_samples, replacement=True
     )

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import math
 import os
+import time
 from dataclasses import asdict
 from pathlib import Path
 from typing import Any
@@ -76,6 +77,45 @@ def _to_device(batch: dict[str, Any], device: torch.device) -> dict[str, Any]:
     return {k: v.to(device, non_blocking=True) if hasattr(v, "to") else v for k, v in batch.items()}
 
 
+def _dataloader_kwargs(cfg: MLConfig, device: torch.device) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "num_workers": cfg.num_workers,
+        "pin_memory": device.type == "cuda",
+    }
+    if cfg.num_workers > 0:
+        kwargs["prefetch_factor"] = max(1, cfg.dataloader_prefetch_factor)
+        kwargs["persistent_workers"] = cfg.dataloader_persistent_workers
+    return kwargs
+
+
+def _sample_val_indices(val_idx: list[int], cfg: MLConfig, fold_idx: int) -> list[int]:
+    if cfg.val_samples_per_epoch <= 0 or cfg.val_samples_per_epoch >= len(val_idx):
+        return val_idx
+    rng = np.random.default_rng(cfg.spatial_seed + fold_idx)
+    sampled = rng.choice(val_idx, size=cfg.val_samples_per_epoch, replace=False)
+    return [int(i) for i in sampled]
+
+
+def _log_batch_progress(
+    fold_idx: int,
+    epoch: int,
+    phase: str,
+    done: int,
+    total: int,
+    batch_size: int,
+    started_at: float,
+) -> None:
+    if done <= 0:
+        return
+    elapsed = max(time.perf_counter() - started_at, 1e-6)
+    batches_per_s = done / elapsed
+    tiles_per_s = (done * batch_size) / elapsed
+    log(
+        f"[fold {fold_idx}] ep{epoch:03d} {phase} "
+        f"{done}/{total} batches ({batches_per_s:.2f} batch/s, {tiles_per_s:.0f} tile/s)"
+    )
+
+
 def train_fold(
     fold_idx: int,
     cache_dir: Path,
@@ -107,23 +147,37 @@ def train_fold(
         indices=train_idx,
         transform=build_train_transform(cfg),
     )
+    sampled_val_idx = _sample_val_indices(val_idx, cfg, fold_idx)
     val_ds = TileDataset(
         cache_dir=cache_dir,
         records=records,
         cfg=cfg,
         norm_stats=stats,
-        indices=val_idx,
+        indices=sampled_val_idx,
         transform=build_eval_transform(cfg),
     )
 
     sampler = make_weighted_sampler(records, train_idx, cfg)
+    loader_kwargs = _dataloader_kwargs(cfg, device)
     train_loader = DataLoader(
-        train_ds, batch_size=batch_size, sampler=sampler,
-        num_workers=cfg.num_workers, pin_memory=(device.type == "cuda"),
+        train_ds,
+        batch_size=batch_size,
+        sampler=sampler,
+        **loader_kwargs,
     )
     val_loader = DataLoader(
-        val_ds, batch_size=batch_size, shuffle=False,
-        num_workers=cfg.num_workers, pin_memory=(device.type == "cuda"),
+        val_ds,
+        batch_size=batch_size,
+        shuffle=False,
+        **loader_kwargs,
+    )
+    log(
+        f"[fold {fold_idx}] train={len(train_ds)} tiles "
+        f"({len(train_loader)} batches sampled/epoch) "
+        f"val={len(val_ds)} tiles ({len(val_loader)} batches) "
+        f"workers={cfg.num_workers} prefetch={cfg.dataloader_prefetch_factor} "
+        f"persistent={cfg.dataloader_persistent_workers} "
+        f"elastic_p={cfg.elastic_transform_prob}"
     )
 
     model = build_model(cfg).to(device)
@@ -147,6 +201,7 @@ def train_fold(
         running = 0.0
         opt.zero_grad(set_to_none=True)
         accum = cfg.grad_accum_steps
+        train_started = time.perf_counter()
         for step, batch in enumerate(train_loader):
             batch = _to_device(batch, device)
             with torch.autocast(device_type=device.type, enabled=use_amp):
@@ -160,12 +215,24 @@ def train_fold(
                 opt.zero_grad(set_to_none=True)
                 sched.step()
             running += float(loss_dict["loss"].detach())
+            done = step + 1
+            if cfg.train_log_interval_batches > 0 and done % cfg.train_log_interval_batches == 0:
+                _log_batch_progress(
+                    fold_idx,
+                    epoch,
+                    "train",
+                    done,
+                    len(train_loader),
+                    batch_size,
+                    train_started,
+                )
         train_loss = running / max(len(train_loader), 1)
 
         model.eval()
         val_cldice = 0.0
         val_dice = 0.0
         n_batches = 0
+        val_started = time.perf_counter()
         with torch.no_grad():
             for batch in val_loader:
                 batch = _to_device(batch, device)
@@ -173,6 +240,19 @@ def train_fold(
                 val_cldice += float(soft_cldice_metric(out["canyon_logits"], batch["canyon"]))
                 val_dice += float(soft_dice_metric(out["canyon_logits"], batch["canyon"]))
                 n_batches += 1
+                if (
+                    cfg.train_log_interval_batches > 0
+                    and n_batches % cfg.train_log_interval_batches == 0
+                ):
+                    _log_batch_progress(
+                        fold_idx,
+                        epoch,
+                        "val",
+                        n_batches,
+                        len(val_loader),
+                        batch_size,
+                        val_started,
+                    )
         if n_batches > 0:
             val_cldice /= n_batches
             val_dice /= n_batches
@@ -181,7 +261,14 @@ def train_fold(
             f"[fold {fold_idx}] ep{epoch:03d} "
             f"train_loss={train_loss:.4f} val_cldice={val_cldice:.4f} val_dice={val_dice:.4f}"
         )
-        history.append({"epoch": epoch, "train_loss": train_loss, "val_cldice": val_cldice, "val_dice": val_dice})
+        history.append(
+            {
+                "epoch": epoch,
+                "train_loss": train_loss,
+                "val_cldice": val_cldice,
+                "val_dice": val_dice,
+            }
+        )
 
         if val_cldice > best_cldice:
             best_cldice = val_cldice

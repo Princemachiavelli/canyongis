@@ -7,6 +7,7 @@ import geopandas as gpd
 import rasterio
 from rasterio.warp import transform_bounds
 
+from .geomorphon_preview import geomorphon_previews_cli
 from .geomorphons import geomorphons_cli
 from .ingest import ingest_ropewiki_cli
 from .io import log
@@ -75,6 +76,10 @@ def cli(argv: list[str] | None = None) -> None:
         "geomorphons",
         help="Export GRASS r.geomorphon rasters for a DEM.",
     )
+    sub.add_parser(
+        "geomorphon-previews",
+        help="Render colored geomorphon forms PNG previews with corner labels.",
+    )
 
     # Default pipeline: positional DEM, checkpoint, outdir + optional --no-folium.
     parser.add_argument("dem", nargs="?", type=Path, help="Path to input DEM GeoTIFF.")
@@ -108,6 +113,9 @@ def cli(argv: list[str] | None = None) -> None:
     if args.command == "geomorphons":
         geomorphons_cli(extra)
         return
+    if args.command == "geomorphon-previews":
+        geomorphon_previews_cli(extra)
+        return
 
     if not (args.dem and args.checkpoint and args.outdir):
         parser.error(
@@ -117,7 +125,8 @@ def cli(argv: list[str] | None = None) -> None:
             "   or: canyongis export-features ...\n"
             "   or: canyongis ropewiki-sync ...\n"
             "   or: canyongis mosaic-manifest ...\n"
-            "   or: canyongis geomorphons ..."
+            "   or: canyongis geomorphons ...\n"
+            "   or: canyongis geomorphon-previews ..."
         )
 
     cfg = MLConfig(

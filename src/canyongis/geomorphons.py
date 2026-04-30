@@ -2,7 +2,9 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import subprocess
+import sys
 import tempfile
 from pathlib import Path
 
@@ -32,11 +34,12 @@ flat_deg = params["flat_deg"]
 dist_m = params["dist_m"]
 outputs = params["outputs"]
 use_extended = params["extended"]
+quiet = bool(params["quiet"])
 
 out_dir.mkdir(parents=True, exist_ok=True)
 
-gs.run_command("r.in.gdal", input=dem_path, output="dem", flags="o", overwrite=True)
-gs.run_command("g.region", raster="dem")
+gs.run_command("r.in.gdal", input=dem_path, output="dem", flags="o", overwrite=True, quiet=quiet)
+gs.run_command("g.region", raster="dem", quiet=quiet)
 
 kwargs = {
     "elevation": "dem",
@@ -51,7 +54,7 @@ for name in outputs:
 flags = "m"
 if use_extended:
     flags += "e"
-gs.run_command("r.geomorphon", flags=flags, overwrite=True, **kwargs)
+gs.run_command("r.geomorphon", flags=flags, overwrite=True, quiet=quiet, **kwargs)
 
 for name in outputs:
     tif = out_dir / f"geomorphon_{name}.tif"
@@ -63,6 +66,7 @@ for name in outputs:
         format="GTiff",
         createopt="COMPRESS=LZW",
         overwrite=True,
+        quiet=quiet,
     )
 """
 
@@ -77,6 +81,7 @@ def export_geomorphons(
     dist_m: float = 0.0,
     outputs: tuple[str, ...] = DEFAULT_OUTPUTS,
     extended: bool = True,
+    quiet: bool = True,
 ) -> dict[str, object]:
     """Run GRASS r.geomorphon against a DEM and export selected outputs as GeoTIFFs."""
     dem_path = Path(dem_path).resolve()
@@ -104,6 +109,7 @@ def export_geomorphons(
         "dist_m": dist_m,
         "outputs": list(outputs),
         "extended": extended,
+        "quiet": quiet,
     }
 
     with tempfile.TemporaryDirectory(prefix="canyongis-grass-") as tmp:
@@ -122,7 +128,29 @@ def export_geomorphons(
             str(params_path),
         ]
         log(f"running GRASS r.geomorphon (search={search_m}m, skip={skip_m}m, flat={flat_deg}deg)")
-        subprocess.run(cmd, check=True)
+        env = os.environ.copy()
+        if quiet:
+            env.setdefault("GRASS_VERBOSE", "0")
+        result = subprocess.run(
+            cmd,
+            check=False,
+            env=env,
+            stdout=subprocess.PIPE if quiet else None,
+            stderr=subprocess.PIPE if quiet else None,
+            text=True if quiet else None,
+        )
+        if result.returncode != 0:
+            if quiet:
+                if result.stdout:
+                    sys.stdout.write(result.stdout)
+                if result.stderr:
+                    sys.stderr.write(result.stderr)
+            raise subprocess.CalledProcessError(
+                result.returncode,
+                cmd,
+                output=result.stdout if quiet else None,
+                stderr=result.stderr if quiet else None,
+            )
 
     exported = [str(out_dir / f"geomorphon_{name}.tif") for name in outputs]
     summary: dict[str, object] = {
@@ -183,6 +211,11 @@ def geomorphons_cli(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Disable r.geomorphon extended form correction.",
     )
+    p.add_argument(
+        "--grass-verbose",
+        action="store_true",
+        help="Show GRASS module progress and informational messages.",
+    )
     args = p.parse_args(argv)
 
     summary = export_geomorphons(
@@ -194,5 +227,6 @@ def geomorphons_cli(argv: list[str] | None = None) -> None:
         dist_m=args.dist_m,
         outputs=tuple(args.outputs),
         extended=not args.no_extended,
+        quiet=not args.grass_verbose,
     )
     log(f"wrote {len(summary['outputs'])} geomorphon rasters to {args.outdir}")

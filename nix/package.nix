@@ -9,6 +9,7 @@
   geopandas,
   numpy,
   pandas,
+  pillow,
   pyogrio,
   pyproj,
   pysheds,
@@ -43,6 +44,7 @@ buildPythonPackage {
     geopandas
     numpy
     pandas
+    pillow
     pyogrio
     pyproj
     pysheds

@@ -96,6 +96,7 @@ def test_feature_stack_appends_precomputed_geomorphon_channels(tmp_path):
     forms[2, 2] = 5
     forms[3, 3] = 7
     forms[4, 4] = 9
+    forms[5, 5] = 255
     positive = np.ones(elev.shape, dtype=np.float32) * 2.0
     negative = np.ones(elev.shape, dtype=np.float32) * 3.0
     intensity = np.ones(elev.shape, dtype=np.float32) * -4.0
@@ -115,6 +116,7 @@ def test_feature_stack_appends_precomputed_geomorphon_channels(tmp_path):
             dtype=dtype,
             crs="EPSG:26911",
             transform=transform,
+            nodata=255 if name == "forms" else None,
         ) as dst:
             dst.write(arr, 1)
 
@@ -129,8 +131,10 @@ def test_feature_stack_appends_precomputed_geomorphon_channels(tmp_path):
     assert ridge_spur[1, 1] == 1.0
     assert ridge_spur[2, 2] == 1.0
     assert ridge_spur[3, 3] == 0.0
+    assert ridge_spur[5, 5] == 0.0
     assert hollow_valley[3, 3] == 1.0
     assert hollow_valley[4, 4] == 1.0
+    assert hollow_valley[5, 5] == 0.0
     assert np.all(pos == 2.0)
     assert np.all(neg == 3.0)
     assert np.all(inten == -4.0)
