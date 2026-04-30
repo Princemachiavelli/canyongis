@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import math
 import multiprocessing as mp
 import os
 import tempfile
@@ -17,7 +18,7 @@ import torch
 from rasterio.windows import Window
 from torch.utils.data import Dataset
 
-from ..io import log, read_dem, write_raster
+from ..io import log, read_dem
 from .config import MLConfig
 from .features import apply_norm, build_feature_stack, feature_stack_signature
 from .labels import build_labels_from_kml
@@ -81,6 +82,84 @@ def _cache_feature_signature(paths: dict[str, Path]) -> dict[str, Any] | None:
     return signature if isinstance(signature, dict) else None
 
 
+def _cache_storage_signature(cfg: MLConfig) -> dict[str, Any]:
+    return {
+        "format": "geotiff",
+        "compress": cfg.cache_compress.lower(),
+        "block_size": _resolved_cache_block_size(cfg),
+    }
+
+
+def _resolved_cache_block_size(cfg: MLConfig) -> int:
+    explicit = int(cfg.cache_block_size)
+    if explicit > 0:
+        if explicit < 16 or explicit % 16 != 0:
+            raise ValueError("cache_block_size must be 0 or a multiple of 16 >= 16")
+        return explicit
+    else:
+        block_size = math.gcd(max(1, int(cfg.tile_size)), max(1, int(cfg.train_stride)))
+
+    block_size = max(16, block_size)
+    if block_size % 16 != 0:
+        block_size = max(16, (block_size // 16) * 16)
+    return block_size
+
+
+def _cache_storage_options(cfg: MLConfig) -> dict[str, Any]:
+    block_size = _resolved_cache_block_size(cfg)
+    compress = cfg.cache_compress.strip().lower()
+    options: dict[str, Any] = {
+        "tiled": True,
+        "blockxsize": block_size,
+        "blockysize": block_size,
+    }
+    if compress in {"", "none", "no", "false"}:
+        return options
+    if compress == "deflate":
+        options.update(compress="deflate", predictor=3)
+        return options
+    if compress == "zstd":
+        options.update(compress="zstd", predictor=3, zstd_level=1)
+        return options
+    raise ValueError(
+        f"unsupported cache_compress={cfg.cache_compress!r}; use none, deflate, or zstd"
+    )
+
+
+def _cache_storage_matches(paths: dict[str, Path], cfg: MLConfig) -> bool:
+    if not paths["meta"].exists():
+        return False
+    try:
+        meta = json.loads(paths["meta"].read_text())
+    except json.JSONDecodeError:
+        return False
+    return meta.get("cache_storage") == _cache_storage_signature(cfg)
+
+
+def _write_cache_raster(
+    path: Path,
+    arr: np.ndarray,
+    transform,
+    crs,
+    cfg: MLConfig,
+    *,
+    dtype: str = "float32",
+) -> None:
+    with rasterio.open(
+        path,
+        "w",
+        driver="GTiff",
+        height=arr.shape[0],
+        width=arr.shape[1],
+        count=1,
+        dtype=dtype,
+        crs=crs,
+        transform=transform,
+        **_cache_storage_options(cfg),
+    ) as dst:
+        dst.write(arr.astype(dtype, copy=False), 1)
+
+
 def _prepare_cache_entry(entry: ManifestEntry, cache_dir: str | Path, cfg: MLConfig) -> str:
     cache_dir = Path(cache_dir)
     paths = _cache_paths(cache_dir, entry.dem_id)
@@ -116,15 +195,13 @@ def _prepare_cache_entry(entry: ManifestEntry, cache_dir: str | Path, cfg: MLCon
         dtype="float32",
         crs=crs,
         transform=transform,
-        compress="deflate",
-        predictor=2,
-        tiled=True,
+        **_cache_storage_options(cfg),
     ) as dst:
         for i in range(stack.shape[0]):
             dst.write(stack[i], i + 1)
 
-    write_raster(paths["canyon"], canyon_y, transform, crs, dtype="float32")
-    write_raster(paths["rappel"], rappel_y, transform, crs, dtype="float32")
+    _write_cache_raster(paths["canyon"], canyon_y, transform, crs, cfg, dtype="float32")
+    _write_cache_raster(paths["rappel"], rappel_y, transform, crs, cfg, dtype="float32")
 
     paths["meta"].write_text(
         json.dumps(
@@ -138,6 +215,7 @@ def _prepare_cache_entry(entry: ManifestEntry, cache_dir: str | Path, cfg: MLCon
                 "rappel_sigma_m": entry.rappel_sigma_m,
                 "precision_tier": entry.precision_tier,
                 "feature_stack": feature_stack_signature(cfg),
+                "cache_storage": _cache_storage_signature(cfg),
             },
             indent=2,
         )
@@ -213,8 +291,13 @@ def prepare_cache(manifest: list[ManifestEntry], cache_dir: str | Path, cfg: MLC
         feature_count = _cache_feature_count(paths)
         feature_signature = _cache_feature_signature(paths)
         expected_signature = feature_stack_signature(cfg)
+        storage_matches = _cache_storage_matches(paths, cfg)
         if feature_count is not None:
-            if feature_count == cfg.in_channels and feature_signature == expected_signature:
+            if (
+                feature_count == cfg.in_channels
+                and feature_signature == expected_signature
+                and storage_matches
+            ):
                 log(f"cache hit: {entry.dem_id} ({entry.dem_path})")
                 continue
             if feature_count != cfg.in_channels:
@@ -222,8 +305,10 @@ def prepare_cache(manifest: list[ManifestEntry], cache_dir: str | Path, cfg: MLC
                     f"cache stale: {entry.dem_id} has {feature_count} feature bands, "
                     f"expected {cfg.in_channels}; rebuilding"
                 )
-            else:
+            elif feature_signature != expected_signature:
                 log(f"cache stale: {entry.dem_id} feature stack settings changed; rebuilding")
+            else:
+                log(f"cache stale: {entry.dem_id} cache storage settings changed; rebuilding")
         pending.append(entry)
 
     if not pending:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 
 import numpy as np
@@ -14,6 +15,7 @@ from canyongis.ml.dataset import (
     TileRecord,
     _cache_worker_init,
     _prewarm_shared_hydrology_numba_cache,
+    _resolved_cache_block_size,
     make_weighted_sampler,
     prepare_cache,
 )
@@ -112,9 +114,22 @@ def test_prepare_cache_masks_labels_outside_valid_dem(tmp_path):
         MLConfig(cache_workers=1),
     )
 
+    features_path = next(cache_dir.glob("*/features.tif"))
     canyon_path = next(cache_dir.glob("*/canyon_label.tif"))
+    meta_path = next(cache_dir.glob("*/meta.json"))
+    with rasterio.open(features_path) as src:
+        assert src.compression is None
+        assert src.block_shapes[0] == (128, 128)
     with rasterio.open(canyon_path) as src:
+        assert src.compression is None
+        assert src.block_shapes[0] == (128, 128)
         canyon = src.read(1)
+    meta = json.loads(meta_path.read_text())
+    assert meta["cache_storage"] == {
+        "format": "geotiff",
+        "compress": "none",
+        "block_size": 128,
+    }
 
     assert canyon[:24].max() > 0.0
     assert canyon[24:40].max() == 0.0
@@ -217,3 +232,13 @@ def test_make_weighted_sampler_can_limit_samples_per_epoch():
     sampler = make_weighted_sampler(records, [0, 1, 2, 3], MLConfig(train_samples_per_epoch=2))
 
     assert sampler.num_samples == 2
+
+
+def test_cache_block_size_auto_matches_tile_grid():
+    assert _resolved_cache_block_size(MLConfig(tile_size=256, train_stride=128)) == 128
+    assert _resolved_cache_block_size(MLConfig(tile_size=256, train_stride=256)) == 256
+    assert _resolved_cache_block_size(MLConfig(tile_size=256, train_stride=64)) == 64
+    assert (
+        _resolved_cache_block_size(MLConfig(tile_size=256, train_stride=128, cache_block_size=256))
+        == 256
+    )
