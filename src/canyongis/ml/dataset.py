@@ -3,6 +3,9 @@ from __future__ import annotations
 import hashlib
 import json
 import multiprocessing as mp
+import os
+import tempfile
+import traceback
 from concurrent.futures import ProcessPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
@@ -142,6 +145,30 @@ def _prepare_cache_entry(entry: ManifestEntry, cache_dir: str | Path, cfg: MLCon
     return entry.dem_id
 
 
+def _cache_worker_init() -> None:
+    cache_root = Path(
+        os.environ.get(
+            "NUMBA_CACHE_DIR",
+            str(Path(tempfile.gettempdir()) / "canyongis-numba-cache" / f"worker-{os.getpid()}"),
+        )
+    )
+    cache_root.mkdir(parents=True, exist_ok=True)
+    os.environ["NUMBA_CACHE_DIR"] = str(cache_root)
+    # Import after NUMBA_CACHE_DIR is configured. By default each worker gets an
+    # isolated cache; callers can opt into a shared cache by setting NUMBA_CACHE_DIR.
+    import canyongis.hydrology  # noqa: F401
+
+
+def _prepare_cache_entry_worker(entry: ManifestEntry, cache_dir: str | Path, cfg: MLConfig) -> str:
+    try:
+        return _prepare_cache_entry(entry, cache_dir, cfg)
+    except Exception as exc:
+        tb = traceback.format_exc()
+        raise RuntimeError(
+            f"cache preparation failed for {entry.dem_path}: {type(exc).__name__}: {exc}\n{tb}"
+        ) from None
+
+
 def prepare_cache(manifest: list[ManifestEntry], cache_dir: str | Path, cfg: MLConfig) -> None:
     """Precompute feature stacks and label rasters for every manifest entry.
 
@@ -192,9 +219,14 @@ def prepare_cache(manifest: list[ManifestEntry], cache_dir: str | Path, cfg: MLC
     workers = min(cache_workers, len(pending))
     log(f"preparing {len(pending)} DEM caches with {workers} workers")
     mp_context = mp.get_context("spawn")
-    with ProcessPoolExecutor(max_workers=workers, mp_context=mp_context) as pool:
+    with ProcessPoolExecutor(
+        max_workers=workers,
+        mp_context=mp_context,
+        initializer=_cache_worker_init,
+    ) as pool:
         futures = {
-            pool.submit(_prepare_cache_entry, entry, cache_dir, cfg): entry for entry in pending
+            pool.submit(_prepare_cache_entry_worker, entry, cache_dir, cfg): entry
+            for entry in pending
         }
         for future in as_completed(futures):
             entry = futures[future]

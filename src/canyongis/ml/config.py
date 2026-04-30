@@ -11,6 +11,7 @@ class MLConfig:
     detrend_radius_m: float = 500.0
     hand_clip_m: float = 100.0
     flow_accum_stream_threshold: int = 200
+    flow_fill_depressions: bool = True
     use_geomorphons: bool = False
     geomorphon_search_m: tuple[float, ...] = (30.0,)
     geomorphon_skip_m: float = 0.0

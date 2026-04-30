@@ -1,12 +1,20 @@
 from __future__ import annotations
 
+import os
+
 import numpy as np
 import rasterio
 from pyproj import Transformer
 from rasterio.transform import from_origin
 
 from canyongis.ml.config import MLConfig
-from canyongis.ml.dataset import ManifestEntry, SpatialKFoldSplitter, TileRecord, prepare_cache
+from canyongis.ml.dataset import (
+    ManifestEntry,
+    SpatialKFoldSplitter,
+    TileRecord,
+    _cache_worker_init,
+    prepare_cache,
+)
 from canyongis.ml.features import feature_stack_signature
 
 
@@ -116,3 +124,60 @@ def test_feature_stack_signature_changes_with_geomorphon_config():
     geom = feature_stack_signature(MLConfig(use_geomorphons=True, geomorphon_search_m=(10.0, 30.0)))
     assert base != geom
     assert len(geom["channel_names"]) == 17
+
+
+def test_prepare_cache_supports_multiple_workers(tmp_path):
+    h = w = 32
+    pixel = 1.0
+    crs = rasterio.crs.CRS.from_epsg(26911)
+    t = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
+    entries = []
+
+    for i in range(2):
+        x0 = 500000.0 + i * 1000.0
+        transform = from_origin(x0, 4100000.0 + h * pixel, pixel, pixel)
+        yy, xx = np.mgrid[:h, :w].astype(np.float32)
+        elev = (100.0 - yy - 0.1 * xx).astype(np.float32)
+        dem_path = tmp_path / f"dem{i}.tif"
+        with rasterio.open(
+            dem_path,
+            "w",
+            driver="GTiff",
+            height=h,
+            width=w,
+            count=1,
+            dtype="float32",
+            crs=crs,
+            transform=transform,
+            nodata=-9999.0,
+        ) as dst:
+            dst.write(elev, 1)
+
+        line_utm = [
+            (transform.c + 8 * pixel, transform.f - 4 * pixel),
+            (transform.c + 8 * pixel, transform.f - 24 * pixel),
+        ]
+        line_wgs = [t.transform(x, y) for x, y in line_utm]
+        coords = " ".join(f"{x},{y},0" for x, y in line_wgs)
+        kml_path = tmp_path / f"trace{i}.kml"
+        kml_path.write_text(
+            '<?xml version="1.0"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document>'
+            f"<Placemark><name>Full Descent</name><LineString><coordinates>{coords}"
+            "</coordinates></LineString></Placemark></Document></kml>"
+        )
+        entries.append(ManifestEntry(kml_path=str(kml_path), dem_path=str(dem_path)))
+
+    cache_dir = tmp_path / "cache"
+    prepare_cache(entries, cache_dir, MLConfig(cache_workers=2, tile_size=16))
+
+    assert len(list(cache_dir.glob("*/features.tif"))) == 2
+
+
+def test_cache_worker_init_respects_existing_numba_cache_dir(monkeypatch, tmp_path):
+    shared_cache = tmp_path / "numba-shared"
+    monkeypatch.setenv("NUMBA_CACHE_DIR", str(shared_cache))
+
+    _cache_worker_init()
+
+    assert os.environ["NUMBA_CACHE_DIR"] == str(shared_cache)
+    assert shared_cache.exists()

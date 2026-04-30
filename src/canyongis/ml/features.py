@@ -7,7 +7,6 @@ import rasterio
 from scipy import ndimage as ndi
 
 from ..geomorphons import export_geomorphons
-from ..hydrology import compute_flow_accum, compute_hand
 from ..terrain import compute_local_relief, compute_slope, compute_tpi, fill_nans, meters_to_px
 from .config import MLConfig
 
@@ -46,7 +45,9 @@ def build_feature_stack(
     tpi = compute_tpi(elev, pixel_size, cfg.tpi_radius_m, filled=filled)
     local_relief = compute_local_relief(elev, pixel_size, cfg.local_relief_radius_m, filled=filled)
 
-    flow_accum = compute_flow_accum(elev, transform)
+    from ..hydrology import compute_flow_accum, compute_hand
+
+    flow_accum = compute_flow_accum(elev, transform, fill_depressions=cfg.flow_fill_depressions)
     stream_mask = flow_accum >= cfg.flow_accum_stream_threshold
     if not stream_mask.any():
         # Fallback: use top-1% cells so HAND is defined everywhere.
@@ -157,6 +158,7 @@ def _build_geomorphon_channels(
 def feature_stack_signature(cfg: MLConfig) -> dict[str, object]:
     return {
         "channel_names": cfg.channel_names(),
+        "flow_fill_depressions": cfg.flow_fill_depressions,
         "use_geomorphons": cfg.use_geomorphons,
         "geomorphon_search_m": list(cfg.geomorphon_search_m),
         "geomorphon_skip_m": cfg.geomorphon_skip_m,
