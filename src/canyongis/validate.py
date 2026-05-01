@@ -35,6 +35,9 @@ KML_NS = "{http://www.opengis.net/kml/2.2}"
 # Name substrings (case-insensitive) used to classify KML lines.
 APPROACH_TOKENS = ("approach", "shortcut", "bushwack", "bushwhack", "exit", "trail")
 DESCENT_TOKENS = ("descent", "rappel", "logjam", "canyon", "gorge", "creek")
+# Tokens that disqualify a line from being a descent or approach even if it contains
+# matching tokens (e.g. "Zion Canyon Shuttle" — the shuttle road is neither).
+NON_ROUTE_TOKENS = ("shuttle", "road", "highway", "freeway", "parkway")
 
 # Names that identify a KML Point as a ground-truth rappel location.
 RAPPEL_POINT_PATTERN = re.compile(
@@ -68,6 +71,8 @@ class KmlFeatures:
 
 def _classify(name: str) -> str:
     n = name.lower()
+    if any(tok in n for tok in NON_ROUTE_TOKENS):
+        return "unknown"
     # Approach checks first — "Canyon Drop-in" should still classify as a canyon point,
     # but "Bramble Canyon Approach" must win "approach" over "canyon".
     if any(tok in n for tok in APPROACH_TOKENS):

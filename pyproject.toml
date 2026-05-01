@@ -55,6 +55,7 @@ canyongis-ropewiki-sync = "canyongis.ingest:ingest_ropewiki_cli"
 canyongis-mosaic-manifest = "canyongis.ml.manifest_mosaic:mosaic_manifest_cli"
 canyongis-geomorphons = "canyongis.geomorphons:geomorphons_cli"
 canyongis-geomorphon-previews = "canyongis.geomorphon_preview:geomorphon_previews_cli"
+canyongis-drop-previews = "canyongis.drop_preview:drop_previews_cli"
 
 [tool.setuptools.packages.find]
 where = ["src"]

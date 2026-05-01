@@ -10,6 +10,10 @@ from .predict import run_inference
 from .train import run_training
 
 
+def _cli_defaults() -> MLConfig:
+    return MLConfig(use_geomorphons=True)
+
+
 def _add_config_flags(p: argparse.ArgumentParser, defaults: MLConfig, skip: set[str]) -> None:
     """Auto-expose every MLConfig field as --field-name (like config.Config in __main__)."""
     for f in fields(defaults):
@@ -48,11 +52,16 @@ def _add_config_flags(p: argparse.ArgumentParser, defaults: MLConfig, skip: set[
             )
 
 
-def _cfg_from_args(args: argparse.Namespace, defaults: MLConfig) -> MLConfig:
+def _cfg_from_args(
+    args: argparse.Namespace, defaults: MLConfig, explicit_overrides: set[str] | None = None
+) -> MLConfig:
     kwargs = {}
+    explicit_overrides = explicit_overrides or set()
     for f in fields(defaults):
         key = f.name
         if hasattr(args, key):
+            if key == "in_channels" and key not in explicit_overrides:
+                continue
             kwargs[key] = getattr(args, key)
     return MLConfig(**kwargs)
 
@@ -64,13 +73,16 @@ def _explicit_config_overrides(argv: list[str], skip: set[str]) -> set[str]:
         if not arg.startswith("--"):
             continue
         key = arg[2:].split("=", 1)[0].replace("-", "_")
+        if key.startswith("no_"):
+            key = key[3:]
         if key in config_keys:
             overrides.add(key)
     return overrides
 
 
 def train_cli(argv: list[str] | None = None) -> None:
-    defaults = MLConfig()
+    raw_argv = sys.argv[1:] if argv is None else argv
+    defaults = _cli_defaults()
     p = argparse.ArgumentParser(
         prog="canyongis-ml-train",
         description="Train the ML canyon/drainage detector with spatial K-fold CV.",
@@ -78,8 +90,12 @@ def train_cli(argv: list[str] | None = None) -> None:
     p.add_argument("manifest", type=Path, help="JSON manifest: list of {kml_path, dem_path, ...}")
     p.add_argument("outdir", type=Path, help="Output dir for cache, checkpoints, summary.json")
     _add_config_flags(p, defaults, skip={"manifest_path", "out_dir", "dem_path", "checkpoint_path"})
-    args = p.parse_args(argv)
-    cfg = _cfg_from_args(args, defaults)
+    args = p.parse_args(raw_argv)
+    explicit = _explicit_config_overrides(
+        raw_argv,
+        skip={"manifest_path", "out_dir", "dem_path", "checkpoint_path"},
+    )
+    cfg = _cfg_from_args(args, defaults, explicit)
     cfg.manifest_path = str(args.manifest)
     cfg.out_dir = str(args.outdir)
     run_training(cfg)
@@ -87,7 +103,7 @@ def train_cli(argv: list[str] | None = None) -> None:
 
 def predict_cli(argv: list[str] | None = None) -> None:
     raw_argv = sys.argv[1:] if argv is None else argv
-    defaults = MLConfig()
+    defaults = _cli_defaults()
     p = argparse.ArgumentParser(
         prog="canyongis-ml-predict",
         description="Run the trained ML detector on a DEM and write prob rasters + vectors.",
@@ -97,13 +113,14 @@ def predict_cli(argv: list[str] | None = None) -> None:
     p.add_argument("outdir", type=Path, help="Output directory.")
     _add_config_flags(p, defaults, skip={"manifest_path", "out_dir", "dem_path", "checkpoint_path"})
     args = p.parse_args(raw_argv)
-    cfg = _cfg_from_args(args, defaults)
-    cfg.dem_path = str(args.dem)
-    cfg.checkpoint_path = str(args.checkpoint)
-    cfg.out_dir = str(args.outdir)
-    cfg._cli_overrides = _explicit_config_overrides(  # type: ignore[attr-defined]
+    explicit = _explicit_config_overrides(
         raw_argv,
         skip={"manifest_path", "out_dir", "dem_path", "checkpoint_path"},
     )
+    cfg = _cfg_from_args(args, defaults, explicit)
+    cfg.dem_path = str(args.dem)
+    cfg.checkpoint_path = str(args.checkpoint)
+    cfg.out_dir = str(args.outdir)
+    cfg._cli_overrides = explicit  # type: ignore[attr-defined]
     cfg._use_checkpoint_defaults = True  # type: ignore[attr-defined]
     run_inference(cfg)

@@ -34,6 +34,8 @@ def test_classifier_heuristics():
     assert _classify("Express Exit") == "approach"
     assert _classify("Top of Gorge") == "descent"
     assert _classify("Random Mystery Line") == "unknown"
+    assert _classify("Zion Canyon Shuttle") == "unknown"
+    assert _classify("Highway 9 to Trailhead") == "unknown"
 
 
 def test_describe_heights_empty():

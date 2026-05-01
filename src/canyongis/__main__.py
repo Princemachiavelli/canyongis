@@ -7,6 +7,7 @@ import geopandas as gpd
 import rasterio
 from rasterio.warp import transform_bounds
 
+from .drop_preview import drop_previews_cli
 from .geomorphon_preview import geomorphon_previews_cli
 from .geomorphons import geomorphons_cli
 from .ingest import ingest_ropewiki_cli
@@ -80,6 +81,10 @@ def cli(argv: list[str] | None = None) -> None:
         "geomorphon-previews",
         help="Render colored geomorphon forms PNG previews with corner labels.",
     )
+    sub.add_parser(
+        "drop-previews",
+        help="Build drop-to-lower-ground rasters and route-overlay preview PNGs.",
+    )
 
     # Default pipeline: positional DEM, checkpoint, outdir + optional --no-folium.
     parser.add_argument("dem", nargs="?", type=Path, help="Path to input DEM GeoTIFF.")
@@ -116,6 +121,9 @@ def cli(argv: list[str] | None = None) -> None:
     if args.command == "geomorphon-previews":
         geomorphon_previews_cli(extra)
         return
+    if args.command == "drop-previews":
+        drop_previews_cli(extra)
+        return
 
     if not (args.dem and args.checkpoint and args.outdir):
         parser.error(
@@ -126,10 +134,12 @@ def cli(argv: list[str] | None = None) -> None:
             "   or: canyongis ropewiki-sync ...\n"
             "   or: canyongis mosaic-manifest ...\n"
             "   or: canyongis geomorphons ...\n"
-            "   or: canyongis geomorphon-previews ..."
+            "   or: canyongis geomorphon-previews ...\n"
+            "   or: canyongis drop-previews ..."
         )
 
     cfg = MLConfig(
+        use_geomorphons=True,
         dem_path=str(args.dem),
         checkpoint_path=str(args.checkpoint),
         out_dir=str(args.outdir),

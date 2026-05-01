@@ -11,6 +11,7 @@ import numpy as np
 import rasterio
 from rasterio.features import rasterize
 from rasterio.merge import merge
+from rasterio.warp import transform_bounds
 from shapely.geometry import LineString, MultiLineString, box
 
 from ..ingest import _download_file, _extract_bounds, _item_download_url, query_tnm_products
@@ -207,6 +208,22 @@ def _validate_descent_coverage(kml_path: str | Path, dem_path: str | Path) -> No
         )
 
 
+def _pick_mosaic_source(kml_path: str | Path, source_dems: list[Path]) -> Path:
+    """Pick a source DEM whose CRS should be used for the mosaic.
+
+    Source DEMs span multiple UTM zones (e.g. CA in zone 11, UT in zone 12). We must
+    pick a CRS belonging to a DEM that actually overlaps the KML descent — using
+    the alphabetical first source silently drops every DEM in a different zone.
+    """
+    descent_wgs = _descent_bounds_wgs84(kml_path)
+    for path in source_dems:
+        with rasterio.open(path) as src:
+            src_wgs = transform_bounds(src.crs, "EPSG:4326", *src.bounds, densify_pts=21)
+        if _bounds_intersect(src_wgs, descent_wgs):
+            return path
+    raise ValueError(f"no source DEM overlaps descent bounds for {kml_path}")
+
+
 def _write_kml_mosaic(
     kml_path: str | Path,
     source_dems: list[Path],
@@ -217,12 +234,18 @@ def _write_kml_mosaic(
     if not source_dems:
         raise ValueError("source_dems must not be empty")
 
-    with rasterio.open(source_dems[0]) as src0:
+    seed = _pick_mosaic_source(kml_path, source_dems)
+    with rasterio.open(seed) as src0:
         crs = src0.crs
         nodata = _safe_output_nodata(src0.nodata, src0.dtypes[0])
 
     bounds = _descent_bounds_in_crs(kml_path, crs, buffer_m)
-    intersecting = [p for p in source_dems if _intersects_bounds(p, bounds)]
+    same_crs = []
+    for path in source_dems:
+        with rasterio.open(path) as src:
+            if src.crs == crs:
+                same_crs.append(path)
+    intersecting = [p for p in same_crs if _intersects_bounds(p, bounds)]
     if not intersecting:
         raise ValueError(f"no source DEM intersects buffered descent bounds for {kml_path}")
 
