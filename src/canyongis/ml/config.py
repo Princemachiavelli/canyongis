@@ -74,6 +74,8 @@ class MLConfig:
     train_samples_per_epoch: int = 0
     val_samples_per_epoch: int = 0
     train_log_interval_batches: int = 100
+    train_timing_batches: int = 0
+    train_timing_warmup_batches: int = 3
 
     # --- Augmentation ---
     elastic_transform_prob: float = 0.3

@@ -109,6 +109,76 @@ def _log_batch_progress(
     )
 
 
+def _sync_for_timing(device: torch.device) -> None:
+    if device.type == "cuda":
+        torch.cuda.synchronize(device)
+    elif device.type == "mps" and hasattr(torch, "mps") and hasattr(torch.mps, "synchronize"):
+        torch.mps.synchronize()
+
+
+def _timing_enabled(cfg: MLConfig) -> bool:
+    return cfg.train_timing_batches > 0
+
+
+def _timing_collect_batch(step: int, cfg: MLConfig) -> bool:
+    if not _timing_enabled(cfg):
+        return False
+    warmup = max(0, cfg.train_timing_warmup_batches)
+    return warmup <= step < warmup + cfg.train_timing_batches
+
+
+def _timing_sync_after_batch(step: int, cfg: MLConfig) -> bool:
+    if not _timing_enabled(cfg):
+        return False
+    return step < max(0, cfg.train_timing_warmup_batches) + cfg.train_timing_batches
+
+
+def _record_timing(samples: dict[str, list[float]], key: str, value_ms: float) -> None:
+    samples.setdefault(key, []).append(value_ms)
+
+
+def _elapsed_ms(started_at: float) -> float:
+    return (time.perf_counter() - started_at) * 1000.0
+
+
+def _timed_elapsed_ms(started_at: float, device: torch.device) -> float:
+    _sync_for_timing(device)
+    return _elapsed_ms(started_at)
+
+
+def _log_timing_summary(
+    fold_idx: int,
+    epoch: int,
+    phase: str,
+    samples: dict[str, list[float]],
+    cfg: MLConfig,
+) -> None:
+    totals = samples.get("total")
+    if not totals:
+        return
+
+    labels = {
+        "data_wait": "data_wait",
+        "h2d": "h2d",
+        "forward_loss": "forward_loss",
+        "forward_metric": "forward_metric",
+        "backward": "backward",
+        "optimizer": "optimizer",
+        "accum": "accum",
+        "total": "total",
+    }
+    parts = [
+        f"{labels[key]}={float(np.mean(values)):.1f}ms"
+        for key, values in samples.items()
+        if values and key in labels
+    ]
+    log(
+        f"[fold {fold_idx}] ep{epoch:03d} {phase} timing "
+        f"{len(totals)} batches after {max(0, cfg.train_timing_warmup_batches)} warmup: "
+        + " ".join(parts)
+    )
+
+
 def train_fold(
     fold_idx: int,
     cache_dir: Path,
@@ -191,23 +261,71 @@ def train_fold(
             log(f"[fold {fold_idx}] unfroze encoder at epoch {epoch}")
 
         model.train()
-        running = 0.0
+        running_loss = torch.zeros((), device=device)
+        train_batches = 0
         opt.zero_grad(set_to_none=True)
         accum = cfg.grad_accum_steps
         train_started = time.perf_counter()
-        for step, batch in enumerate(train_loader):
+        train_timing: dict[str, list[float]] = {}
+        train_iter = iter(train_loader)
+        batch_gap_started = time.perf_counter()
+        for step in range(len(train_loader)):
+            batch_started = batch_gap_started
+            try:
+                batch = next(train_iter)
+            except StopIteration:
+                break
+            batch_arrived = time.perf_counter()
+            collect_timing = _timing_collect_batch(step, cfg)
+            if collect_timing:
+                _record_timing(train_timing, "data_wait", (batch_arrived - batch_started) * 1000.0)
+
+            if collect_timing:
+                _sync_for_timing(device)
+                segment_started = time.perf_counter()
             batch = _to_device(batch, device)
+            if collect_timing:
+                _record_timing(train_timing, "h2d", _timed_elapsed_ms(segment_started, device))
+
+            if collect_timing:
+                segment_started = time.perf_counter()
             with torch.autocast(device_type=device.type, enabled=use_amp):
                 out = model(batch["image"])
                 loss_dict = loss_fn(out, {"canyon": batch["canyon"], "rappel": batch["rappel"]})
                 loss = loss_dict["loss"] / accum
+            if collect_timing:
+                _record_timing(
+                    train_timing,
+                    "forward_loss",
+                    _timed_elapsed_ms(segment_started, device),
+                )
+
+            if collect_timing:
+                segment_started = time.perf_counter()
             scaler.scale(loss).backward()
+            if collect_timing:
+                _record_timing(train_timing, "backward", _timed_elapsed_ms(segment_started, device))
+
+            optimizer_ms = 0.0
             if (step + 1) % accum == 0:
+                if collect_timing:
+                    segment_started = time.perf_counter()
                 scaler.step(opt)
                 scaler.update()
                 opt.zero_grad(set_to_none=True)
                 sched.step()
-            running += float(loss_dict["loss"].detach())
+                if collect_timing:
+                    optimizer_ms = _timed_elapsed_ms(segment_started, device)
+            if collect_timing:
+                _record_timing(train_timing, "optimizer", optimizer_ms)
+
+            if collect_timing:
+                segment_started = time.perf_counter()
+            running_loss = running_loss + loss_dict["loss"].detach()
+            train_batches += 1
+            if collect_timing:
+                _record_timing(train_timing, "accum", _timed_elapsed_ms(segment_started, device))
+
             done = step + 1
             if cfg.train_log_interval_batches > 0 and done % cfg.train_log_interval_batches == 0:
                 _log_batch_progress(
@@ -219,19 +337,65 @@ def train_fold(
                     batch_size,
                     train_started,
                 )
-        train_loss = running / max(len(train_loader), 1)
+            if _timing_sync_after_batch(step, cfg):
+                _sync_for_timing(device)
+            batch_done = time.perf_counter()
+            if collect_timing:
+                _record_timing(train_timing, "total", (batch_done - batch_started) * 1000.0)
+            batch_gap_started = batch_done
+        train_loss = float((running_loss / max(train_batches, 1)).detach().cpu())
+        _log_timing_summary(fold_idx, epoch, "train", train_timing, cfg)
 
         model.eval()
-        val_cldice = 0.0
-        val_dice = 0.0
+        val_cldice_sum = torch.zeros((), device=device)
+        val_dice_sum = torch.zeros((), device=device)
         n_batches = 0
         val_started = time.perf_counter()
+        val_timing: dict[str, list[float]] = {}
+        val_iter = iter(val_loader)
+        batch_gap_started = time.perf_counter()
         with torch.no_grad():
-            for batch in val_loader:
+            for step in range(len(val_loader)):
+                batch_started = batch_gap_started
+                try:
+                    batch = next(val_iter)
+                except StopIteration:
+                    break
+                batch_arrived = time.perf_counter()
+                collect_timing = _timing_collect_batch(step, cfg)
+                if collect_timing:
+                    _record_timing(
+                        val_timing,
+                        "data_wait",
+                        (batch_arrived - batch_started) * 1000.0,
+                    )
+
+                if collect_timing:
+                    _sync_for_timing(device)
+                    segment_started = time.perf_counter()
                 batch = _to_device(batch, device)
+                if collect_timing:
+                    _record_timing(val_timing, "h2d", _timed_elapsed_ms(segment_started, device))
+
+                if collect_timing:
+                    segment_started = time.perf_counter()
                 out = model(batch["image"])
-                val_cldice += float(soft_cldice_metric(out["canyon_logits"], batch["canyon"]))
-                val_dice += float(soft_dice_metric(out["canyon_logits"], batch["canyon"]))
+                cldice = soft_cldice_metric(out["canyon_logits"], batch["canyon"])
+                dice = soft_dice_metric(out["canyon_logits"], batch["canyon"])
+                if collect_timing:
+                    _record_timing(
+                        val_timing,
+                        "forward_metric",
+                        _timed_elapsed_ms(segment_started, device),
+                    )
+
+                if collect_timing:
+                    segment_started = time.perf_counter()
+                val_cldice_sum = val_cldice_sum + cldice.detach()
+                val_dice_sum = val_dice_sum + dice.detach()
+                if collect_timing:
+                    _record_timing(val_timing, "accum", _timed_elapsed_ms(segment_started, device))
+
                 n_batches += 1
                 if (
                     cfg.train_log_interval_batches > 0
@@ -246,9 +410,19 @@ def train_fold(
                         batch_size,
                         val_started,
                     )
+                if _timing_sync_after_batch(step, cfg):
+                    _sync_for_timing(device)
+                batch_done = time.perf_counter()
+                if collect_timing:
+                    _record_timing(val_timing, "total", (batch_done - batch_started) * 1000.0)
+                batch_gap_started = batch_done
         if n_batches > 0:
-            val_cldice /= n_batches
-            val_dice /= n_batches
+            val_cldice = float((val_cldice_sum / n_batches).detach().cpu())
+            val_dice = float((val_dice_sum / n_batches).detach().cpu())
+        else:
+            val_cldice = 0.0
+            val_dice = 0.0
+        _log_timing_summary(fold_idx, epoch, "val", val_timing, cfg)
 
         log(
             f"[fold {fold_idx}] ep{epoch:03d} "

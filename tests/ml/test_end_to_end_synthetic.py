@@ -5,6 +5,7 @@ Does NOT assert convergence; just that every stage runs and produces outputs
 with correct shapes/types. Marked slow because it does a full forward+backward
 pass through the SMP U-Net on CPU.
 """
+
 from __future__ import annotations
 
 import json
@@ -13,6 +14,7 @@ from pathlib import Path
 import numpy as np
 import pytest
 import rasterio
+import torch
 from pyproj import Transformer
 from rasterio.transform import from_origin
 
@@ -30,14 +32,23 @@ def _make_synthetic_dem(path: Path, h: int = 128, w: int = 128, pixel: float = 1
     transform = from_origin(500000.0, 4100000.0 + h * pixel, pixel, pixel)
     crs = rasterio.crs.CRS.from_epsg(26911)
     with rasterio.open(
-        path, "w", driver="GTiff", height=h, width=w, count=1, dtype="float32",
-        crs=crs, transform=transform,
+        path,
+        "w",
+        driver="GTiff",
+        height=h,
+        width=w,
+        count=1,
+        dtype="float32",
+        crs=crs,
+        transform=transform,
     ) as dst:
         dst.write(elev, 1)
     return transform, crs
 
 
-def _make_synthetic_kml(path: Path, transform, crs, h: int = 128, w: int = 128, pixel: float = 1.0) -> None:
+def _make_synthetic_kml(
+    path: Path, transform, crs, h: int = 128, w: int = 128, pixel: float = 1.0
+) -> None:
     """Trace the synthetic valley with a polyline in WGS84 KML."""
     # Column w/2 in pixel space → UTM x = origin_x + (w/2) * pixel
     origin_x = transform.c
@@ -55,7 +66,7 @@ def _make_synthetic_kml(path: Path, transform, crs, h: int = 128, w: int = 128, 
     )
 
 
-def test_e2e_train_then_predict(tmp_path: Path):
+def test_e2e_train_then_predict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # --- setup ---
     dem_path = tmp_path / "dem.tif"
     kml_path = tmp_path / "trace.kml"
@@ -82,6 +93,8 @@ def test_e2e_train_then_predict(tmp_path: Path):
         batch_size_cpu=2,
         cache_workers=1,
         num_workers=0,
+        train_timing_batches=1,
+        train_timing_warmup_batches=0,
         encoder_name="resnet18",
         encoder_weights=None,  # skip ImageNet download
         manifest_path=str(manifest_path),
@@ -90,9 +103,10 @@ def test_e2e_train_then_predict(tmp_path: Path):
     )
 
     # --- train ---
-    from canyongis.ml.train import run_training
+    import canyongis.ml.train as train_mod
 
-    summary = run_training(cfg)
+    monkeypatch.setattr(train_mod, "get_device", lambda: torch.device("cpu"))
+    summary = train_mod.run_training(cfg)
     assert "mean_cldice" in summary
     train_cfg_path = out_dir / "training_config.json"
     assert train_cfg_path.exists(), "training config JSON not written"

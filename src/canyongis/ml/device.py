@@ -18,7 +18,11 @@ def get_device(prefer: str | None = None) -> torch.device:
     for name in order:
         if name == "cuda" and torch.cuda.is_available():
             return torch.device("cuda")
-        if name == "mps" and getattr(torch.backends, "mps", None) is not None and torch.backends.mps.is_available():
+        if (
+            name == "mps"
+            and getattr(torch.backends, "mps", None) is not None
+            and torch.backends.mps.is_available()
+        ):
             return torch.device("mps")
         if name == "cpu":
             return torch.device("cpu")
@@ -30,7 +34,7 @@ def describe_device(device: torch.device) -> str:
     if device.type == "cuda":
         idx = device.index if device.index is not None else torch.cuda.current_device()
         props = torch.cuda.get_device_properties(idx)
-        total_mem_gib = props.total_memory / (1024 ** 3)
+        total_mem_gib = props.total_memory / (1024**3)
         return (
             f"backend=CUDA device=cuda:{idx} name={props.name} "
             f"cc={props.major}.{props.minor} vram_gib={total_mem_gib:.1f}"
@@ -45,12 +49,8 @@ def describe_device(device: torch.device) -> str:
 
 
 def amp_enabled(device: torch.device) -> bool:
-    """Enable autocast on CUDA and MPS.
-
-    MPS autocast is less battle-tested than CUDA in this project, but there is
-    no current PyTorch doc stating it should be avoided outright.
-    """
-    return device.type in {"cuda", "mps"}
+    """Enable autocast on CUDA only."""
+    return device.type == "cuda"
 
 
 def grad_scaler_enabled(device: torch.device) -> bool:
