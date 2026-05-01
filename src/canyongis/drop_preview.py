@@ -26,6 +26,17 @@ class DropPreviewResult:
     route_quantiles_m: dict[str, float]
 
 
+@dataclass(frozen=True)
+class BandPassResult:
+    small_m: float
+    large_m: float
+    weight: float
+    raster_path: str
+    preview_path: str
+    quantiles_m: dict[str, float]
+    route_quantiles_m: dict[str, float]
+
+
 def _parse_distances(value: str) -> tuple[float, ...]:
     distances = tuple(float(part) for part in value.replace(" ", "").split(",") if part)
     if not distances:
@@ -119,14 +130,21 @@ def _colorize(values: np.ndarray, vmax: float) -> Image.Image:
     return Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8), mode="RGB")
 
 
-def _overlay_route(image: Image.Image, route_mask: np.ndarray) -> None:
+def _overlay_route(
+    image: Image.Image,
+    route_mask: np.ndarray,
+    *,
+    outer_radius: int = 4,
+    ring_thickness: int = 2,
+) -> None:
     rgb = np.asarray(image).copy()
     mask = route_mask.astype(bool)
-    if mask.shape == rgb.shape[:2]:
-        rgb[mask] = (0, 255, 255)
-        # Light dilation makes the line visible after downsampling.
-        thick = ndi.binary_dilation(mask, iterations=1)
-        rgb[thick & ~mask] = (0, 180, 190)
+    if mask.shape != rgb.shape[:2]:
+        return
+    outer = ndi.binary_dilation(mask, iterations=outer_radius)
+    inner = ndi.binary_dilation(mask, iterations=max(outer_radius - ring_thickness, 0))
+    ring = outer & ~inner
+    rgb[ring] = (0, 255, 255)
     image.paste(Image.fromarray(rgb, mode="RGB"))
 
 
@@ -237,6 +255,7 @@ def export_drop_previews(
     distances_m: tuple[float, ...] = (5.0, 10.0, 20.0),
     crop_buffer_m: float = 900.0,
     preview_percentile: float = 99.5,
+    bandpass_weight: float = 0.5,
 ) -> dict[str, object]:
     dem_path = Path(dem_path)
     kml_path = Path(kml_path)
@@ -245,8 +264,10 @@ def export_drop_previews(
 
     stem = _safe_stem(kml_path)
     results: list[DropPreviewResult] = []
+    bandpass_results: list[BandPassResult] = []
     comparison_panels: list[tuple[str, np.ndarray]] = []
     log_comparison_panels: list[tuple[str, np.ndarray]] = []
+    bandpass_panels: list[tuple[str, np.ndarray]] = []
 
     with rasterio.open(dem_path) as src:
         elev = src.read(1, masked=True)
@@ -257,10 +278,12 @@ def export_drop_previews(
         cs = slice(int(window.col_off), int(window.col_off + window.width))
         route_crop = route_mask[rs, cs]
 
+        drops_by_distance: dict[float, np.ndarray] = {}
         for distance_m in distances_m:
             scale = _safe_scale_label(distance_m)
             log(f"building drop preview distance={scale}")
             drop = drop_to_lower_ground(elev, pixel_size, distance_m)
+            drops_by_distance[distance_m] = drop
             raster_path = out_dir / f"{stem}_drop_to_lower_ground_{scale}.tif"
             preview_path = out_dir / f"{stem}_drop_to_lower_ground_{scale}_preview.png"
             log_preview_path = out_dir / f"{stem}_drop_to_lower_ground_{scale}_log_preview.png"
@@ -298,6 +321,44 @@ def export_drop_previews(
             comparison_panels.append((scale, crop))
             log_comparison_panels.append((f"log1p {scale}", log_crop))
 
+        sorted_distances = sorted(drops_by_distance)
+        for small_m, large_m in zip(sorted_distances, sorted_distances[1:]):
+            label = f"{_safe_scale_label(small_m)}-{_safe_scale_label(large_m)}"
+            log(f"building band-pass preview {label} (weight={bandpass_weight:g})")
+            bp = drops_by_distance[small_m] - bandpass_weight * drops_by_distance[large_m]
+            bp = np.maximum(bp, 0.0).astype(np.float32)
+            bp[~np.isfinite(drops_by_distance[small_m])] = np.nan
+
+            raster_path = out_dir / f"{stem}_drop_bandpass_{label}.tif"
+            preview_path = out_dir / f"{stem}_drop_bandpass_{label}_preview.png"
+            _write_drop_raster(raster_path, bp, profile)
+
+            crop = bp[rs, cs]
+            crop_vmax = float(np.nanpercentile(crop, preview_percentile))
+            _write_panel(
+                preview_path,
+                crop,
+                route_crop,
+                title=(
+                    f"band-pass drop {label} "
+                    f"(small − {bandpass_weight:g}·large), clipped p{preview_percentile:g}"
+                ),
+                vmax=crop_vmax,
+            )
+            quantiles, route_quantiles = _stats(bp, route_mask)
+            bandpass_results.append(
+                BandPassResult(
+                    small_m=small_m,
+                    large_m=large_m,
+                    weight=bandpass_weight,
+                    raster_path=str(raster_path),
+                    preview_path=str(preview_path),
+                    quantiles_m=quantiles,
+                    route_quantiles_m=route_quantiles,
+                )
+            )
+            bandpass_panels.append((label, crop))
+
     comparison_path = out_dir / f"{stem}_drop_to_lower_ground_comparison.png"
     log_comparison_path = out_dir / f"{stem}_drop_to_lower_ground_log_comparison.png"
     shared_vmax = max(float(np.nanpercentile(values, preview_percentile)) for _, values in comparison_panels)
@@ -319,15 +380,33 @@ def export_drop_previews(
         title=f"{stem}: log1p drop_to_lower_ground comparison",
     )
 
+    bandpass_comparison_path: str | None = None
+    if bandpass_panels:
+        path = out_dir / f"{stem}_drop_bandpass_comparison.png"
+        shared_bp_vmax = max(
+            float(np.nanpercentile(values, preview_percentile)) for _, values in bandpass_panels
+        )
+        _write_comparison(
+            path,
+            bandpass_panels,
+            route_crop,
+            vmax=shared_bp_vmax,
+            title=f"{stem}: drop band-pass comparison (weight={bandpass_weight:g})",
+        )
+        bandpass_comparison_path = str(path)
+
     summary: dict[str, object] = {
         "source_dem": str(dem_path),
         "kml_path": str(kml_path),
         "distances_m": list(distances_m),
         "crop_buffer_m": crop_buffer_m,
         "preview_percentile": preview_percentile,
+        "bandpass_weight": bandpass_weight,
         "comparison_png": str(comparison_path),
         "log_comparison_png": str(log_comparison_path),
+        "bandpass_comparison_png": bandpass_comparison_path,
         "results": [result.__dict__ for result in results],
+        "bandpass_results": [result.__dict__ for result in bandpass_results],
     }
     summary_path = out_dir / f"{stem}_drop_to_lower_ground_stats.json"
     summary["stats_json"] = str(summary_path)
@@ -361,6 +440,15 @@ def drop_previews_cli(argv: list[str] | None = None) -> None:
         default=99.5,
         help="Robust upper percentile for preview color scaling (default: 99.5).",
     )
+    parser.add_argument(
+        "--bandpass-weight",
+        type=float,
+        default=0.5,
+        help=(
+            "Weight on the larger-radius drop in the band-pass preview "
+            "(small − weight·large), clipped at 0. Default: 0.5."
+        ),
+    )
     args = parser.parse_args(argv)
     summary = export_drop_previews(
         args.dem,
@@ -369,7 +457,10 @@ def drop_previews_cli(argv: list[str] | None = None) -> None:
         distances_m=args.distances_m,
         crop_buffer_m=args.crop_buffer_m,
         preview_percentile=args.preview_percentile,
+        bandpass_weight=args.bandpass_weight,
     )
     log(f"wrote drop previews to {args.outdir}")
     log(f"comparison: {summary['comparison_png']}")
     log(f"log comparison: {summary['log_comparison_png']}")
+    if summary.get("bandpass_comparison_png"):
+        log(f"band-pass comparison: {summary['bandpass_comparison_png']}")
