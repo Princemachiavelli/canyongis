@@ -81,6 +81,15 @@ def _source_dem_paths(dem_dir: Path, output_dem_dir: Path, min_valid_fraction: f
     return paths
 
 
+def _safe_output_nodata(nodata: float | int | None, dtype: str) -> float | int:
+    kind = np.dtype(dtype).kind
+    if nodata is None:
+        return -9999.0 if kind == "f" else 0
+    if kind == "f" and (not np.isfinite(nodata) or abs(float(nodata)) > 1.0e20):
+        return -9999.0
+    return nodata
+
+
 def _descent_bounds_in_crs(kml_path: str | Path, crs, buffer_m: float) -> tuple[float, float, float, float]:
     features = parse_kml(kml_path)
     if features.descent_lines.empty:
@@ -210,7 +219,7 @@ def _write_kml_mosaic(
 
     with rasterio.open(source_dems[0]) as src0:
         crs = src0.crs
-        nodata = src0.nodata if src0.nodata is not None else -9999.0
+        nodata = _safe_output_nodata(src0.nodata, src0.dtypes[0])
 
     bounds = _descent_bounds_in_crs(kml_path, crs, buffer_m)
     intersecting = [p for p in source_dems if _intersects_bounds(p, bounds)]

@@ -9,7 +9,7 @@ import rasterio
 from affine import Affine
 from pyproj import Transformer
 
-from canyongis.ml.manifest_mosaic import build_mosaic_manifest
+from canyongis.ml.manifest_mosaic import _safe_output_nodata, build_mosaic_manifest
 
 
 def _write_dem(path: Path, x0: float, value: float, *, nodata_line: bool = False) -> None:
@@ -89,6 +89,10 @@ def test_build_mosaic_manifest_uses_multiple_dems_for_one_kml(tmp_path):
         assert 20.0 in values
         assert src.width < 128
         assert src.height < 64
+
+
+def test_safe_output_nodata_replaces_extreme_float32_sentinel():
+    assert _safe_output_nodata(-3.4028230607370965e38, "float32") == -9999.0
 
 
 def test_build_mosaic_manifest_rejects_nodata_under_descent(tmp_path):
