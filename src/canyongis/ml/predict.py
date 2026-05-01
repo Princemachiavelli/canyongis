@@ -83,17 +83,24 @@ def predict_tiled(
     window = _blend_window(tile)
 
     positions = _iter_tiles(H, W, tile, overlap)
-    for i, (r, col) in enumerate(positions):
-        patch = stack[:, r : r + tile, col : col + tile]
-        patch_n = apply_norm(patch, norm_stats)
-        x = torch.from_numpy(np.ascontiguousarray(patch_n)).unsqueeze(0).to(device)
+    batch_size = max(1, int(cfg.predict_batch_size))
+    for i in range(0, len(positions), batch_size):
+        batch_positions = positions[i : i + batch_size]
+        batch_patches = [
+            apply_norm(stack[:, r : r + tile, col : col + tile], norm_stats)
+            for r, col in batch_positions
+        ]
+        x = torch.from_numpy(np.ascontiguousarray(np.stack(batch_patches, axis=0))).to(device)
         with torch.no_grad(), torch.autocast(device_type=device.type, enabled=use_amp):
             out = model(x)
-            p_c = torch.sigmoid(out["canyon_logits"])[0, 0].float().cpu().numpy()
-            p_r = torch.sigmoid(out["rappel_logits"])[0, 0].float().cpu().numpy()
-        canyon_acc[r : r + tile, col : col + tile] += p_c * window
-        rappel_acc[r : r + tile, col : col + tile] += p_r * window
-        weight_acc[r : r + tile, col : col + tile] += window
+            probs = torch.sigmoid(torch.cat((out["canyon_logits"], out["rappel_logits"]), dim=1))
+            probs = probs.float().cpu().numpy()
+            p_c_batch = probs[:, 0]
+            p_r_batch = probs[:, 1]
+        for (r, col), p_c, p_r in zip(batch_positions, p_c_batch, p_r_batch, strict=True):
+            canyon_acc[r : r + tile, col : col + tile] += p_c * window
+            rappel_acc[r : r + tile, col : col + tile] += p_r * window
+            weight_acc[r : r + tile, col : col + tile] += window
         if i % 16 == 0:
             log(f"  tile {i + 1}/{len(positions)}")
 

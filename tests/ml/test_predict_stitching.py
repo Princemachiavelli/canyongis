@@ -1,9 +1,17 @@
 from __future__ import annotations
 
 import numpy as np
+import torch
 from affine import Affine
 
-from canyongis.ml.predict import _blend_window, _iter_tiles, _skeleton_to_paths, centerlines_to_gdf
+from canyongis.ml.config import MLConfig
+from canyongis.ml.predict import (
+    _blend_window,
+    _iter_tiles,
+    _skeleton_to_paths,
+    centerlines_to_gdf,
+    predict_tiled,
+)
 
 
 def test_blend_window_strictly_positive():
@@ -28,6 +36,42 @@ def test_iter_tiles_covers_edges():
 def test_iter_tiles_small_raster():
     positions = _iter_tiles(50, 50, tile=256, overlap=64)
     assert positions == [(0, 0)]
+
+
+def test_predict_tiled_batches_forward_calls_without_changing_output():
+    class CountingModel(torch.nn.Module):
+        def __init__(self) -> None:
+            super().__init__()
+            self.calls = 0
+            self.batch_sizes: list[int] = []
+
+        def forward(self, x: torch.Tensor) -> dict[str, torch.Tensor]:
+            self.calls += 1
+            self.batch_sizes.append(x.shape[0])
+            return {
+                "canyon_logits": x[:, :1],
+                "rappel_logits": -x[:, :1],
+            }
+
+    rng = np.random.default_rng(0)
+    stack = rng.normal(size=(1, 96, 96)).astype(np.float32)
+    norm_stats = {"mean": [0.0], "std": [1.0]}
+    device = torch.device("cpu")
+    cfg_single = MLConfig(tile_size=32, predict_overlap=16, predict_batch_size=1)
+    cfg_batched = MLConfig(tile_size=32, predict_overlap=16, predict_batch_size=5)
+
+    single_model = CountingModel()
+    single = predict_tiled(single_model, stack, cfg_single, device, norm_stats)
+
+    batched_model = CountingModel()
+    batched = predict_tiled(batched_model, stack, cfg_batched, device, norm_stats)
+
+    expected_tiles = len(_iter_tiles(96, 96, tile=32, overlap=16))
+    assert single_model.calls == expected_tiles
+    assert batched_model.calls == 5
+    assert batched_model.batch_sizes == [5, 5, 5, 5, 5]
+    assert np.allclose(batched[0], single[0])
+    assert np.allclose(batched[1], single[1])
 
 
 def test_skeleton_to_paths_horizontal_line():

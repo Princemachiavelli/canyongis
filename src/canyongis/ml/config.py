@@ -28,6 +28,7 @@ class MLConfig:
     tile_size: int = 256
     train_stride: int = 128
     predict_overlap: int = 64
+    predict_batch_size: int = 4
 
     # --- Sampling ---
     positive_tile_ratio: float = 0.8
