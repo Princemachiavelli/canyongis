@@ -8,6 +8,7 @@ _EXPORTS = {
     "ValidationReport": ("validate", "ValidationReport"),
     "build_feature_stack": ("ml.features", "build_feature_stack"),
     "build_labels_from_kml": ("ml.labels", "build_labels_from_kml"),
+    "build_labels_from_kml_paths": ("ml.labels", "build_labels_from_kml_paths"),
     "compute_flow_accum": ("hydrology", "compute_flow_accum"),
     "compute_hand": ("hydrology", "compute_hand"),
     "compute_local_relief": ("terrain", "compute_local_relief"),

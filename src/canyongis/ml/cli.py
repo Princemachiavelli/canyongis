@@ -87,7 +87,7 @@ def train_cli(argv: list[str] | None = None) -> None:
         prog="canyongis-ml-train",
         description="Train the ML canyon/drainage detector with spatial K-fold CV.",
     )
-    p.add_argument("manifest", type=Path, help="JSON manifest: list of {kml_path, dem_path, ...}")
+    p.add_argument("manifest", type=Path, help="JSON manifest: list of {kml_paths, dem_path, ...}")
     p.add_argument("outdir", type=Path, help="Output dir for cache, checkpoints, summary.json")
     _add_config_flags(p, defaults, skip={"manifest_path", "out_dir", "dem_path", "checkpoint_path"})
     args = p.parse_args(raw_argv)

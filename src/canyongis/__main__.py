@@ -71,7 +71,7 @@ def cli(argv: list[str] | None = None) -> None:
     )
     sub.add_parser(
         "mosaic-manifest",
-        help="Build one buffered DEM mosaic per KML and update a training manifest.",
+        help="Build grouped buffered DEM mosaics and update a training manifest.",
     )
     sub.add_parser(
         "geomorphons",

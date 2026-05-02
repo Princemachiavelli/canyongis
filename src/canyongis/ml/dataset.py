@@ -22,20 +22,52 @@ from torch.utils.data import Dataset
 from ..io import log, read_dem
 from .config import MLConfig
 from .features import apply_norm, build_feature_stack, feature_stack_signature
-from .labels import build_labels_from_kml
+from .labels import build_labels_from_kml_paths
 
 # -----------------------------------------------------------------------------
 # Manifest
 # -----------------------------------------------------------------------------
 
 
-@dataclass
+@dataclass(init=False)
 class ManifestEntry:
-    kml_path: str
     dem_path: str
+    kml_paths: tuple[str, ...]
     label_sigma_m: float | None = None
     rappel_sigma_m: float | None = None
     precision_tier: str | None = None  # "high" | "medium" | "low"; informational
+
+    def __init__(
+        self,
+        *,
+        dem_path: str,
+        kml_path: str | None = None,
+        kml_paths: list[str] | tuple[str, ...] | None = None,
+        label_sigma_m: float | None = None,
+        rappel_sigma_m: float | None = None,
+        precision_tier: str | None = None,
+    ) -> None:
+        if kml_paths is None:
+            if kml_path is None:
+                raise ValueError("manifest entry must include kml_path or kml_paths")
+            paths = (kml_path,)
+        else:
+            paths = tuple(str(path) for path in kml_paths)
+            if kml_path is not None:
+                paths = (kml_path, *paths)
+        paths = tuple(dict.fromkeys(paths))
+        if not paths:
+            raise ValueError("manifest entry kml_paths must not be empty")
+
+        self.dem_path = dem_path
+        self.kml_paths = paths
+        self.label_sigma_m = label_sigma_m
+        self.rappel_sigma_m = rappel_sigma_m
+        self.precision_tier = precision_tier
+
+    @property
+    def kml_path(self) -> str:
+        return self.kml_paths[0]
 
     @property
     def dem_id(self) -> str:
@@ -45,8 +77,16 @@ class ManifestEntry:
 def load_manifest(path: str | Path) -> list[ManifestEntry]:
     data = json.loads(Path(path).read_text())
     if not isinstance(data, list):
-        raise ValueError("manifest must be a JSON list of {kml_path, dem_path, ...} objects")
-    return [ManifestEntry(**entry) for entry in data]
+        raise ValueError("manifest must be a JSON list of {kml_paths, dem_path, ...} objects")
+    entries = [ManifestEntry(**entry) for entry in data]
+    by_dem: dict[str, ManifestEntry] = {}
+    for entry in entries:
+        if entry.dem_path not in by_dem:
+            by_dem[entry.dem_path] = entry
+            continue
+        existing = by_dem[entry.dem_path]
+        existing.kml_paths = tuple(dict.fromkeys((*existing.kml_paths, *entry.kml_paths)))
+    return list(by_dem.values())
 
 
 # -----------------------------------------------------------------------------
@@ -274,8 +314,8 @@ def _prepare_cache_entry(entry: ManifestEntry, cache_dir: str | Path, cfg: MLCon
     stack = build_feature_stack(
         elev, transform, pixel_size, cfg, dem_path=entry.dem_path
     )  # (C, H, W)
-    canyon_y, rappel_y = build_labels_from_kml(
-        entry.kml_path,
+    canyon_y, rappel_y = build_labels_from_kml_paths(
+        entry.kml_paths,
         transform,
         crs,
         elev.shape,
@@ -298,6 +338,7 @@ def _prepare_cache_entry(entry: ManifestEntry, cache_dir: str | Path, cfg: MLCon
             {
                 "dem_path": entry.dem_path,
                 "kml_path": entry.kml_path,
+                "kml_paths": list(entry.kml_paths),
                 "pixel_size": pixel_size,
                 "shape": list(elev.shape),
                 "crs": str(crs),

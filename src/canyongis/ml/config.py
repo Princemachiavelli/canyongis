@@ -97,7 +97,7 @@ class MLConfig:
     render_folium: bool = True
     folium_max_points: int = 500
 
-    # --- I/O: manifest of {kml_path, dem_path, label_sigma_m?, precision_tier?} ---
+    # --- I/O: manifest of {kml_paths, dem_path, label_sigma_m?, precision_tier?} ---
     manifest_path: str = ""
     out_dir: str = ""
     checkpoint_path: str = ""

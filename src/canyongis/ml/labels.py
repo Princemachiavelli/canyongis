@@ -113,3 +113,36 @@ def build_labels_from_kml(
         floor=cfg.label_floor,
     )
     return canyon_y, rappel_y
+
+
+def build_labels_from_kml_paths(
+    kml_paths: list[str | Path] | tuple[str | Path, ...],
+    dem_transform,
+    dem_crs,
+    dem_shape: tuple[int, int],
+    pixel_size: float,
+    cfg: MLConfig,
+    *,
+    label_sigma_m: float | None = None,
+    rappel_sigma_m: float | None = None,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Produce union labels from one or more KMLs aligned to the same DEM."""
+    if not kml_paths:
+        raise ValueError("kml_paths must contain at least one path")
+
+    canyon = np.zeros(dem_shape, dtype=np.float32)
+    rappel = np.zeros(dem_shape, dtype=np.float32)
+    for kml_path in kml_paths:
+        canyon_i, rappel_i = build_labels_from_kml(
+            kml_path,
+            dem_transform,
+            dem_crs,
+            dem_shape,
+            pixel_size,
+            cfg,
+            label_sigma_m=label_sigma_m,
+            rappel_sigma_m=rappel_sigma_m,
+        )
+        canyon = np.maximum(canyon, canyon_i)
+        rappel = np.maximum(rappel, rappel_i)
+    return canyon, rappel

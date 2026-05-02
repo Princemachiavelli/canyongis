@@ -32,11 +32,10 @@ def _write_dem(path: Path, x0: float, value: float, *, nodata_line: bool = False
         dst.write(arr, 1)
 
 
-def _write_kml(path: Path) -> None:
-    # This line crosses the boundary between the two synthetic DEMs.
+def _write_kml(path: Path, x0: float = 500040.0, x1: float = 500088.0, y: float = 32.0) -> None:
     transformer = Transformer.from_crs("EPSG:32611", "EPSG:4326", always_xy=True)
-    p0 = transformer.transform(500040.0, 32.0)
-    p1 = transformer.transform(500088.0, 32.0)
+    p0 = transformer.transform(x0, y)
+    p1 = transformer.transform(x1, y)
     path.write_text(
         '<?xml version="1.0"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document>'
         "<Placemark><name>Descent</name><LineString><coordinates>"
@@ -79,6 +78,7 @@ def test_build_mosaic_manifest_uses_multiple_dems_for_one_kml(tmp_path):
 
     assert len(rows) == 1
     out_dem = Path(rows[0]["dem_path"])
+    assert rows[0]["kml_paths"] == [str(kml_path)]
     assert out_dem.exists()
     assert json.loads(out_manifest.read_text()) == rows
 
@@ -89,6 +89,56 @@ def test_build_mosaic_manifest_uses_multiple_dems_for_one_kml(tmp_path):
         assert 20.0 in values
         assert src.width < 128
         assert src.height < 64
+
+
+def test_build_mosaic_manifest_groups_nearby_kmls_into_non_overlapping_mosaics(tmp_path):
+    dem_dir = tmp_path / "dem"
+    kml_dir = tmp_path / "kml"
+    out_dem_dir = dem_dir / "mosaic"
+    dem_dir.mkdir()
+    kml_dir.mkdir()
+
+    _write_dem(dem_dir / "near_left.tif", 500000.0, 10.0)
+    _write_dem(dem_dir / "near_right.tif", 500064.0, 20.0)
+    _write_dem(dem_dir / "far.tif", 500300.0, 30.0)
+    near_a = kml_dir / "Near_A.kml"
+    near_b = kml_dir / "Near_B.kml"
+    far = kml_dir / "Far.kml"
+    _write_kml(near_a, 500020.0, 500035.0)
+    _write_kml(near_b, 500060.0, 500075.0)
+    _write_kml(far, 500320.0, 500335.0)
+
+    manifest_path = tmp_path / "manifest.json"
+    manifest_path.write_text(
+        json.dumps(
+            [
+                {"kml_path": str(near_a), "dem_path": "ignored-a.tif"},
+                {"kml_path": str(near_b), "dem_path": "ignored-b.tif"},
+                {"kml_path": str(far), "dem_path": "ignored-c.tif"},
+            ]
+        )
+    )
+
+    rows = build_mosaic_manifest(
+        manifest_path,
+        tmp_path / "out.json",
+        dem_dir=dem_dir,
+        kml_dir=kml_dir,
+        output_dem_dir=out_dem_dir,
+        buffer_m=30.0,
+    )
+
+    grouped_paths = [set(row["kml_paths"]) for row in rows]
+    assert {str(near_a), str(near_b)} in grouped_paths
+    assert {str(far)} in grouped_paths
+
+    with rasterio.open(rows[0]["dem_path"]) as a, rasterio.open(rows[1]["dem_path"]) as b:
+        assert (
+            a.bounds.right <= b.bounds.left
+            or b.bounds.right <= a.bounds.left
+            or a.bounds.top <= b.bounds.bottom
+            or b.bounds.top <= a.bounds.bottom
+        )
 
 
 def test_safe_output_nodata_replaces_extreme_float32_sentinel():

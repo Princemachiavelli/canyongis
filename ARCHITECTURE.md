@@ -67,7 +67,7 @@ src/canyongis/
     config.py          # MLConfig dataclass — all ML tunables, auto-exposed via argparse
     device.py          # get_device() → cuda > mps > cpu; amp_enabled()
     features.py        # build_feature_stack; compute_norm_stats; apply_norm
-    labels.py          # build_labels_from_kml (polylines → soft label + rappel heatmap)
+    labels.py          # build_labels_from_kml_paths (polylines → soft label + rappel heatmap)
     dataset.py         # ManifestEntry, prepare_cache, build_tile_index,
                        # SpatialKFoldSplitter, TileDataset, make_weighted_sampler
     augment.py         # albumentations pipeline tuned for DEM channels
@@ -80,12 +80,12 @@ src/canyongis/
 
 ## Manifest Format
 
-Training consumes a JSON manifest of `{kml_path, dem_path, label_sigma_m?, rappel_sigma_m?, precision_tier?}` entries:
+Training consumes a JSON manifest of `{kml_paths, dem_path, label_sigma_m?, rappel_sigma_m?, precision_tier?}` entries. Older single-track `{kml_path, dem_path}` rows are still accepted:
 
 ```json
 [
-  {"kml_path": "/data/kml/foo.kml", "dem_path": "/data/dem/foo.tif", "label_sigma_m": 5.0, "precision_tier": "high"},
-  {"kml_path": "/data/kml/bar.kml", "dem_path": "/data/dem/bar.tif", "label_sigma_m": 15.0, "precision_tier": "low"}
+  {"kml_paths": ["/data/kml/foo.kml", "/data/kml/bar.kml"], "dem_path": "/data/dem/foo-bar.tif", "label_sigma_m": 5.0, "precision_tier": "high"},
+  {"kml_paths": ["/data/kml/baz.kml"], "dem_path": "/data/dem/baz.tif", "label_sigma_m": 15.0, "precision_tier": "low"}
 ]
 ```
 

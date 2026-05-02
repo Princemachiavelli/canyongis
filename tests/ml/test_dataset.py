@@ -153,6 +153,60 @@ def test_prepare_cache_masks_labels_outside_valid_dem(tmp_path):
     assert tile.shape == (tile_cfg.in_channels, tile_cfg.tile_size, tile_cfg.tile_size)
 
 
+def test_prepare_cache_unions_multiple_kml_paths(tmp_path):
+    h = w = 64
+    pixel = 1.0
+    transform = from_origin(500000.0, 4100000.0 + h * pixel, pixel, pixel)
+    crs = rasterio.crs.CRS.from_epsg(26911)
+    elev = np.ones((h, w), dtype=np.float32) * 100.0
+
+    dem_path = tmp_path / "dem.tif"
+    with rasterio.open(
+        dem_path,
+        "w",
+        driver="GTiff",
+        height=h,
+        width=w,
+        count=1,
+        dtype="float32",
+        crs=crs,
+        transform=transform,
+        nodata=-9999.0,
+    ) as dst:
+        dst.write(elev, 1)
+
+    t = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
+    kml_paths = []
+    for col in (16, 48):
+        line_utm = [(transform.c + col * pixel, transform.f - r * pixel) for r in range(8, 56)]
+        line_wgs = [t.transform(x, y) for x, y in line_utm]
+        coords = " ".join(f"{x},{y},0" for x, y in line_wgs)
+        kml_path = tmp_path / f"trace_{col}.kml"
+        kml_path.write_text(
+            '<?xml version="1.0"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document>'
+            f"<Placemark><name>Full Descent</name><LineString><coordinates>{coords}"
+            "</coordinates></LineString></Placemark></Document></kml>"
+        )
+        kml_paths.append(str(kml_path))
+
+    cache_dir = tmp_path / "cache"
+    prepare_cache(
+        [ManifestEntry(kml_paths=kml_paths, dem_path=str(dem_path))],
+        cache_dir,
+        MLConfig(cache_workers=1),
+    )
+
+    import zarr
+
+    root = zarr.open_group(next(cache_dir.glob("*/cache.zarr")), mode="r")
+    canyon = np.asarray(root["canyon"][:], dtype=np.float32)
+    assert canyon[:, 16].max() > 0.0
+    assert canyon[:, 48].max() > 0.0
+
+    meta = json.loads(next(cache_dir.glob("*/meta.json")).read_text())
+    assert meta["kml_paths"] == kml_paths
+
+
 def test_prepare_cache_supports_geotiff_fallback(tmp_path):
     h = w = 32
     pixel = 1.0
