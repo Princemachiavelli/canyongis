@@ -126,8 +126,26 @@ def _download_name(url: str, fallback: str) -> str:
     return name or fallback
 
 
-def _download_tnm_dems_for_kml(kml_path: str | Path, dem_dir: Path) -> list[Path]:
-    target_bounds = _descent_bounds_wgs84(kml_path)
+def _inflate_wgs84_bounds(
+    bounds: tuple[float, float, float, float], buffer_m: float
+) -> tuple[float, float, float, float]:
+    if buffer_m <= 0:
+        return bounds
+    minx, miny, maxx, maxy = bounds
+    mean_lat_rad = math.radians(0.5 * (miny + maxy))
+    dlat = buffer_m / 111_000.0
+    dlon = buffer_m / (111_000.0 * max(math.cos(mean_lat_rad), 1e-6))
+    return (minx - dlon, miny - dlat, maxx + dlon, maxy + dlat)
+
+
+def _download_tnm_dems_for_kml(
+    kml_path: str | Path, dem_dir: Path, *, buffer_m: float = 0.0
+) -> list[Path]:
+    descent_bounds = _descent_bounds_wgs84(kml_path)
+    # Compact descents (e.g. <200 m wide) can return zero TNM matches when
+    # queried with the raw bounds. Inflating by the mosaic buffer ensures
+    # tiles that cover the surrounding AOI are returned.
+    target_bounds = _inflate_wgs84_bounds(descent_bounds, buffer_m)
     items = query_tnm_products(target_bounds)
     candidates: list[dict[str, object]] = []
     for item in items:
@@ -350,7 +368,7 @@ def build_mosaic_manifest(
 
             log(f"mosaic invalid, attempting DEM download repair: {exc}")
             try:
-                _download_tnm_dems_for_kml(kml_path, dem_dir)
+                _download_tnm_dems_for_kml(kml_path, dem_dir, buffer_m=buffer_m)
                 source_dems = _source_dem_paths(dem_dir, output_dem_dir, min_valid_fraction)
                 source_count, shape = _write_kml_mosaic(
                     kml_path, source_dems, out_dem, buffer_m, max_pixels
