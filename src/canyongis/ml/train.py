@@ -109,6 +109,35 @@ def _log_batch_progress(
     )
 
 
+_LOSS_COMPONENT_KEYS: tuple[str, ...] = (
+    "loss",
+    "loss_canyon",
+    "loss_rappel",
+    "loss_bce",
+    "loss_cldice",
+)
+
+
+def _log_loss_components(
+    fold_idx: int,
+    epoch: int,
+    phase: str,
+    sums: dict[str, torch.Tensor],
+    n: int,
+) -> None:
+    if n <= 0:
+        return
+    means = {k: float((v / n).detach().cpu()) for k, v in sums.items()}
+    log(
+        f"[fold {fold_idx}] ep{epoch:03d} {phase} losses "
+        f"total={means['loss']:.4f} "
+        f"canyon={means['loss_canyon']:.4f} "
+        f"rappel={means['loss_rappel']:.4f} "
+        f"bce={means['loss_bce']:.4f} "
+        f"cldice={means['loss_cldice']:.4f}"
+    )
+
+
 def _sync_for_timing(device: torch.device) -> None:
     if device.type == "cuda":
         torch.cuda.synchronize(device)
@@ -261,7 +290,9 @@ def train_fold(
             log(f"[fold {fold_idx}] unfroze encoder at epoch {epoch}")
 
         model.train()
-        running_loss = torch.zeros((), device=device)
+        running_losses: dict[str, torch.Tensor] = {
+            k: torch.zeros((), device=device) for k in _LOSS_COMPONENT_KEYS
+        }
         train_batches = 0
         opt.zero_grad(set_to_none=True)
         accum = cfg.grad_accum_steps
@@ -321,7 +352,8 @@ def train_fold(
 
             if collect_timing:
                 segment_started = time.perf_counter()
-            running_loss = running_loss + loss_dict["loss"].detach()
+            for loss_key in _LOSS_COMPONENT_KEYS:
+                running_losses[loss_key] = running_losses[loss_key] + loss_dict[loss_key].detach()
             train_batches += 1
             if collect_timing:
                 _record_timing(train_timing, "accum", _timed_elapsed_ms(segment_started, device))
@@ -337,13 +369,21 @@ def train_fold(
                     batch_size,
                     train_started,
                 )
+                _log_loss_components(
+                    fold_idx, epoch, "train", running_losses, train_batches
+                )
             if _timing_sync_after_batch(step, cfg):
                 _sync_for_timing(device)
             batch_done = time.perf_counter()
             if collect_timing:
                 _record_timing(train_timing, "total", (batch_done - batch_started) * 1000.0)
             batch_gap_started = batch_done
-        train_loss = float((running_loss / max(train_batches, 1)).detach().cpu())
+        train_components = {
+            k: float((v / max(train_batches, 1)).detach().cpu())
+            for k, v in running_losses.items()
+        }
+        train_loss = train_components["loss"]
+        _log_loss_components(fold_idx, epoch, "train", running_losses, train_batches)
         _log_timing_summary(fold_idx, epoch, "train", train_timing, cfg)
 
         model.eval()
@@ -432,6 +472,10 @@ def train_fold(
             {
                 "epoch": epoch,
                 "train_loss": train_loss,
+                "train_loss_canyon": train_components["loss_canyon"],
+                "train_loss_rappel": train_components["loss_rappel"],
+                "train_loss_bce": train_components["loss_bce"],
+                "train_loss_cldice": train_components["loss_cldice"],
                 "val_cldice": val_cldice,
                 "val_dice": val_dice,
             }

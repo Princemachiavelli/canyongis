@@ -9,14 +9,26 @@ import rasterio
 from affine import Affine
 from pyproj import Transformer
 
-from canyongis.ml.manifest_mosaic import _safe_output_nodata, build_mosaic_manifest
+from canyongis.ml.manifest_mosaic import (
+    _cluster_kml_paths,
+    _merge_groups_by_planned_footprint,
+    _safe_output_nodata,
+    build_mosaic_manifest,
+)
 
 
-def _write_dem(path: Path, x0: float, value: float, *, nodata_line: bool = False) -> None:
+def _write_dem(
+    path: Path,
+    x0: float,
+    value: float,
+    *,
+    nodata_line: bool = False,
+    pixel: float = 1.0,
+) -> None:
     arr = np.full((64, 64), value, dtype=np.float32)
     if nodata_line:
         arr[30:35, 30:50] = -9999.0
-    transform = Affine.translation(x0, 64.0) * Affine.scale(1.0, -1.0)
+    transform = Affine.translation(x0, 64.0 * pixel) * Affine.scale(pixel, -pixel)
     with rasterio.open(
         path,
         "w",
@@ -32,10 +44,16 @@ def _write_dem(path: Path, x0: float, value: float, *, nodata_line: bool = False
         dst.write(arr, 1)
 
 
-def _write_kml(path: Path, x0: float = 500040.0, x1: float = 500088.0, y: float = 32.0) -> None:
+def _write_kml(
+    path: Path,
+    x0: float = 500040.0,
+    x1: float = 500088.0,
+    y: float = 32.0,
+    y1: float | None = None,
+) -> None:
     transformer = Transformer.from_crs("EPSG:32611", "EPSG:4326", always_xy=True)
     p0 = transformer.transform(x0, y)
-    p1 = transformer.transform(x1, y)
+    p1 = transformer.transform(x1, y if y1 is None else y1)
     path.write_text(
         '<?xml version="1.0"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document>'
         "<Placemark><name>Descent</name><LineString><coordinates>"
@@ -139,6 +157,28 @@ def test_build_mosaic_manifest_groups_nearby_kmls_into_non_overlapping_mosaics(t
             or a.bounds.top <= b.bounds.bottom
             or b.bounds.top <= a.bounds.bottom
         )
+
+
+def test_build_mosaic_manifest_merges_pixel_snapped_overlaps(tmp_path):
+    dem_dir = tmp_path / "dem"
+    kml_dir = tmp_path / "kml"
+    out_dem_dir = dem_dir / "mosaic"
+    dem_dir.mkdir()
+    kml_dir.mkdir()
+
+    _write_dem(dem_dir / "source.tif", 500000.0, 10.0, pixel=10.0)
+    first = kml_dir / "First.kml"
+    second = kml_dir / "Second.kml"
+    _write_kml(first, 500111.0, 500112.0, y=320.0, y1=330.0)
+    _write_kml(second, 500115.0, 500116.0, y=320.0, y1=330.0)
+
+    groups = _cluster_kml_paths([str(first), str(second)], buffer_m=1.0)
+    assert len(groups) == 2
+
+    merged = _merge_groups_by_planned_footprint(groups, [dem_dir / "source.tif"], buffer_m=1.0)
+
+    assert len(merged) == 1
+    assert set(merged[0]) == {str(first), str(second)}
 
 
 def test_safe_output_nodata_replaces_extreme_float32_sentinel():

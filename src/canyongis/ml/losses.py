@@ -76,14 +76,30 @@ def soft_cldice(
     return 1.0 - cl.mean()
 
 
-def focal_loss(
-    logits: torch.Tensor, target: torch.Tensor, gamma: float, alpha: float = 0.25
+def gaussian_focal_loss(
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    alpha: float = 2.0,
+    beta: float = 4.0,
 ) -> torch.Tensor:
+    """Focal loss for soft Gaussian heatmap targets (Law & Deng 2018; Zhou et al. 2019).
+
+    Standard focal loss assumes hard binary targets — its `p_t = p·y + (1-p)·(1-y)`
+    collapses to 0.5 wherever `y ≈ 0.5`, so the `(1-p_t)^γ` modulator becomes a
+    constant on Gaussian-smoothed labels and stops down-weighting easy examples.
+
+    The CornerNet/CenterNet variant separates the focal modulator (`p^α` on the
+    negative term, `(1-p)^α` on the positive term) from a heatmap-aware spatial
+    down-weighting `(1-y)^β` on the negative term, so pixels near the true peak —
+    which are partially-positive Gaussian context, not true negatives — are
+    penalized less.
+    """
     p = torch.sigmoid(logits)
-    ce = F.binary_cross_entropy_with_logits(logits, target, reduction="none")
-    p_t = p * target + (1 - p) * (1 - target)
-    alpha_t = alpha * target + (1 - alpha) * (1 - target)
-    return (alpha_t * (1 - p_t) ** gamma * ce).mean()
+    log_p = F.logsigmoid(logits)
+    log_1mp = F.logsigmoid(-logits)
+    pos = -target * (1.0 - p).pow(alpha) * log_p
+    neg = -(1.0 - target).pow(beta) * p.pow(alpha) * log_1mp
+    return (pos + neg).mean()
 
 
 class MultiTaskLoss(nn.Module):
@@ -108,7 +124,9 @@ class MultiTaskLoss(nn.Module):
         canyon = (
             self.cfg.bce_cldice_ratio * bce + (1.0 - self.cfg.bce_cldice_ratio) * cld
         )
-        rappel = focal_loss(r_logits, r_target, gamma=self.cfg.focal_gamma)
+        rappel = gaussian_focal_loss(
+            r_logits, r_target, alpha=self.cfg.focal_gamma, beta=self.cfg.focal_beta
+        )
 
         total = self.cfg.canyon_loss_weight * canyon + self.cfg.rappel_loss_weight * rappel
         return {

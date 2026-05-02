@@ -35,7 +35,7 @@ The earlier rule-based detector (`masks.py`, hand-tuned thresholds on slope, TPI
 
 5. **Loss & Training** (`ml/losses.py`, `ml/train.py`)
    - **Canyon loss** = `0.5 · soft-BCE-PU + 0.5 · soft-clDice`. Soft-BCE-PU down-weights the negative term by `(1 − π)` so unlabeled pixels aren't treated as strong negatives (positive-unlabeled learning framing). Soft-clDice (Shit et al. 2021) preserves thin-curvilinear topology.
-   - **Rappel loss** = focal loss (γ=2) on the keypoint heatmap.
+   - **Rappel loss** = Gaussian focal loss (CornerNet/CenterNet variant; α=2, β=4) on the keypoint heatmap. Standard focal loss assumes hard binary targets and its modulator collapses on Gaussian-soft labels; the CornerNet form separates the focal exponent on the prediction from a `(1−y)^β` heatmap-aware down-weighting on the negative term.
    - AdamW, cosine LR schedule with warmup, AMP on CUDA only (MPS autocast is unreliable as of torch 2.2).
    - **Spatial K-fold cross-validation** (default K=5). Whole DEMs/canyons are assigned to seeded, balanced folds so no tile from a held-out DEM appears in training.
    - Positive-biased tile sampling via `WeightedRandomSampler` (80% of draws come from tiles with label mass).
@@ -72,7 +72,7 @@ src/canyongis/
                        # SpatialKFoldSplitter, TileDataset, make_weighted_sampler
     augment.py         # albumentations pipeline tuned for DEM channels
     model.py           # CanyonUNet (SMP U-Net + two heads)
-    losses.py          # soft_bce_pu, soft_dice, soft_cldice, focal_loss, MultiTaskLoss
+    losses.py          # soft_bce_pu, soft_dice, soft_cldice, gaussian_focal_loss, MultiTaskLoss
     train.py           # run_training, train_fold — K-fold driver
     predict.py         # run_inference, tiled sliding-window, skeleton → polylines
     cli.py             # canyongis-ml-train, canyongis-ml-predict entry points

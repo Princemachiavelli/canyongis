@@ -168,6 +168,73 @@ def _cluster_kml_paths(kml_paths: list[str], buffer_m: float) -> list[list[str]]
     return groups
 
 
+def _planned_mosaic_bounds_wgs84(
+    kml_paths: list[str | Path],
+    source_dems: list[Path],
+    buffer_m: float,
+) -> tuple[float, float, float, float]:
+    seed = _pick_mosaic_source(kml_paths, source_dems)
+    with rasterio.open(seed) as src0:
+        crs = src0.crs
+
+    bounds = _bounds_union(
+        [_descent_bounds_in_crs(kml_path, crs, buffer_m) for kml_path in kml_paths]
+    )
+    intersecting = []
+    for path in source_dems:
+        with rasterio.open(path) as src:
+            if src.crs == crs and _intersects_bounds(path, bounds):
+                intersecting.append(path)
+    if not intersecting:
+        raise ValueError(
+            "no source DEM intersects buffered descent bounds for "
+            f"{', '.join(map(str, kml_paths))}"
+        )
+
+    with rasterio.open(intersecting[0]) as src:
+        res_x = abs(src.transform.a)
+        res_y = abs(src.transform.e)
+
+    width = math.ceil((bounds[2] - bounds[0]) / res_x)
+    height = math.ceil((bounds[3] - bounds[1]) / res_y)
+    snapped_bounds = (
+        bounds[0],
+        bounds[3] - height * res_y,
+        bounds[0] + width * res_x,
+        bounds[3],
+    )
+    return transform_bounds(crs, "EPSG:4326", *snapped_bounds, densify_pts=21)
+
+
+def _merge_groups_by_planned_footprint(
+    groups: list[list[str]],
+    source_dems: list[Path],
+    buffer_m: float,
+) -> list[list[str]]:
+    """Merge groups whose final pixel-snapped mosaic footprints would overlap."""
+    groups = [sorted(group) for group in groups]
+    while True:
+        footprints = [
+            box(*_planned_mosaic_bounds_wgs84(group, source_dems, buffer_m)) for group in groups
+        ]
+        merge_pair: tuple[int, int] | None = None
+        for i, footprint_a in enumerate(footprints):
+            for j in range(i + 1, len(footprints)):
+                overlap = footprint_a.intersection(footprints[j])
+                if not overlap.is_empty and overlap.area > 0:
+                    merge_pair = (i, j)
+                    break
+            if merge_pair is not None:
+                break
+        if merge_pair is None:
+            return groups
+
+        i, j = merge_pair
+        merged = sorted(set(groups[i]) | set(groups[j]))
+        groups = [group for n, group in enumerate(groups) if n not in {i, j}]
+        groups.append(merged)
+
+
 def _download_name(url: str, fallback: str) -> str:
     name = Path(urlparse(url).path).name
     return name or fallback
@@ -425,7 +492,12 @@ def build_mosaic_manifest(
 
     kml_paths = _dedupe_manifest_kml_paths(rows, kml_dir)
     groups = _cluster_kml_paths(kml_paths, buffer_m)
-    log(f"grouped {len(kml_paths)} KMLs into {len(groups)} non-overlapping mosaic footprint(s)")
+    initial_group_count = len(groups)
+    groups = _merge_groups_by_planned_footprint(groups, source_dems, buffer_m)
+    log(
+        f"grouped {len(kml_paths)} KMLs into {len(groups)} non-overlapping mosaic footprint(s) "
+        f"(initial KML-bound groups={initial_group_count})"
+    )
 
     new_rows: list[dict[str, object]] = []
     coverage_errors: list[str] = []

@@ -80,7 +80,7 @@ Flags worth knowing:
 - `--device {auto,cuda,mps,cpu}` — `auto` picks via `ml/device.py:get_device()`
 - `--encoder-name` — any SMP encoder; default `resnet18` (fits 8 GB VRAM)
 - `--folds N`, `--fold-only K` — run a single fold
-- `--canyon-loss-weight`, `--rappel-loss-weight`, `--cldice-iter`, `--focal-gamma` — loss tuning
+- `--canyon-loss-weight`, `--rappel-loss-weight`, `--cldice-iter`, `--focal-gamma`, `--focal-beta` — loss tuning
 - Feature radii: `--tpi-radius-m 200`, `--local-relief-radius-m 20`, `--use-geomorphons`
 
 The dataset is Zarr-backed (`ml/dataset.py`); features are computed once per route and reused across folds/epochs.

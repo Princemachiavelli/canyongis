@@ -50,6 +50,7 @@ class MLConfig:
     bce_cldice_ratio: float = 0.5
     pu_prior: float = 0.01
     focal_gamma: float = 2.0
+    focal_beta: float = 4.0
     cldice_iter: int = 3
     cldice_smooth: float = 1.0
 
