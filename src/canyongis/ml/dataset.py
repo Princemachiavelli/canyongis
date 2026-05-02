@@ -439,7 +439,6 @@ class TileRecord:
     dem_id: str
     row: int
     col: int
-    super_tile_id: str
     has_positive: bool
 
 
@@ -456,7 +455,6 @@ def build_tile_index(cache_dir: str | Path, cfg: MLConfig) -> list[TileRecord]:
     records: list[TileRecord] = []
     tile = cfg.tile_size
     stride = cfg.train_stride
-    super_px = cfg.super_tile_size
 
     for dem_id in _list_cached_dem_ids(cache_dir):
         paths = _cache_paths(cache_dir, dem_id)
@@ -479,9 +477,8 @@ def build_tile_index(cache_dir: str | Path, cfg: MLConfig) -> list[TileRecord]:
             for c in range(0, w - tile + 1, stride):
                 patch = canyon_full[r : r + tile, c : c + tile]
                 has_pos = bool(patch.max() > cfg.positive_threshold)
-                sid = f"{dem_id}:{r // super_px}:{c // super_px}"
                 records.append(
-                    TileRecord(dem_id=dem_id, row=r, col=c, super_tile_id=sid, has_positive=has_pos)
+                    TileRecord(dem_id=dem_id, row=r, col=c, has_positive=has_pos)
                 )
     return records
 
@@ -504,22 +501,36 @@ def read_cache_feature_tile(cache_dir: str | Path, rec: TileRecord, cfg: MLConfi
 
 
 # -----------------------------------------------------------------------------
-# Spatial K-fold split (grouped by super-tile id)
+# Spatial K-fold split (grouped by DEM — whole canyons held out per fold)
 # -----------------------------------------------------------------------------
 
 
 class SpatialKFoldSplitter:
+    """Group K-fold by DEM: every tile from one DEM lands in the same fold.
+
+    Holding out whole DEMs is the only honest way to measure cross-canyon
+    generalization. Splitting at the super-tile level leaks every DEM into
+    train and val, so val_cldice rewards memorization instead of transfer.
+    """
+
     def __init__(self, n_folds: int, seed: int = 0) -> None:
+        if n_folds <= 0:
+            raise ValueError("n_folds must be positive")
         self.n_folds = n_folds
         self.seed = seed
 
-    def _fold_for(self, super_tile_id: str) -> int:
-        h = hashlib.sha1(f"{self.seed}:{super_tile_id}".encode()).hexdigest()
-        return int(h, 16) % self.n_folds
+    def _sort_key(self, dem_id: str) -> str:
+        h = hashlib.sha1(f"{self.seed}:{dem_id}".encode()).hexdigest()
+        return h
+
+    def _assign_dem_folds(self, dem_ids: list[str]) -> dict[str, int]:
+        shuffled = sorted(set(dem_ids), key=self._sort_key)
+        return {dem_id: i % self.n_folds for i, dem_id in enumerate(shuffled)}
 
     def split(self, records: list[TileRecord]) -> list[tuple[list[int], list[int]]]:
         """Return [(train_idx, val_idx), ...] for each of n_folds."""
-        assignments = [self._fold_for(r.super_tile_id) for r in records]
+        dem_folds = self._assign_dem_folds([r.dem_id for r in records])
+        assignments = [dem_folds[r.dem_id] for r in records]
         folds: list[tuple[list[int], list[int]]] = []
         for k in range(self.n_folds):
             train = [i for i, f in enumerate(assignments) if f != k]

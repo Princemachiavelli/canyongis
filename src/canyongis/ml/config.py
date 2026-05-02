@@ -35,7 +35,6 @@ class MLConfig:
     positive_threshold: float = 0.3
 
     # --- Split ---
-    super_tile_size: int = 512
     n_folds: int = 5
     spatial_seed: int = 0
 

@@ -394,5 +394,13 @@
   {
     "kml_path": "data/ropewiki/kml/May_Canyon_%28Right_Fork%29.kml",
     "dem_path": "data/ropewiki/dem/mosaic/May_Canyon_Right_Fork_buffer2000m.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Kirk_Creek_Canyon.kml",
+    "dem_path": "data/ropewiki/dem/USGS_1M_10_x63y399_CA_AZ_FEMA_R9_Lidar_2017_D18.tif"
+  },
+  {
+    "kml_path": "data/ropewiki/kml/Stone_Plus_One.kml",
+    "dem_path": "data/ropewiki/dem/mosaic/Wildwood_Canyon_buffer2000m.tif"
   }
 ]

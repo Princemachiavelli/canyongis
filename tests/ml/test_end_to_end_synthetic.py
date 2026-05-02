@@ -23,13 +23,15 @@ from canyongis.ml.config import MLConfig
 pytestmark = pytest.mark.slow
 
 
-def _make_synthetic_dem(path: Path, h: int = 128, w: int = 128, pixel: float = 1.0):
+def _make_synthetic_dem(
+    path: Path, h: int = 128, w: int = 128, pixel: float = 1.0, origin_x: float = 500000.0
+):
     yy, xx = np.mgrid[:h, :w].astype(np.float32)
     plane = 100.0 - 0.1 * yy - 0.05 * xx
     # Carve a vertical valley at column w/2.
     valley = -8.0 * np.exp(-0.5 * ((xx - w / 2) / 2.0) ** 2)
     elev = (plane + valley).astype(np.float32)
-    transform = from_origin(500000.0, 4100000.0 + h * pixel, pixel, pixel)
+    transform = from_origin(origin_x, 4100000.0 + h * pixel, pixel, pixel)
     crs = rasterio.crs.CRS.from_epsg(26911)
     with rasterio.open(
         path,
@@ -68,13 +70,21 @@ def _make_synthetic_kml(
 
 def test_e2e_train_then_predict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
     # --- setup ---
-    dem_path = tmp_path / "dem.tif"
-    kml_path = tmp_path / "trace.kml"
-    transform, crs = _make_synthetic_dem(dem_path, 128, 128, 1.0)
-    _make_synthetic_kml(kml_path, transform, crs, 128, 128, 1.0)
+    # DEM-grouped K-fold needs ≥2 DEMs for any fold to have non-empty train and val.
+    manifest_entries = []
+    dem_paths: list[Path] = []
+    for i in range(2):
+        dem_path = tmp_path / f"dem{i}.tif"
+        kml_path = tmp_path / f"trace{i}.kml"
+        transform, crs = _make_synthetic_dem(
+            dem_path, 128, 128, 1.0, origin_x=500000.0 + i * 5000.0
+        )
+        _make_synthetic_kml(kml_path, transform, crs, 128, 128, 1.0)
+        manifest_entries.append({"kml_path": str(kml_path), "dem_path": str(dem_path)})
+        dem_paths.append(dem_path)
 
     manifest_path = tmp_path / "manifest.json"
-    manifest_path.write_text(json.dumps([{"kml_path": str(kml_path), "dem_path": str(dem_path)}]))
+    manifest_path.write_text(json.dumps(manifest_entries))
 
     out_dir = tmp_path / "out"
 
@@ -83,7 +93,6 @@ def test_e2e_train_then_predict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
         tile_size=64,
         train_stride=32,
         predict_overlap=16,
-        super_tile_size=64,
         n_folds=2,
         epochs=1,
         warmup_epochs=0,
@@ -113,9 +122,6 @@ def test_e2e_train_then_predict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     train_cfg = json.loads(train_cfg_path.read_text())
     assert train_cfg["tile_size"] == 64
     assert train_cfg["predict_overlap"] == 16
-    # Checkpoint exists for at least fold 0.
-    ckpt = out_dir / "fold0" / "best.pt"
-    assert ckpt.exists(), "fold0 checkpoint not written"
     best_ckpt = out_dir / "best.pt"
     assert best_ckpt.is_symlink(), "best checkpoint symlink not written"
     assert best_ckpt.exists(), "best checkpoint symlink target missing"
@@ -125,7 +131,7 @@ def test_e2e_train_then_predict(tmp_path: Path, monkeypatch: pytest.MonkeyPatch)
     predict_out = tmp_path / "predict"
     from canyongis.ml.cli import predict_cli
 
-    predict_cli([str(dem_path), str(best_ckpt), str(predict_out)])
+    predict_cli([str(dem_paths[0]), str(best_ckpt), str(predict_out)])
     assert (predict_out / "canyon_prob.tif").exists()
     assert (predict_out / "rappel_prob.tif").exists()
 

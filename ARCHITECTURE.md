@@ -37,7 +37,7 @@ The earlier rule-based detector (`masks.py`, hand-tuned thresholds on slope, TPI
    - **Canyon loss** = `0.5 · soft-BCE-PU + 0.5 · soft-clDice`. Soft-BCE-PU down-weights the negative term by `(1 − π)` so unlabeled pixels aren't treated as strong negatives (positive-unlabeled learning framing). Soft-clDice (Shit et al. 2021) preserves thin-curvilinear topology.
    - **Rappel loss** = focal loss (γ=2) on the keypoint heatmap.
    - AdamW, cosine LR schedule with warmup, AMP on CUDA only (MPS autocast is unreliable as of torch 2.2).
-   - **Spatial K-fold cross-validation** (default K=5). Super-tiles (512×512 px) are hashed into folds so neighboring tiles never span the train/val boundary — critical when the KML pool is small.
+   - **Spatial K-fold cross-validation** (default K=5). Whole DEMs/canyons are assigned to seeded, balanced folds so no tile from a held-out DEM appears in training.
    - Positive-biased tile sampling via `WeightedRandomSampler` (80% of draws come from tiles with label mass).
    - Encoder frozen for the first 20 epochs to stabilize the heads on tiny data.
 

@@ -24,17 +24,16 @@ from canyongis.ml.dataset import (
 from canyongis.ml.features import feature_stack_signature
 
 
-def _make_records(n_super: int, n_folds_worth: int = 5) -> list[TileRecord]:
+def _make_records(n_dems: int, tiles_per_dem: int = 20) -> list[TileRecord]:
     recs = []
-    for s in range(n_super):
-        super_id = f"demA:{s // 4}:{s % 4}"
-        for t in range(n_folds_worth):
+    for d in range(n_dems):
+        dem_id = f"dem{d:03d}"
+        for t in range(tiles_per_dem):
             recs.append(
                 TileRecord(
-                    dem_id="demA",
-                    row=s * 256,
-                    col=t * 128,
-                    super_tile_id=super_id,
+                    dem_id=dem_id,
+                    row=t * 256,
+                    col=0,
                     has_positive=False,
                 )
             )
@@ -42,7 +41,7 @@ def _make_records(n_super: int, n_folds_worth: int = 5) -> list[TileRecord]:
 
 
 def test_spatial_kfold_disjoint_val_sets():
-    recs = _make_records(n_super=40)
+    recs = _make_records(n_dems=40)
     splitter = SpatialKFoldSplitter(n_folds=5, seed=42)
     folds = splitter.split(recs)
     val_union: set[int] = set()
@@ -56,22 +55,32 @@ def test_spatial_kfold_disjoint_val_sets():
     assert val_union == set(range(len(recs)))
 
 
-def test_spatial_kfold_groups_supertiles():
-    """All records with the same super_tile_id must land in the same fold."""
-    recs = _make_records(n_super=20)
+def test_spatial_kfold_groups_dems():
+    """Every tile from a given DEM must land in the same fold (no cross-canyon leakage)."""
+    recs = _make_records(n_dems=20)
     splitter = SpatialKFoldSplitter(n_folds=5, seed=7)
     folds = splitter.split(recs)
-    # Reverse map: record index -> fold k (via val membership).
     rec_fold: dict[int, int] = {}
     for k, (_tr, val) in enumerate(folds):
         for i in val:
             rec_fold[i] = k
-    # Group by super_tile_id.
-    by_super: dict[str, set[int]] = {}
+    by_dem: dict[str, set[int]] = {}
     for i, r in enumerate(recs):
-        by_super.setdefault(r.super_tile_id, set()).add(rec_fold[i])
-    for sid, ks in by_super.items():
-        assert len(ks) == 1, f"super-tile {sid} was split across folds: {ks}"
+        by_dem.setdefault(r.dem_id, set()).add(rec_fold[i])
+    for dem_id, ks in by_dem.items():
+        assert len(ks) == 1, f"DEM {dem_id} was split across folds: {ks}"
+
+
+def test_spatial_kfold_balances_dem_counts():
+    recs = _make_records(n_dems=95, tiles_per_dem=3)
+    splitter = SpatialKFoldSplitter(n_folds=5, seed=11)
+
+    folds = splitter.split(recs)
+
+    val_dem_counts = []
+    for _train, val in folds:
+        val_dem_counts.append(len({recs[i].dem_id for i in val}))
+    assert val_dem_counts == [19, 19, 19, 19, 19]
 
 
 def test_prepare_cache_masks_labels_outside_valid_dem(tmp_path):
@@ -288,10 +297,10 @@ def test_prewarm_shared_hydrology_numba_cache_uses_configured_cache(monkeypatch,
 
 def test_make_weighted_sampler_can_limit_samples_per_epoch():
     records = [
-        TileRecord("dem", 0, 0, "a", False),
-        TileRecord("dem", 0, 1, "a", True),
-        TileRecord("dem", 0, 2, "a", False),
-        TileRecord("dem", 0, 3, "a", True),
+        TileRecord("dem", 0, 0, False),
+        TileRecord("dem", 0, 1, True),
+        TileRecord("dem", 0, 2, False),
+        TileRecord("dem", 0, 3, True),
     ]
 
     sampler = make_weighted_sampler(records, [0, 1, 2, 3], MLConfig(train_samples_per_epoch=2))
