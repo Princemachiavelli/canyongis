@@ -33,12 +33,14 @@ def read_dem(path: str):
     return elev, transform, crs, pixel_size
 
 
-def _write_kml_lines(gdf: gpd.GeoDataFrame, path: Path, *, color: str = "ff00ff00", width: int = 6) -> None:
+def _write_kml_lines(
+    gdf: gpd.GeoDataFrame, path: Path, *, color: str = "ff00ff00", width: int = 6
+) -> None:
     """Write a simple KML for line features with explicit style width."""
     lines = [
         '<?xml version="1.0" encoding="UTF-8"?>',
         '<kml xmlns="http://www.opengis.net/kml/2.2"><Document>',
-        f"<Style id=\"lineStyle\"><LineStyle><color>{color}</color><width>{width}</width></LineStyle></Style>",
+        f'<Style id="lineStyle"><LineStyle><color>{color}</color><width>{width}</width></LineStyle></Style>',
     ]
     gdf_wgs84 = gdf.to_crs("EPSG:4326")
 
@@ -77,6 +79,40 @@ def _write_kml_lines(gdf: gpd.GeoDataFrame, path: Path, *, color: str = "ff00ff0
     path.write_text("\n".join(lines), encoding="utf-8")
 
 
+def _write_kml_points(gdf: gpd.GeoDataFrame, path: Path, *, color: str = "ff00ffff") -> None:
+    """Write a simple KML for point features without relying on OGR's KML schema."""
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<kml xmlns="http://www.opengis.net/kml/2.2"><Document>',
+        f'<Style id="pointStyle"><IconStyle><color>{color}</color><scale>0.8</scale></IconStyle></Style>',
+    ]
+    gdf_wgs84 = gdf.to_crs("EPSG:4326")
+
+    def _point_label(row: gpd.GeoSeries, idx: int) -> str:
+        if row.get("name") is not None and str(row.get("name")).strip():
+            return str(row.get("name"))
+        drop_m = row.get("drop_m")
+        grade = row.get("grade")
+        if drop_m is not None and grade is not None:
+            return f"Drop {idx + 1} ({float(drop_m):.1f}m, g={float(grade):.2f})"
+        prob = row.get("prob")
+        if prob is not None:
+            return f"Point {idx + 1} (p={float(prob):.2f})"
+        return f"Point {idx + 1}"
+
+    for idx, (_, row) in enumerate(gdf_wgs84.iterrows()):
+        geom = row.geometry
+        if geom.geom_type != "Point":
+            continue
+        name = html.escape(_point_label(row, idx))
+        lines.append(
+            f"<Placemark><name>{name}</name><styleUrl>#pointStyle</styleUrl>"
+            f"<Point><coordinates>{geom.x},{geom.y},0</coordinates></Point></Placemark>"
+        )
+    lines.append("</Document></kml>")
+    path.write_text("\n".join(lines), encoding="utf-8")
+
+
 def write_vector(gdf: gpd.GeoDataFrame, base_path) -> None:
     """Write a GeoDataFrame as GPKG (native CRS) and KML (WGS84, for Google Earth)."""
     base = Path(base_path)
@@ -87,6 +123,9 @@ def write_vector(gdf: gpd.GeoDataFrame, base_path) -> None:
     geom_types = set(gdf.geometry.geom_type.unique())
     if geom_types.issubset({"LineString", "MultiLineString"}):
         _write_kml_lines(gdf, base.with_suffix(".kml"))
+        return
+    if geom_types.issubset({"Point", "MultiPoint"}):
+        _write_kml_points(gdf, base.with_suffix(".kml"))
         return
     try:
         import fiona

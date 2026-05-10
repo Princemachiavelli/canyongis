@@ -7,6 +7,7 @@ import geopandas as gpd
 import rasterio
 from rasterio.warp import transform_bounds
 
+from .drainage_preview import drainage_previews_cli
 from .drop_preview import drop_previews_cli
 from .geomorphon_preview import geomorphon_previews_cli
 from .geomorphons import geomorphons_cli
@@ -18,6 +19,7 @@ from .ml.config import MLConfig
 from .ml.inspect import export_feature_pngs_cli
 from .ml.manifest_mosaic import mosaic_manifest_cli
 from .ml.predict import run_inference
+from .ravine_spine import ravine_spine_cli
 
 
 def _render_map(out_dir: Path, dem_path: str, max_points: int) -> None:
@@ -85,6 +87,16 @@ def cli(argv: list[str] | None = None) -> None:
         "drop-previews",
         help="Build drop-to-lower-ground rasters and route-overlay preview PNGs.",
     )
+    sub.add_parser(
+        "drainage-previews",
+        add_help=False,
+        help="Compute flow accumulation and render drainage-network previews.",
+    )
+    sub.add_parser(
+        "ravine-spine",
+        add_help=False,
+        help="Extract a ravine spine network from a TPI score raster.",
+    )
 
     # Default pipeline: positional DEM, checkpoint, outdir + optional --no-folium.
     parser.add_argument("dem", nargs="?", type=Path, help="Path to input DEM GeoTIFF.")
@@ -124,6 +136,12 @@ def cli(argv: list[str] | None = None) -> None:
     if args.command == "drop-previews":
         drop_previews_cli(extra)
         return
+    if args.command == "drainage-previews":
+        drainage_previews_cli(extra)
+        return
+    if args.command == "ravine-spine":
+        ravine_spine_cli(extra)
+        return
 
     if not (args.dem and args.checkpoint and args.outdir):
         parser.error(
@@ -135,7 +153,9 @@ def cli(argv: list[str] | None = None) -> None:
             "   or: canyongis mosaic-manifest ...\n"
             "   or: canyongis geomorphons ...\n"
             "   or: canyongis geomorphon-previews ...\n"
-            "   or: canyongis drop-previews ..."
+            "   or: canyongis drop-previews ...\n"
+            "   or: canyongis drainage-previews ...\n"
+            "   or: canyongis ravine-spine ..."
         )
 
     cfg = MLConfig(
