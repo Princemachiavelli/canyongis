@@ -53,8 +53,11 @@
 
           pysheds = python.pkgs.callPackage ./nix/pysheds.nix { };
 
+          canyongis-web-frontend = pkgs.callPackage ./web/frontend { };
+
           canyongis = python.pkgs.callPackage ./nix/package.nix {
             inherit pysheds;
+            webFrontend = canyongis-web-frontend;
             torch = python.pkgs.torch;
             segmentation_models_pytorch = python.pkgs.segmentation_models_pytorch;
           };
@@ -64,6 +67,7 @@
           packages = {
             default = canyongis;
             canyongis = canyongis;
+            inherit canyongis-web-frontend;
             inherit pysheds;
             segmentation_models_pytorch = python.pkgs.segmentation_models_pytorch;
           };
@@ -81,6 +85,7 @@
             packages = [
               pkgs.grass
               pkgs.gdal
+              pkgs.nodejs
               python.pkgs.pytest
             ];
             shellHook = ''
@@ -90,6 +95,7 @@
               echo "canyongis dev shell"
               echo "  Run:           python -m canyongis <dem.tif> <outdir>"
               echo "  Validate:      python -m canyongis.validate --kml <kml> --out-dir <dir>"
+              echo "  Web:           python -m canyongis web"
               echo "  Format:        nix fmt"
               echo "  Reproject DEM: gdalwarp -t_srs EPSG:32612 in.tif utm.tif"
             '';
@@ -97,6 +103,7 @@
 
           checks = {
             inherit canyongis;
+            inherit canyongis-web-frontend;
             formatting = config.treefmt.build.check inputs.self;
           };
         };

@@ -6,6 +6,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 import rasterio
@@ -34,6 +35,7 @@ flat_deg = params["flat_deg"]
 dist_m = params["dist_m"]
 outputs = params["outputs"]
 use_extended = params["extended"]
+nprocs = params.get("nprocs")
 quiet = bool(params["quiet"])
 
 out_dir.mkdir(parents=True, exist_ok=True)
@@ -48,6 +50,8 @@ kwargs = {
     "flat": flat_deg,
     "dist": dist_m,
 }
+if nprocs:
+    kwargs["nprocs"] = int(nprocs)
 for name in outputs:
     kwargs[name] = name
 
@@ -82,11 +86,19 @@ def export_geomorphons(
     outputs: tuple[str, ...] = DEFAULT_OUTPUTS,
     extended: bool = True,
     quiet: bool = True,
+    nprocs: int | None = None,
+    log_callback: Callable[[str], None] | None = None,
 ) -> dict[str, object]:
-    """Run GRASS r.geomorphon against a DEM and export selected outputs as GeoTIFFs."""
+    """Run GRASS r.geomorphon against a DEM and export selected outputs as GeoTIFFs.
+
+    nprocs: number of cores for r.geomorphon (None = os.cpu_count()).
+    log_callback: optional sink for streamed GRASS stderr lines.
+    """
     dem_path = Path(dem_path).resolve()
     out_dir = Path(out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
+    if nprocs is None:
+        nprocs = os.cpu_count() or 1
 
     with rasterio.open(dem_path) as src:
         if src.crs is None:
@@ -109,8 +121,14 @@ def export_geomorphons(
         "dist_m": dist_m,
         "outputs": list(outputs),
         "extended": extended,
+        "nprocs": int(nprocs),
         "quiet": quiet,
     }
+
+    def emit(line: str) -> None:
+        log(line)
+        if log_callback is not None:
+            log_callback(line)
 
     with tempfile.TemporaryDirectory(prefix="canyongis-grass-") as tmp:
         tmp_path = Path(tmp)
@@ -127,29 +145,47 @@ def export_geomorphons(
             str(script_path),
             str(params_path),
         ]
-        log(f"running GRASS r.geomorphon (search={search_m}m, skip={skip_m}m, flat={flat_deg}deg)")
+        emit(
+            f"running GRASS r.geomorphon (search={search_m}m, skip={skip_m}m, "
+            f"flat={flat_deg}deg, nprocs={nprocs})"
+        )
         env = os.environ.copy()
         if quiet:
             env.setdefault("GRASS_VERBOSE", "0")
-        result = subprocess.run(
+
+        # Stream output line-by-line so callers can show progress while r.geomorphon
+        # is running. GRASS modules emit progress to stderr; merge stdout/stderr so
+        # we read both from a single pipe.
+        proc = subprocess.Popen(
             cmd,
-            check=False,
             env=env,
-            stdout=subprocess.PIPE if quiet else None,
-            stderr=subprocess.PIPE if quiet else None,
-            text=True if quiet else None,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            text=True,
+            bufsize=1,
         )
-        if result.returncode != 0:
-            if quiet:
-                if result.stdout:
-                    sys.stdout.write(result.stdout)
-                if result.stderr:
-                    sys.stderr.write(result.stderr)
+        assert proc.stdout is not None
+        captured: list[str] = []
+        try:
+            for raw_line in proc.stdout:
+                line = raw_line.rstrip("\n")
+                if not line:
+                    continue
+                captured.append(line)
+                if log_callback is not None:
+                    log_callback(line)
+                if not quiet:
+                    sys.stdout.write(raw_line)
+                    sys.stdout.flush()
+        finally:
+            returncode = proc.wait()
+
+        if returncode != 0:
+            if quiet and log_callback is None:
+                for line in captured:
+                    sys.stderr.write(line + "\n")
             raise subprocess.CalledProcessError(
-                result.returncode,
-                cmd,
-                output=result.stdout if quiet else None,
-                stderr=result.stderr if quiet else None,
+                returncode, cmd, output="\n".join(captured), stderr=None
             )
 
     exported = [str(out_dir / f"geomorphon_{name}.tif") for name in outputs]
@@ -186,6 +222,12 @@ def geomorphons_cli(argv: list[str] | None = None) -> None:
     p.add_argument("--skip-m", type=float, default=0.0, help="Inner skip radius in meters.")
     p.add_argument("--flat-deg", type=float, default=1.0, help="Flatness threshold in degrees.")
     p.add_argument("--dist-m", type=float, default=0.0, help="Flatness distance in meters.")
+    p.add_argument(
+        "--nprocs",
+        type=int,
+        default=None,
+        help="Cores for r.geomorphon (default: os.cpu_count()).",
+    )
     p.add_argument(
         "--outputs",
         nargs="+",
@@ -228,5 +270,6 @@ def geomorphons_cli(argv: list[str] | None = None) -> None:
         outputs=tuple(args.outputs),
         extended=not args.no_extended,
         quiet=not args.grass_verbose,
+        nprocs=args.nprocs,
     )
     log(f"wrote {len(summary['outputs'])} geomorphon rasters to {args.outdir}")

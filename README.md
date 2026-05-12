@@ -108,3 +108,19 @@ pytest
 
 Formatters run via `nix fmt` (treefmt-nix wraps `nixfmt`, `ruff format`,
 `ruff check --fix`, `taplo`). CI gate: `nix flake check`.
+
+## Web Interface
+
+The local web interface is built with FastAPI plus a Nix-managed
+React/Leaflet frontend:
+
+```sh
+nix build .#canyongis-web-frontend
+nix build .#canyongis
+./result/bin/canyongis web --port 8765
+```
+
+Open `http://127.0.0.1:8765`. Draw an AOI on the map, build a DEM mosaic from
+TNM products, then run previews such as flow/drainage, TPI/ravine compare, and
+ravine spine extraction. Generated rasters, previews, and job metadata are
+written under `runs/web/`.

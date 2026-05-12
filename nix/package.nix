@@ -2,6 +2,7 @@
   lib,
   buildPythonPackage,
   albumentations,
+  fastapi,
   grass,
   setuptools,
   folium,
@@ -20,6 +21,8 @@
   shapely,
   torch,
   tqdm,
+  uvicorn,
+  webFrontend ? null,
   zarr,
 }:
 
@@ -40,6 +43,7 @@ buildPythonPackage {
 
   dependencies = [
     albumentations
+    fastapi
     folium
     geojson
     geopandas
@@ -56,6 +60,7 @@ buildPythonPackage {
     shapely
     torch
     tqdm
+    uvicorn
     zarr
   ];
 
@@ -67,6 +72,10 @@ buildPythonPackage {
     "PATH"
     ":"
     (lib.makeBinPath [ grass ])
+  ] ++ lib.optionals (webFrontend != null) [
+    "--set-default"
+    "CANYONGIS_FRONTEND_DIST"
+    "${webFrontend}/share/canyongis-web"
   ];
 
   doCheck = false;

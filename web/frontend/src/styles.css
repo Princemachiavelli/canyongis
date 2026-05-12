@@ -1,0 +1,434 @@
+:root {
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  color: #172026;
+  background: #eef1f3;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+}
+
+button,
+input {
+  font: inherit;
+}
+
+button {
+  border: 1px solid #b9c2c8;
+  background: #ffffff;
+  color: #172026;
+  min-height: 34px;
+  padding: 0 10px;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  cursor: pointer;
+}
+
+button:disabled {
+  color: #8c969c;
+  background: #f0f3f4;
+  cursor: not-allowed;
+}
+
+button.primary {
+  background: #0c6b58;
+  color: #ffffff;
+  border-color: #0c6b58;
+  width: 100%;
+}
+
+input {
+  width: 100%;
+  min-height: 34px;
+  border: 1px solid #b9c2c8;
+  border-radius: 6px;
+  padding: 0 9px;
+  background: #ffffff;
+}
+
+.shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template-rows: 44px 1fr;
+}
+
+.toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  border-bottom: 1px solid #cbd3d8;
+  background: #ffffff;
+  padding: 0 12px;
+}
+
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+}
+
+.workspace {
+  min-height: 0;
+  display: grid;
+  grid-template-columns: 360px 1fr;
+}
+
+.panel {
+  min-height: 0;
+  overflow: auto;
+  background: #f8fafb;
+  border-right: 1px solid #cbd3d8;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+
+.panelHeader,
+.jobsHeader {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+h1,
+h2 {
+  margin: 0;
+  font-size: 15px;
+}
+
+label {
+  display: grid;
+  gap: 5px;
+  font-size: 12px;
+  color: #46535b;
+}
+
+.toolGroup {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.toolGroup button:last-child {
+  grid-column: 1 / -1;
+}
+
+.selection {
+  display: grid;
+  gap: 8px;
+  border-top: 1px solid #d6dde1;
+  border-bottom: 1px solid #d6dde1;
+  padding: 12px 0;
+}
+
+.selection div {
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  font-size: 12px;
+}
+
+.selection span {
+  color: #64727b;
+}
+
+.selection strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.jobs {
+  display: grid;
+  gap: 8px;
+}
+
+.job {
+  border: 1px solid #d1d9de;
+  background: #ffffff;
+  border-radius: 8px;
+  padding: 9px;
+  display: grid;
+  gap: 7px;
+}
+
+.job > div:first-child {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.job > div:first-child span {
+  color: #65737c;
+}
+
+.jobMeta {
+  color: #56656d;
+  font-size: 12px;
+}
+
+.job.running {
+  border-color: #2d95bf;
+}
+
+.job.succeeded {
+  border-color: #67a86f;
+}
+
+.job.failed {
+  border-color: #c76b6b;
+}
+
+.jobActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.jobActions button {
+  min-height: 28px;
+  font-size: 12px;
+}
+
+.error {
+  max-height: 160px;
+  overflow: auto;
+  color: #9a2e2e;
+  background: #fff2f2;
+  border: 1px solid #f0c9c9;
+  border-radius: 6px;
+  padding: 8px;
+  white-space: pre-wrap;
+  font-size: 12px;
+}
+
+.areas {
+  display: grid;
+  gap: 10px;
+}
+
+.area {
+  border: 1px solid #d1d9de;
+  background: #ffffff;
+  border-radius: 8px;
+  padding: 10px;
+  display: grid;
+  gap: 8px;
+}
+
+.area.active {
+  border-color: #0c6b58;
+  box-shadow: 0 0 0 1px #0c6b58 inset;
+}
+
+.areaHead {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.areaHead strong {
+  font-size: 13px;
+}
+
+.areaHead code,
+.derivedRowHead code,
+.job code {
+  font-size: 11px;
+  color: #65737c;
+  margin-left: 6px;
+}
+
+.areaBounds {
+  font-size: 11px;
+  color: #56656d;
+  font-variant-numeric: tabular-nums;
+}
+
+.areaActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.areaActions button,
+.derivedRowActions button,
+.derivedRowActions .linkButton {
+  min-height: 26px;
+  font-size: 11px;
+  padding: 0 8px;
+}
+
+button.toggled {
+  background: #d4ecf7;
+  border-color: #6cb1cf;
+}
+
+.derivedSection {
+  border-top: 1px solid #ecf0f2;
+  padding-top: 6px;
+}
+
+.derivedSection summary {
+  cursor: pointer;
+  font-size: 12px;
+  color: #46535b;
+  list-style: revert;
+}
+
+.derivedList {
+  display: grid;
+  gap: 6px;
+  margin-top: 6px;
+}
+
+.derivedRow {
+  border: 1px solid #e3e8eb;
+  border-left-width: 3px;
+  border-radius: 6px;
+  padding: 6px 8px;
+  display: grid;
+  gap: 5px;
+  background: #fbfcfc;
+}
+
+.derivedRow.running {
+  border-left-color: #2d95bf;
+}
+
+.derivedRow.succeeded {
+  border-left-color: #67a86f;
+}
+
+.derivedRow.failed {
+  border-left-color: #c76b6b;
+}
+
+.derivedRow.queued {
+  border-left-color: #b9c2c8;
+}
+
+.derivedRowHead {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 8px;
+}
+
+.derivedRowActions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.spineNest {
+  margin-left: 14px;
+  margin-top: 5px;
+  display: grid;
+  gap: 5px;
+}
+
+.compareGroup {
+  display: grid;
+  gap: 4px;
+}
+
+.statusBadge {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: #56656d;
+  padding: 2px 6px;
+  border-radius: 4px;
+  background: #eef1f3;
+}
+
+.statusBadge.running {
+  color: #14637e;
+  background: #d8edf6;
+}
+
+.statusBadge.succeeded {
+  color: #2f6a36;
+  background: #d8efdb;
+}
+
+.statusBadge.failed {
+  color: #8a3434;
+  background: #f5d8d8;
+}
+
+.linkButton {
+  border: 1px solid #b9c2c8;
+  background: #ffffff;
+  color: #172026;
+  border-radius: 6px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  text-decoration: none;
+  padding: 0 8px;
+}
+
+.empty {
+  font-size: 12px;
+  color: #65737c;
+  padding: 8px;
+  border: 1px dashed #cbd3d8;
+  border-radius: 6px;
+  text-align: center;
+}
+
+.progressTail {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  font-size: 11px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  color: #46535b;
+  background: #f1f4f6;
+  border-radius: 4px;
+  max-height: 100px;
+  overflow: auto;
+  white-space: pre-wrap;
+}
+
+.progressTail div {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.allJobs summary {
+  cursor: pointer;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: #46535b;
+  list-style: revert;
+}
+
+.allJobs .jobs {
+  margin-top: 8px;
+}
+
+.mapFrame,
+.map {
+  min-height: 0;
+  height: calc(100vh - 44px);
+}
+
+.leaflet-container {
+  background: #d9e0e4;
+}

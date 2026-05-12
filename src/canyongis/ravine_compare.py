@@ -14,6 +14,7 @@ import argparse
 import json
 import shutil
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -95,6 +96,9 @@ def compute_a_geomorphon(
     dem_path: str | Path,
     scales_m: tuple[float, ...],
     work_dir: Path,
+    *,
+    nprocs: int | None = None,
+    log_callback: Callable[[str], None] | None = None,
 ) -> tuple[np.ndarray, dict]:
     """Multi-scale geomorphon ravine score: count of scales classifying a pixel
     as hollow (form 7) or valley (form 9). Returns float32 [0, len(scales)]."""
@@ -111,6 +115,8 @@ def compute_a_geomorphon(
             outputs=("forms",),
             extended=False,
             quiet=True,
+            nprocs=nprocs,
+            log_callback=log_callback,
         )
         forms_path = sub / "geomorphon_forms.tif"
         with rasterio.open(forms_path) as src:
@@ -118,7 +124,10 @@ def compute_a_geomorphon(
         is_ravine = ((forms == 7) | (forms == 9)).astype(np.float32)
         score = is_ravine if score is None else score + is_ravine
         forms_paths.append(str(forms_path))
-        log(f"[A] geomorphon @ {scale_m}m: ravine_pixels={int(is_ravine.sum())}")
+        msg = f"[A] geomorphon @ {scale_m}m: ravine_pixels={int(is_ravine.sum())}"
+        log(msg)
+        if log_callback is not None:
+            log_callback(msg)
     if score is None:
         raise ValueError("geomorphon scales must be non-empty")
     meta = {"scales_m": list(scales_m), "form_rasters": forms_paths}
@@ -402,30 +411,44 @@ def export_ravine_compare(
     display_max_px: int = 4000,
     alpha_gamma: float = 0.7,
     keep_geomorphon_work: bool = False,
+    nprocs: int | None = None,
+    log_callback: Callable[[str], None] | None = None,
 ) -> RavineCompareResult:
     dem_path = Path(dem_path)
     out_dir = Path(out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
-    log(f"ravine-compare: {dem_path} → {out_dir}")
+
+    def emit(msg: str) -> None:
+        log(msg)
+        if log_callback is not None:
+            log_callback(msg)
+
+    emit(f"ravine-compare: {dem_path} → {out_dir}")
 
     elev, transform, crs, pixel_size = read_dem(str(dem_path))
     with rasterio.open(dem_path) as src:
         profile = src.profile
 
-    log("computing hillshade")
+    emit("computing hillshade")
     hillshade = compute_hillshade(elev, pixel_size)
 
-    log(f"computing A (geomorphon, scales={geomorphon_scales_m}m)")
+    emit(f"computing A (geomorphon, scales={geomorphon_scales_m}m)")
     work_root = out_dir / "_geomorphon_work" if keep_geomorphon_work else Path(
         tempfile.mkdtemp(prefix="ravine_compare_geo_")
     )
     try:
-        a_score, a_meta = compute_a_geomorphon(dem_path, geomorphon_scales_m, work_root)
+        a_score, a_meta = compute_a_geomorphon(
+            dem_path,
+            geomorphon_scales_m,
+            work_root,
+            nprocs=nprocs,
+            log_callback=log_callback,
+        )
     finally:
         if not keep_geomorphon_work:
             shutil.rmtree(work_root, ignore_errors=True)
 
-    log(
+    emit(
         f"computing B (multi-scale TPI, scales={tpi_scales_m}m, combine={tpi_combine}, "
         f"smooth_m={tpi_smooth_m})"
     )
@@ -438,7 +461,7 @@ def export_ravine_compare(
         norm_pct=tpi_norm_pct,
     )
 
-    log(f"computing C (plan curvature, smooth={curvature_smooth_m}m)")
+    emit(f"computing C (plan curvature, smooth={curvature_smooth_m}m)")
     c_score, c_meta = compute_c_plan_curvature(elev, pixel_size, curvature_smooth_m)
 
     geo_tif = out_dir / "a_geomorphon.tif"
@@ -452,7 +475,7 @@ def export_ravine_compare(
 
     kml_mask = None
     if kml_path is not None:
-        log(f"rasterizing KML overlay: {kml_path}")
+        emit(f"rasterizing KML overlay: {kml_path}")
         kml_mask = _rasterize_kml(Path(kml_path), transform, crs, elev.shape)
 
     a01, a_lo, a_hi = _percentile_stretch(a_score, *display_pct)
@@ -609,6 +632,12 @@ def ravine_compare_cli(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Keep intermediate per-scale geomorphon outputs.",
     )
+    p.add_argument(
+        "--nprocs",
+        type=int,
+        default=None,
+        help="Cores for r.geomorphon (default: os.cpu_count()).",
+    )
     args = p.parse_args(argv)
 
     lo_str, hi_str = args.display_pct.split(",")
@@ -630,4 +659,5 @@ def ravine_compare_cli(argv: list[str] | None = None) -> None:
         display_max_px=args.display_max_px,
         alpha_gamma=args.alpha_gamma,
         keep_geomorphon_work=args.keep_geomorphon_work,
+        nprocs=args.nprocs,
     )

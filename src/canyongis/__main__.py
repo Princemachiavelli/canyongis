@@ -20,6 +20,7 @@ from .ml.inspect import export_feature_pngs_cli
 from .ml.manifest_mosaic import mosaic_manifest_cli
 from .ml.predict import run_inference
 from .ravine_spine import ravine_spine_cli
+from .web.server import cli as web_cli
 
 
 def _render_map(out_dir: Path, dem_path: str, max_points: int) -> None:
@@ -97,6 +98,11 @@ def cli(argv: list[str] | None = None) -> None:
         add_help=False,
         help="Extract a ravine spine network from a TPI score raster.",
     )
+    sub.add_parser(
+        "web",
+        add_help=False,
+        help="Run the local canyongis web interface.",
+    )
 
     # Default pipeline: positional DEM, checkpoint, outdir + optional --no-folium.
     parser.add_argument("dem", nargs="?", type=Path, help="Path to input DEM GeoTIFF.")
@@ -142,6 +148,9 @@ def cli(argv: list[str] | None = None) -> None:
     if args.command == "ravine-spine":
         ravine_spine_cli(extra)
         return
+    if args.command == "web":
+        web_cli(extra)
+        return
 
     if not (args.dem and args.checkpoint and args.outdir):
         parser.error(
@@ -155,7 +164,8 @@ def cli(argv: list[str] | None = None) -> None:
             "   or: canyongis geomorphon-previews ...\n"
             "   or: canyongis drop-previews ...\n"
             "   or: canyongis drainage-previews ...\n"
-            "   or: canyongis ravine-spine ..."
+            "   or: canyongis ravine-spine ...\n"
+            "   or: canyongis web ..."
         )
 
     cfg = MLConfig(
