@@ -11,6 +11,7 @@
   numpy,
   pandas,
   pillow,
+  python-multipart,
   pyogrio,
   pyproj,
   pysheds,
@@ -50,6 +51,7 @@ buildPythonPackage {
     numpy
     pandas
     pillow
+    python-multipart
     pyogrio
     pyproj
     pysheds
@@ -72,7 +74,8 @@ buildPythonPackage {
     "PATH"
     ":"
     (lib.makeBinPath [ grass ])
-  ] ++ lib.optionals (webFrontend != null) [
+  ]
+  ++ lib.optionals (webFrontend != null) [
     "--set-default"
     "CANYONGIS_FRONTEND_DIST"
     "${webFrontend}/share/canyongis-web"

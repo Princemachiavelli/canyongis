@@ -5,9 +5,9 @@ from canyongis.ml.manifest_mosaic import _write_kml_mosaic
 dem_dir = Path("data/ropewiki/dem")
 EXCLUDE = {"USGS_one_meter_x32y414_UT_ZionNP_QL2_2016.tif"}
 ut_sources = sorted(
-    p for p in dem_dir.glob("*.tif")
-    if ("_12_" in p.name or "x32y41" in p.name or "x33y41" in p.name)
-    and p.name not in EXCLUDE
+    p
+    for p in dem_dir.glob("*.tif")
+    if ("_12_" in p.name or "x32y41" in p.name or "x33y41" in p.name) and p.name not in EXCLUDE
 )
 ut_sources = [p for p in ut_sources if p.parent == dem_dir]
 print("UT sources:", [p.name for p in ut_sources])

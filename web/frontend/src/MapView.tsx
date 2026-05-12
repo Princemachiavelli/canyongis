@@ -2,8 +2,8 @@ import { useEffect } from "react";
 import "./leafletSetup";
 import L from "leaflet";
 import "@geoman-io/leaflet-geoman-free";
-import { ImageOverlay, MapContainer, Rectangle, TileLayer, useMap } from "react-leaflet";
-import type { Bounds } from "./api";
+import { GeoJSON, ImageOverlay, MapContainer, Rectangle, TileLayer, useMap } from "react-leaflet";
+import type { Bounds, Job } from "./api";
 import { useAppStore } from "./state";
 
 function leafletBounds(bounds: Bounds): L.LatLngBoundsExpression {
@@ -70,10 +70,65 @@ function MapControls() {
   return null;
 }
 
-export function MapView() {
+function geojsonResult(job: Job, field: string) {
+  const value = job.result?.[field];
+  if (!value || typeof value !== "object") return undefined;
+  return value as GeoJSON.GeoJsonObject;
+}
+
+function KmlImportLayer({ job }: { job: Job }) {
+  const descent = geojsonResult(job, "descent_geojson");
+  const approach = geojsonResult(job, "approach_geojson");
+  const unclassified = geojsonResult(job, "unclassified_geojson");
+  const points = geojsonResult(job, "points_geojson");
+
+  return (
+    <>
+      {unclassified && (
+        <GeoJSON
+          key={`${job.id}:unclassified`}
+          data={unclassified}
+          style={{ color: "#59656d", weight: 3, opacity: 0.85, dashArray: "4 4" }}
+        />
+      )}
+      {approach && (
+        <GeoJSON
+          key={`${job.id}:approach`}
+          data={approach}
+          style={{ color: "#2563eb", weight: 3, opacity: 0.9, dashArray: "8 4" }}
+        />
+      )}
+      {descent && (
+        <GeoJSON
+          key={`${job.id}:descent`}
+          data={descent}
+          style={{ color: "#d33f2f", weight: 4, opacity: 0.95 }}
+        />
+      )}
+      {points && (
+        <GeoJSON
+          key={`${job.id}:points`}
+          data={points}
+          pointToLayer={(_feature, latlng) =>
+            L.circleMarker(latlng, {
+              radius: 5,
+              color: "#5d3b00",
+              weight: 1,
+              fillColor: "#f5b82e",
+              fillOpacity: 0.95
+            })
+          }
+        />
+      )}
+    </>
+  );
+}
+
+export function MapView({ kmlImports = [] }: { kmlImports?: Job[] }) {
   const bounds = useAppStore((state) => state.bounds);
   const overlay = useAppStore((state) => state.overlay);
   const footprints = useAppStore((state) => state.footprints);
+  const visibleKmls = useAppStore((state) => state.visibleKmls);
 
   return (
     <MapContainer center={[37.3, -112.9]} zoom={10} className="map">
@@ -97,6 +152,11 @@ export function MapView() {
       ))}
       {bounds && <Rectangle bounds={leafletBounds(bounds)} pathOptions={{ color: "#00bcd4", weight: 2 }} />}
       {overlay && <ImageOverlay url={overlay.url} bounds={leafletBounds(overlay.bounds)} opacity={0.72} />}
+      {kmlImports
+        .filter((job) => job.status === "succeeded" && visibleKmls[job.id])
+        .map((job) => (
+          <KmlImportLayer key={job.id} job={job} />
+        ))}
     </MapContainer>
   );
 }

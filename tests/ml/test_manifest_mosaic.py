@@ -162,7 +162,6 @@ def test_build_mosaic_manifest_groups_nearby_kmls_into_non_overlapping_mosaics(t
 def test_build_mosaic_manifest_merges_pixel_snapped_overlaps(tmp_path):
     dem_dir = tmp_path / "dem"
     kml_dir = tmp_path / "kml"
-    out_dem_dir = dem_dir / "mosaic"
     dem_dir.mkdir()
     kml_dir.mkdir()
 

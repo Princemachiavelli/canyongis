@@ -123,6 +123,18 @@ label {
   grid-column: 1 / -1;
 }
 
+.importPanel {
+  border-top: 1px solid #d6dde1;
+  border-bottom: 1px solid #d6dde1;
+  padding: 12px 0;
+  display: grid;
+  gap: 9px;
+}
+
+.importPanel button {
+  width: 100%;
+}
+
 .selection {
   display: grid;
   gap: 8px;
@@ -225,6 +237,32 @@ label {
   padding: 10px;
   display: grid;
   gap: 8px;
+}
+
+.kmlImport {
+  border: 1px solid #d1d9de;
+  border-left-width: 3px;
+  border-radius: 8px;
+  padding: 8px;
+  display: grid;
+  gap: 7px;
+  background: #ffffff;
+}
+
+.kmlImport.running {
+  border-left-color: #2d95bf;
+}
+
+.kmlImport.succeeded {
+  border-left-color: #67a86f;
+}
+
+.kmlImport.failed {
+  border-left-color: #c76b6b;
+}
+
+.kmlImport.queued {
+  border-left-color: #b9c2c8;
 }
 
 .area.active {
@@ -427,6 +465,27 @@ button.toggled {
 }
 
 .progressTail div {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+.progressTail.failed {
+  max-height: 240px;
+  background: #fdecea;
+  color: #5b1a14;
+}
+
+.jobError {
+  margin: 4px 0 0;
+  padding: 6px 8px;
+  font-size: 11px;
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  color: #5b1a14;
+  background: #fdecea;
+  border: 1px solid #f4b5ad;
+  border-radius: 4px;
+  max-height: 240px;
+  overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
 }

@@ -181,8 +181,7 @@ def export_canyon_labels(
             }
         )
         log(
-            f"wrote {canyon_path.name} "
-            f"(coverage={coverage * 100:.3f}% centerline_px={peak_pixels})"
+            f"wrote {canyon_path.name} (coverage={coverage * 100:.3f}% centerline_px={peak_pixels})"
         )
 
     out_summary = {"manifest": str(manifest_path), "out_dir": str(out_dir), "entries": summary}

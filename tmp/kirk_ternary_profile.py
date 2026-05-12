@@ -17,8 +17,16 @@ DEM = Path("data/ropewiki/dem/mosaic/Kirk_Creek_Canyon_buffer1200m.tif")
 OUT = Path("tmp/kirk-rappel-candidates.json")
 
 FORMS = {
-    1: "flat", 2: "peak", 3: "ridge", 4: "shoulder", 5: "spur",
-    6: "slope", 7: "hollow", 8: "footslope", 9: "valley", 10: "pit",
+    1: "flat",
+    2: "peak",
+    3: "ridge",
+    4: "shoulder",
+    5: "spur",
+    6: "slope",
+    7: "hollow",
+    8: "footslope",
+    9: "valley",
+    10: "pit",
 }
 
 
@@ -27,7 +35,7 @@ def sample_line(line: LineString, step_m: float = 1.0) -> np.ndarray:
     return np.array([(p.x, p.y) for p in (line.interpolate(d) for d in distances)]), distances
 
 
-def read_full(path: Path) -> tuple[np.ndarray, "rasterio.Affine"]:
+def read_full(path: Path) -> tuple[np.ndarray, rasterio.Affine]:
     with rasterio.open(path) as src:
         return src.read(1), src.transform
 
@@ -78,7 +86,9 @@ def main() -> None:
     # ±3m perpendicular buffer is approximated by a 3m square window around each line point.
     BUF = 3.0
     positive = window_pick(pos_arr, tr, xs, ys, BUF, reduce="max")
-    negative = window_pick(neg_arr, tr, xs, ys, BUF, reduce="min")  # min negative = strongest down-look
+    negative = window_pick(
+        neg_arr, tr, xs, ys, BUF, reduce="min"
+    )  # min negative = strongest down-look
     intensity = window_pick(int_arr.astype(np.float32), tr, xs, ys, BUF, reduce="max")
     has_shoulder = window_pick(forms_arr, tr, xs, ys, BUF, reduce="any_shoulder")
     forms = window_pick(forms_arr, tr, xs, ys, 0, reduce="max")  # exact pixel form
@@ -123,23 +133,27 @@ def main() -> None:
     for s, e in merged:
         seg = slice(max(0, s - 1), min(len(is_lip), e + 2))
         score = float(asym[seg].mean())
-        out.append({
-            "along_m_start": float(dists[s]),
-            "along_m_end": float(dists[e]),
-            "lon_start_lat_lat_end": [
-                float(pts[s, 0]), float(pts[s, 1]),
-                float(pts[e, 0]), float(pts[e, 1]),
-            ],
-            "forms": [FORMS.get(int(v), str(int(v))) for v in forms[s:e + 1]],
-            "ternary_codes": [int(v) for v in ternary[s:e + 1]],
-            "mean_asym_pos_minus_neg": score,
-            "max_intensity_deg": float(intensity[s:e + 1].max()),
-        })
+        out.append(
+            {
+                "along_m_start": float(dists[s]),
+                "along_m_end": float(dists[e]),
+                "lon_start_lat_lat_end": [
+                    float(pts[s, 0]),
+                    float(pts[s, 1]),
+                    float(pts[e, 0]),
+                    float(pts[e, 1]),
+                ],
+                "forms": [FORMS.get(int(v), str(int(v))) for v in forms[s : e + 1]],
+                "ternary_codes": [int(v) for v in ternary[s : e + 1]],
+                "mean_asym_pos_minus_neg": score,
+                "max_intensity_deg": float(intensity[s : e + 1].max()),
+            }
+        )
 
     out.sort(key=lambda r: -r["mean_asym_pos_minus_neg"])
     OUT.write_text(json.dumps({"forms_histogram": hist, "candidates": out}, indent=2))
     print(f"wrote {len(out)} rappel candidates → {OUT}")
-    print(f"top 12 by asymmetry score:")
+    print("top 12 by asymmetry score:")
     for r in out[:12]:
         print(
             f"  along {r['along_m_start']:6.0f}–{r['along_m_end']:6.0f} m  "

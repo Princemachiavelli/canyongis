@@ -18,13 +18,12 @@ class PreviewSpec:
 
 
 PREVIEWS: tuple[PreviewSpec, ...] = (
+    PreviewSpec("panel_hillshade.png", "panel_hillshade.webp", "panel_hillshade_url"),
+    PreviewSpec("panel_a_geomorphon.png", "panel_a_geomorphon.webp", "panel_a_geomorphon_url"),
     PreviewSpec("panel_b_tpi.png", "panel_b_tpi.webp", "panel_b_tpi_url"),
-    PreviewSpec(
-        "flow_accum_log_preview.png", "flow_accum_log_preview.webp", "flow_preview_url"
-    ),
-    PreviewSpec(
-        "stream_network_preview.png", "stream_network_preview.webp", "stream_preview_url"
-    ),
+    PreviewSpec("panel_c_curvature.png", "panel_c_curvature.webp", "panel_c_curvature_url"),
+    PreviewSpec("flow_accum_log_preview.png", "flow_accum_log_preview.webp", "flow_preview_url"),
+    PreviewSpec("stream_network_preview.png", "stream_network_preview.webp", "stream_preview_url"),
 )
 
 
@@ -59,11 +58,25 @@ def migrate(output_root: Path, *, delete_old: bool = False) -> None:
         changed = 0
         for row in rows:
             result = row.get("result") or {}
+            out_dir = result.get("out_dir")
             for spec in PREVIEWS:
                 url = result.get(spec.url_field)
-                if isinstance(url, str) and url.endswith(f"/{spec.old_name}"):
-                    result[spec.url_field] = url[: -len(spec.old_name)] + spec.new_name
-                    changed += 1
+                if isinstance(url, str):
+                    if url.endswith(f"/{spec.old_name}"):
+                        result[spec.url_field] = url[: -len(spec.old_name)] + spec.new_name
+                        changed += 1
+                    continue
+                if not isinstance(out_dir, str):
+                    continue
+                webp_path = Path(out_dir) / spec.new_name
+                if not webp_path.exists():
+                    continue
+                try:
+                    rel = webp_path.resolve().relative_to(output_root.resolve())
+                except ValueError:
+                    continue
+                result[spec.url_field] = f"/outputs/{rel.as_posix()}"
+                changed += 1
         if changed:
             jobs_path.write_text(json.dumps(rows, indent=2) + "\n")
             print(f"updated {changed} jobs.json entries")
@@ -77,9 +90,7 @@ def cli(argv: list[str] | None = None) -> None:
         prog="canyongis-web-migrate-previews",
         description="Convert legacy .png overlays to downscaled WebP.",
     )
-    p.add_argument(
-        "--output-root", default="runs/web", help="Web output root (default: runs/web)."
-    )
+    p.add_argument("--output-root", default="runs/web", help="Web output root (default: runs/web).")
     p.add_argument(
         "--delete-old", action="store_true", help="Delete original .png after conversion."
     )

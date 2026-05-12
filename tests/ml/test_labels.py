@@ -54,7 +54,9 @@ def test_build_labels_from_kml_integration(tmp_path):
     from pyproj import Transformer
 
     t = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
-    line_proj = LineString([(500010, 4099968), (500050, 4099968)])  # horizontal line at y = 4099968 → row 32
+    line_proj = LineString(
+        [(500010, 4099968), (500050, 4099968)]
+    )  # horizontal line at y = 4099968 → row 32
     line_wgs = LineString([t.transform(x, y) for x, y in line_proj.coords])
     rappel_proj = (500020, 4099968)
     rappel_wgs = t.transform(*rappel_proj)

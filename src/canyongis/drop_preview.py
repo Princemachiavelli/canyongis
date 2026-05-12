@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 from dataclasses import dataclass
+from itertools import pairwise
 from pathlib import Path
 
 import numpy as np
@@ -211,8 +212,7 @@ def _write_comparison(
 def _stats(drop: np.ndarray, route_mask: np.ndarray) -> tuple[dict[str, float], dict[str, float]]:
     vals = drop[np.isfinite(drop)]
     quantiles = {
-        str(q): float(np.percentile(vals, q))
-        for q in (0, 50, 75, 90, 95, 99, 99.5, 99.9, 100)
+        str(q): float(np.percentile(vals, q)) for q in (0, 50, 75, 90, 95, 99, 99.5, 99.9, 100)
     }
     route_vals = drop[route_mask & np.isfinite(drop)]
     route_quantiles = (
@@ -322,7 +322,7 @@ def export_drop_previews(
             log_comparison_panels.append((f"log1p {scale}", log_crop))
 
         sorted_distances = sorted(drops_by_distance)
-        for small_m, large_m in zip(sorted_distances, sorted_distances[1:]):
+        for small_m, large_m in pairwise(sorted_distances):
             label = f"{_safe_scale_label(small_m)}-{_safe_scale_label(large_m)}"
             log(f"building band-pass preview {label} (weight={bandpass_weight:g})")
             bp = drops_by_distance[small_m] - bandpass_weight * drops_by_distance[large_m]
@@ -341,7 +341,7 @@ def export_drop_previews(
                 route_crop,
                 title=(
                     f"band-pass drop {label} "
-                    f"(small − {bandpass_weight:g}·large), clipped p{preview_percentile:g}"
+                    f"(small - {bandpass_weight:g}*large), clipped p{preview_percentile:g}"
                 ),
                 vmax=crop_vmax,
             )
@@ -361,7 +361,9 @@ def export_drop_previews(
 
     comparison_path = out_dir / f"{stem}_drop_to_lower_ground_comparison.png"
     log_comparison_path = out_dir / f"{stem}_drop_to_lower_ground_log_comparison.png"
-    shared_vmax = max(float(np.nanpercentile(values, preview_percentile)) for _, values in comparison_panels)
+    shared_vmax = max(
+        float(np.nanpercentile(values, preview_percentile)) for _, values in comparison_panels
+    )
     shared_log_vmax = max(
         float(np.nanpercentile(values, preview_percentile)) for _, values in log_comparison_panels
     )
@@ -446,7 +448,7 @@ def drop_previews_cli(argv: list[str] | None = None) -> None:
         default=0.5,
         help=(
             "Weight on the larger-radius drop in the band-pass preview "
-            "(small − weight·large), clipped at 0. Default: 0.5."
+            "(small - weight*large), clipped at 0. Default: 0.5."
         ),
     )
     args = parser.parse_args(argv)

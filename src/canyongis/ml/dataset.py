@@ -518,9 +518,7 @@ def build_tile_index(cache_dir: str | Path, cfg: MLConfig) -> list[TileRecord]:
             for c in range(0, w - tile + 1, stride):
                 patch = canyon_full[r : r + tile, c : c + tile]
                 has_pos = bool(patch.max() > cfg.positive_threshold)
-                records.append(
-                    TileRecord(dem_id=dem_id, row=r, col=c, has_positive=has_pos)
-                )
+                records.append(TileRecord(dem_id=dem_id, row=r, col=c, has_positive=has_pos))
     return records
 
 

@@ -1,7 +1,17 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, ExternalLink, Eye, Layers, Map, Play, RefreshCw, Square } from "lucide-react";
-import { buildDem, listJobs, runDrainage, runRavineCompare, runRavineSpine, type Bounds, type Job } from "./api";
+import { Activity, ExternalLink, Eye, Layers, LocateFixed, Map, Play, RefreshCw, Square, Upload } from "lucide-react";
+import {
+  buildDem,
+  importRopewikiKml,
+  listJobs,
+  runDrainage,
+  runRavineCompare,
+  runRavineSpine,
+  uploadKmlFile,
+  type Bounds,
+  type Job
+} from "./api";
 import { MapView } from "./MapView";
 import { useAppStore } from "./state";
 
@@ -11,21 +21,26 @@ function jobBoundsWgs84(job: Job): Bounds | undefined {
   return { west: arr[0], south: arr[1], east: arr[2], north: arr[3] };
 }
 
-function previewUrl(job: Job): { label: string; url: string } | undefined {
-  const result = job.result ?? {};
-  if (typeof result.stream_preview_url === "string") {
-    return { label: "Stream network", url: result.stream_preview_url };
+type PreviewLink = { key: string; label: string; url: string };
+
+const PREVIEW_FIELDS: ReadonlyArray<{ field: string; key: string; label: string }> = [
+  { field: "panel_hillshade_url", key: "hillshade", label: "Hillshade" },
+  { field: "panel_a_geomorphon_url", key: "geomorphon", label: "Geomorphon" },
+  { field: "panel_b_tpi_url", key: "tpi", label: "TPI" },
+  { field: "panel_c_curvature_url", key: "curvature", label: "Curvature" },
+  { field: "flow_preview_url", key: "flow", label: "Flow accumulation" },
+  { field: "stream_preview_url", key: "stream", label: "Stream network" },
+  { field: "compare_png_url", key: "compare", label: "Compare grid" }
+];
+
+function previewsFor(job: Job): PreviewLink[] {
+  const result = (job.result ?? {}) as Record<string, unknown>;
+  const out: PreviewLink[] = [];
+  for (const { field, key, label } of PREVIEW_FIELDS) {
+    const url = result[field];
+    if (typeof url === "string") out.push({ key, label, url });
   }
-  if (typeof result.flow_preview_url === "string") {
-    return { label: "Flow accumulation", url: result.flow_preview_url };
-  }
-  if (typeof result.panel_b_tpi_url === "string") {
-    return { label: "TPI", url: result.panel_b_tpi_url };
-  }
-  if (typeof result.compare_png_url === "string") {
-    return { label: "Ravine compare", url: result.compare_png_url };
-  }
-  return undefined;
+  return out;
 }
 
 type Area = {
@@ -105,22 +120,31 @@ function StatusBadge({ status }: { status: Job["status"] }) {
 }
 
 function ProgressTail({ job }: { job: Job }) {
-  if (!job.progress || job.progress.length === 0) return null;
   if (job.status !== "running" && job.status !== "queued" && job.status !== "failed") return null;
-  const tail = job.progress.slice(-4);
+  const tailCount = job.status === "failed" ? 20 : 4;
+  const tail = (job.progress ?? []).slice(-tailCount);
+  if (tail.length === 0 && !job.error) return null;
   return (
-    <pre className="progressTail">
-      {tail.map((line, i) => (
-        <div key={i}>{line}</div>
-      ))}
-    </pre>
+    <>
+      {tail.length > 0 && (
+        <pre className={`progressTail ${job.status === "failed" ? "failed" : ""}`}>
+          {tail.map((line, i) => (
+            <div key={i}>{line}</div>
+          ))}
+        </pre>
+      )}
+      {job.status === "failed" && job.error && (
+        <pre className="jobError">{job.error}</pre>
+      )}
+    </>
   );
 }
 
 function DerivedRow({ job, role }: { job: Job; role: "drainage" | "compare" | "spine" }) {
   const setActiveCompareJob = useAppStore((s) => s.setActiveCompareJob);
   const setOverlay = useAppStore((s) => s.setOverlay);
-  const preview = previewUrl(job);
+  const overlay = useAppStore((s) => s.overlay);
+  const previews = previewsFor(job);
   const bounds = jobBoundsWgs84(job);
   const spinesUrl = job.result?.spines_kml_url as string | undefined;
   const rappelUrl = job.result?.rappel_candidates_kml_url as string | undefined;
@@ -134,16 +158,30 @@ function DerivedRow({ job, role }: { job: Job; role: "drainage" | "compare" | "s
         {role === "compare" && job.status === "succeeded" && (
           <button onClick={() => setActiveCompareJob(job)}>Use as TPI</button>
         )}
-        {preview && bounds && job.status === "succeeded" && (
-          <button
-            onClick={() =>
-              setOverlay({ id: job.id, name: preview.label, url: preview.url, bounds })
-            }
-          >
-            <Eye size={12} />
-            Show {preview.label}
-          </button>
-        )}
+        {bounds &&
+          job.status === "succeeded" &&
+          previews.map((preview) => {
+            const isActive = overlay?.url === preview.url;
+            return (
+              <button
+                key={preview.key}
+                className={isActive ? "toggled" : ""}
+                onClick={() =>
+                  isActive
+                    ? setOverlay(undefined)
+                    : setOverlay({
+                        id: `${job.id}:${preview.key}`,
+                        name: preview.label,
+                        url: preview.url,
+                        bounds
+                      })
+                }
+              >
+                <Eye size={12} />
+                {preview.label}
+              </button>
+            );
+          })}
         {spinesUrl && (
           <a className="linkButton" href={spinesUrl} target="_blank" rel="noreferrer">
             <ExternalLink size={12} />
@@ -240,6 +278,51 @@ function AreaCard({ area }: { area: Area }) {
   );
 }
 
+function KmlImportRow({ job }: { job: Job }) {
+  const bounds = jobBoundsWgs84(job);
+  const setBounds = useAppStore((s) => s.setBounds);
+  const requestPan = useAppStore((s) => s.requestPan);
+  const toggleKml = useAppStore((s) => s.toggleKml);
+  const visible = useAppStore((s) => Boolean(s.visibleKmls[job.id]));
+  const name = (job.result?.name as string | undefined) ?? (job.params.name as string | undefined) ?? job.id;
+  const kmlUrl = job.result?.kml_url as string | undefined;
+
+  return (
+    <div className={`kmlImport ${job.status}`}>
+      <div className="derivedRowHead">
+        <div>
+          <strong>{name}</strong>
+          <code>{job.id}</code>
+        </div>
+        <StatusBadge status={job.status} />
+      </div>
+      {bounds && <div className="areaBounds">{formatBounds(bounds)}</div>}
+      <div className="derivedRowActions">
+        {bounds && job.status === "succeeded" && (
+          <>
+            <button className={visible ? "toggled" : ""} onClick={() => toggleKml(job.id)}>
+              <Eye size={12} />
+              {visible ? "Hide" : "Show"}
+            </button>
+            <button onClick={() => setBounds(bounds)}>Use bounds for AOI</button>
+            <button onClick={() => requestPan(bounds)}>
+              <LocateFixed size={12} />
+              Pan to
+            </button>
+          </>
+        )}
+        {kmlUrl && (
+          <a className="linkButton" href={kmlUrl} target="_blank" rel="noreferrer">
+            <ExternalLink size={12} />
+            KML
+          </a>
+        )}
+      </div>
+      <ProgressTail job={job} />
+    </div>
+  );
+}
+
 export function App() {
   const queryClient = useQueryClient();
   const bounds = useAppStore((state) => state.bounds);
@@ -252,6 +335,8 @@ export function App() {
   const footprintCount = useAppStore((state) => Object.keys(state.footprints).length);
   const [name, setName] = useState("aoi");
   const [bufferM, setBufferM] = useState(200);
+  const [kmlFile, setKmlFile] = useState<File | undefined>();
+  const [ropewikiSource, setRopewikiSource] = useState("");
 
   const jobsQuery = useQuery({
     queryKey: ["jobs"],
@@ -261,6 +346,7 @@ export function App() {
 
   const jobs = jobsQuery.data ?? [];
   const areas = useMemo(() => groupAreas(jobs), [jobs]);
+  const kmlImports = useMemo(() => jobs.filter((j) => j.kind === "kml-import"), [jobs]);
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["jobs"] });
   const buildMutation = useMutation({
@@ -291,6 +377,27 @@ export function App() {
     },
     onSuccess: invalidate
   });
+  const uploadKmlMutation = useMutation({
+    mutationFn: () => {
+      if (!kmlFile) throw new Error("Choose a KML file first");
+      return uploadKmlFile(kmlFile);
+    },
+    onSuccess: () => {
+      setKmlFile(undefined);
+      invalidate();
+    }
+  });
+  const ropewikiKmlMutation = useMutation({
+    mutationFn: () => {
+      const source = ropewikiSource.trim();
+      if (!source) throw new Error("Enter a Ropewiki URL or title");
+      return importRopewikiKml(source);
+    },
+    onSuccess: () => {
+      setRopewikiSource("");
+      invalidate();
+    }
+  });
 
   const error = useMemo(() => {
     return (
@@ -298,9 +405,19 @@ export function App() {
       drainageMutation.error ??
       compareMutation.error ??
       spineMutation.error ??
+      uploadKmlMutation.error ??
+      ropewikiKmlMutation.error ??
       jobsQuery.error
     );
-  }, [buildMutation.error, drainageMutation.error, compareMutation.error, spineMutation.error, jobsQuery.error]);
+  }, [
+    buildMutation.error,
+    drainageMutation.error,
+    compareMutation.error,
+    spineMutation.error,
+    uploadKmlMutation.error,
+    ropewikiKmlMutation.error,
+    jobsQuery.error
+  ]);
 
   return (
     <main className="shell">
@@ -339,6 +456,31 @@ export function App() {
             <Play size={16} />
             Build DEM Mosaic
           </button>
+
+          <div className="importPanel">
+            <div className="jobsHeader">
+              <Upload size={16} />
+              <h2>Import KML</h2>
+            </div>
+            <label>
+              KML file
+              <input
+                type="file"
+                accept=".kml,application/vnd.google-earth.kml+xml"
+                onChange={(event) => setKmlFile(event.target.files?.[0])}
+              />
+            </label>
+            <button disabled={!kmlFile || uploadKmlMutation.isPending} onClick={() => uploadKmlMutation.mutate()}>
+              Upload KML
+            </button>
+            <label>
+              Ropewiki URL or title
+              <input value={ropewikiSource} onChange={(event) => setRopewikiSource(event.target.value)} />
+            </label>
+            <button disabled={!ropewikiSource.trim() || ropewikiKmlMutation.isPending} onClick={() => ropewikiKmlMutation.mutate()}>
+              Import Ropewiki KML
+            </button>
+          </div>
 
           <div className="toolGroup">
             <button disabled={!activeDemJob || drainageMutation.isPending} onClick={() => drainageMutation.mutate()}>
@@ -389,6 +531,17 @@ export function App() {
             ))}
           </div>
 
+          <div className="areas">
+            <div className="jobsHeader">
+              <Map size={16} />
+              <h2>KML imports</h2>
+            </div>
+            {kmlImports.length === 0 && <div className="empty">No KMLs imported yet.</div>}
+            {kmlImports.map((job) => (
+              <KmlImportRow key={job.id} job={job} />
+            ))}
+          </div>
+
           <details className="allJobs">
             <summary>
               <Activity size={14} />
@@ -409,7 +562,7 @@ export function App() {
         </aside>
 
         <section className="mapFrame">
-          <MapView />
+          <MapView kmlImports={kmlImports} />
         </section>
       </section>
     </main>

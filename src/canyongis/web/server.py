@@ -12,8 +12,9 @@ from pathlib import Path
 from threading import Lock
 from typing import Any, Literal
 
+import geopandas as gpd
 import rasterio
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, File, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -21,8 +22,16 @@ from rasterio.warp import transform_bounds
 
 from ..aoi_mosaic import build_aoi_dem_mosaic
 from ..drainage_preview import export_drainage_previews
+from ..ingest import (
+    ROPEWIKI_PAGE_URL,
+    _download_file,
+    _find_kml_file_title,
+    _get_kml_download_url,
+    parse_ropewiki_ref,
+)
 from ..ravine_compare import export_ravine_compare
 from ..ravine_spine import export_ravine_spines
+from ..validate import parse_kml
 
 JobStatus = Literal["queued", "running", "succeeded", "failed"]
 
@@ -106,6 +115,10 @@ class RavineSpineRequest(BaseModel):
     max_path_slope: float = 0.30
 
 
+class RopewikiImportRequest(BaseModel):
+    source: str = Field(..., min_length=1)
+
+
 class WebContext:
     def __init__(self, output_root: Path, frontend_dist: Path | None = None) -> None:
         self.output_root = output_root
@@ -119,7 +132,7 @@ class WebContext:
     def now(self) -> str:
         return datetime.now(UTC).isoformat()
 
-    def submit(self, kind: str, params: dict[str, Any], fn) -> Job:
+    def submit(self, kind: str, params: dict[str, Any], fn, *, include_job_id: bool = False) -> Job:
         """Submit a job. fn is called as fn(progress_cb) on a worker thread.
         progress_cb appends a line to the job's progress log."""
         job = Job(
@@ -133,17 +146,17 @@ class WebContext:
         with self.lock:
             self.store.jobs[job.id] = job
             self.store.save()
-        self.executor.submit(self._run, job.id, fn)
+        self.executor.submit(self._run, job.id, fn, include_job_id)
         return job
 
-    def _run(self, job_id: str, fn) -> None:
+    def _run(self, job_id: str, fn, include_job_id: bool) -> None:
         self._update(job_id, status="running")
 
         def progress_cb(line: str) -> None:
             self.append_progress(job_id, line)
 
         try:
-            result = fn(progress_cb)
+            result = fn(progress_cb, job_id) if include_job_id else fn(progress_cb)
         except Exception as exc:  # pragma: no cover - exercised by real jobs
             self._update(job_id, status="failed", error=f"{exc}\n{traceback.format_exc()}")
             return
@@ -195,6 +208,13 @@ def _safe_name(value: str) -> str:
     return safe or "aoi"
 
 
+def _safe_kml_name(value: str) -> str:
+    name = _safe_name(Path(value).name)
+    if not name.lower().endswith(".kml"):
+        name = f"{Path(name).stem}.kml"
+    return name
+
+
 def _raster_bounds_wgs84(path: str | Path) -> tuple[float, float, float, float]:
     with rasterio.open(path) as src:
         bounds = src.bounds
@@ -204,6 +224,56 @@ def _raster_bounds_wgs84(path: str | Path) -> tuple[float, float, float, float]:
                 src.crs, "EPSG:4326", bounds.left, bounds.bottom, bounds.right, bounds.top
             )
         )
+
+
+def _gdf_to_geojson(gdf: gpd.GeoDataFrame) -> dict[str, Any]:
+    if gdf.empty:
+        return {"type": "FeatureCollection", "features": []}
+    return json.loads(gdf.to_json())
+
+
+def _build_kml_import_result(
+    ctx: WebContext,
+    kml_path: Path,
+    name: str,
+    *,
+    source: dict[str, Any],
+) -> dict[str, Any]:
+    features = parse_kml(kml_path)
+    all_geoms = []
+    for gdf in (
+        features.descent_lines,
+        features.approach_lines,
+        features.unclassified_lines,
+        features.points,
+    ):
+        if not gdf.empty:
+            all_geoms.extend(gdf.geometry.tolist())
+    if not all_geoms:
+        raise ValueError("KML contains no geometry (no LineStrings or Points)")
+    combined = gpd.GeoSeries(all_geoms, crs="EPSG:4326")
+    west, south, east, north = (float(v) for v in combined.total_bounds)
+    return {
+        "name": name,
+        "kml_path": str(kml_path),
+        "kml_url": ctx.output_url(kml_path),
+        "bounds_wgs84": [west, south, east, north],
+        "descent_geojson": _gdf_to_geojson(features.descent_lines),
+        "approach_geojson": _gdf_to_geojson(features.approach_lines),
+        "unclassified_geojson": _gdf_to_geojson(features.unclassified_lines),
+        "points_geojson": _gdf_to_geojson(features.points),
+        "counts": {
+            "descent_lines": int(len(features.descent_lines)),
+            "approach_lines": int(len(features.approach_lines)),
+            "unclassified_lines": int(len(features.unclassified_lines)),
+            "points": int(len(features.points)),
+        },
+        "source": source,
+    }
+
+
+def _kml_import_path(ctx: WebContext, job_id: str, name: str) -> Path:
+    return ctx.output_root / "kml" / job_id / _safe_kml_name(name)
 
 
 def create_app(
@@ -252,6 +322,75 @@ def create_app(
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str) -> dict[str, Any]:
         return asdict(ctx.job_or_404(job_id))
+
+    @app.post("/api/jobs/import-kml-file")
+    async def import_kml_file(file: UploadFile = File(...)) -> dict[str, Any]:
+        original_name = file.filename or "uploaded.kml"
+        if not original_name.lower().endswith(".kml"):
+            raise HTTPException(status_code=400, detail="uploaded file must have a .kml extension")
+        content = await file.read()
+        if not content:
+            raise HTTPException(status_code=400, detail="uploaded KML file is empty")
+        name = _safe_kml_name(original_name)
+        params = {"name": name, "filename": original_name}
+
+        def run(progress_cb, job_id: str) -> dict[str, Any]:
+            kml_path = _kml_import_path(ctx, job_id, name)
+            kml_path.parent.mkdir(parents=True, exist_ok=True)
+            progress_cb(f"import-kml-file -> {kml_path}")
+            kml_path.write_bytes(content)
+            return _build_kml_import_result(
+                ctx,
+                kml_path,
+                Path(name).stem,
+                source={"type": "file", "filename": original_name},
+            )
+
+        job = ctx.submit("kml-import", params, run, include_job_id=True)
+        return asdict(job)
+
+    @app.post("/api/jobs/import-kml-ropewiki")
+    def import_kml_ropewiki(req: RopewikiImportRequest) -> dict[str, Any]:
+        source = req.source.strip()
+        if not source:
+            raise HTTPException(status_code=400, detail="source is required")
+        params = {"source": source}
+
+        def run(progress_cb, job_id: str) -> dict[str, Any]:
+            ref = parse_ropewiki_ref(source)
+            file_title, page_title = _find_kml_file_title(ref)
+            if file_title is None:
+                raise ValueError(f"Ropewiki page has no KML attachment: {source}")
+            download_url = _get_kml_download_url(file_title)
+            if download_url is None:
+                raise ValueError(f"Ropewiki KML has no download URL: {file_title}")
+
+            name = _safe_kml_name(file_title.removeprefix("File:"))
+            kml_path = _kml_import_path(ctx, job_id, name)
+            kml_path.parent.mkdir(parents=True, exist_ok=True)
+            progress_cb(f"download Ropewiki KML {file_title} -> {kml_path}")
+            _download_file(download_url, kml_path)
+            page_url = (
+                ROPEWIKI_PAGE_URL.format(title=page_title.replace(" ", "_"))
+                if page_title
+                else source
+            )
+            return _build_kml_import_result(
+                ctx,
+                kml_path,
+                Path(name).stem,
+                source={
+                    "type": "ropewiki",
+                    "source": source,
+                    "page_title": page_title,
+                    "page_url": page_url,
+                    "file_title": file_title,
+                    "download_url": download_url,
+                },
+            )
+
+        job = ctx.submit("kml-import", params, run, include_job_id=True)
+        return asdict(job)
 
     @app.post("/api/jobs/build-dem")
     def build_dem(req: BuildDemRequest) -> dict[str, Any]:
@@ -334,7 +473,10 @@ def create_app(
                 "bounds_wgs84": bounds,
                 "b_tpi_path": str(out_dir / "b_tpi.tif"),
                 "compare_png_url": ctx.output_url(result.compare_png_path),
+                "panel_hillshade_url": ctx.output_url(out_dir / "panel_hillshade.webp"),
+                "panel_a_geomorphon_url": ctx.output_url(out_dir / "panel_a_geomorphon.webp"),
                 "panel_b_tpi_url": ctx.output_url(out_dir / "panel_b_tpi.webp"),
+                "panel_c_curvature_url": ctx.output_url(out_dir / "panel_c_curvature.webp"),
             }
 
         job = ctx.submit("ravine-compare", params, run)

@@ -4,7 +4,7 @@ Three complementary scoring modes:
 
 1. **Line buffer** — buffer the descent LineString and count detected rappels inside.
    Good when the KML line is reasonably accurate, but hand-drawn traces often sit
-   20–80 m off the real flow-accumulation thalweg, making tight buffers misleading.
+   20-80 m off the real flow-accumulation thalweg, making tight buffers misleading.
 
 2. **Stream buffer** (``--stream-buffer-m N``) — buffer the *computed* stream
    network (flow_accum.tif, thresholded) by N meters. Sidesteps hand-drawn-line
@@ -230,13 +230,13 @@ def _score_points_against_geom(pts_proj: gpd.GeoDataFrame, buffer_geom: Any) -> 
         return df[height_col].to_numpy(dtype=np.float32)
 
     return {
-        "total": int(len(pts_proj)),
+        "total": len(pts_proj),
         "inside": {
-            "count": int(len(inside)),
+            "count": len(inside),
             "heights": _describe_heights(_h(inside)),
         },
         "outside": {
-            "count": int(len(outside)),
+            "count": len(outside),
             "heights": _describe_heights(_h(outside)),
         },
     }
@@ -250,8 +250,8 @@ def _score_polys(polys_gpkg: Path, descent_line_proj: Any, proj_crs: Any) -> dic
     hits = polys_proj[polys_proj.geometry.intersects(descent_line_proj)]
     areas = polys_proj.geometry.area.to_numpy()
     return {
-        "total": int(len(polys_proj)),
-        "intersecting_descent": int(len(hits)),
+        "total": len(polys_proj),
+        "intersecting_descent": len(hits),
         "area_m2": {
             "min": float(areas.min()) if areas.size else 0.0,
             "median": float(np.median(areas)) if areas.size else 0.0,
@@ -396,9 +396,9 @@ def _score_points_against_mask(
         return df[height_col].to_numpy(dtype=np.float32)
 
     return {
-        "total": int(len(pts_proj)),
-        "inside": {"count": int(len(inside)), "heights": _describe_heights(_h(inside))},
-        "outside": {"count": int(len(outside)), "heights": _describe_heights(_h(outside))},
+        "total": len(pts_proj),
+        "inside": {"count": len(inside), "heights": _describe_heights(_h(inside))},
+        "outside": {"count": len(outside), "heights": _describe_heights(_h(outside))},
     }
 
 
@@ -473,9 +473,7 @@ def validate_run(
                 "stream-buffer mode requested but flow_accum.tif not found or empty"
             )
         else:
-            rep.rappel_points_stream = _score_points_against_mask(
-                pts_proj, smask, str_tr, str_crs
-            )
+            rep.rappel_points_stream = _score_points_against_mask(pts_proj, smask, str_tr, str_crs)
 
     # --- Named-point distances (legacy, kept for context) ---
     legacy_names = (
@@ -504,11 +502,11 @@ def validate_run(
 # -----------------------------------------------------------------------------
 
 _KML_COLORS = {
-    "descent": "ff0000ff",   # red (aabbggrr)
+    "descent": "ff0000ff",  # red (aabbggrr)
     "approach": "ffff7800",  # blue-ish
     "detected": "ff00ff00",  # green
-    "route": "ff00aaff",     # amber
-    "gt_rappel": "ff00ffff", # yellow
+    "route": "ff00aaff",  # amber
+    "gt_rappel": "ff00ffff",  # yellow
 }
 
 
@@ -543,57 +541,67 @@ def export_validation_kml(
     """Write a combined KML: Ground Truth lines/points, Detected Rappels, Candidate Routes."""
     import xml.etree.ElementTree as _ET  # noqa: F401 (already imported at module level)
 
-    lines = ['<?xml version="1.0" encoding="UTF-8"?>',
-             '<kml xmlns="http://www.opengis.net/kml/2.2"><Document>',
-             '<name>CanyonGIS Validation</name>']
+    lines = [
+        '<?xml version="1.0" encoding="UTF-8"?>',
+        '<kml xmlns="http://www.opengis.net/kml/2.2"><Document>',
+        "<name>CanyonGIS Validation</name>",
+    ]
 
     # --- Ground Truth folder ---
-    lines.append('<Folder><name>Ground Truth</name>')
+    lines.append("<Folder><name>Ground Truth</name>")
     for _, row in features.descent_lines.iterrows():
         geom = row.geometry
-        coords = list(geom.coords) if geom.geom_type == "LineString" else [
-            c for part in geom.geoms for c in part.coords
-        ]
-        ls = type('_', (), {'coords': coords})()
+        coords = (
+            list(geom.coords)
+            if geom.geom_type == "LineString"
+            else [c for part in geom.geoms for c in part.coords]
+        )
+        ls = type("_", (), {"coords": coords})()
         lines.append(_kml_line_placemark(row["name"], ls, _KML_COLORS["descent"]))
 
     for _, row in features.approach_lines.iterrows():
         geom = row.geometry
-        coords = list(geom.coords) if geom.geom_type == "LineString" else [
-            c for part in geom.geoms for c in part.coords
-        ]
-        ls = type('_', (), {'coords': coords})()
+        coords = (
+            list(geom.coords)
+            if geom.geom_type == "LineString"
+            else [c for part in geom.geoms for c in part.coords]
+        )
+        ls = type("_", (), {"coords": coords})()
         lines.append(_kml_line_placemark(row["name"], ls, _KML_COLORS["approach"]))
 
     gt_pts = features.rappel_points()
     if not gt_pts.empty:
         for _, row in gt_pts.iterrows():
-            lines.append(_kml_point_placemark(
-                row["name"], row.geometry.x, row.geometry.y, _KML_COLORS["gt_rappel"]
-            ))
-    lines.append('</Folder>')
+            lines.append(
+                _kml_point_placemark(
+                    row["name"], row.geometry.x, row.geometry.y, _KML_COLORS["gt_rappel"]
+                )
+            )
+    lines.append("</Folder>")
 
     # --- Detected Rappels folder ---
-    lines.append('<Folder><name>Detected Rappels</name>')
+    lines.append("<Folder><name>Detected Rappels</name>")
     if not detected_rappels.empty:
         det_wgs = detected_rappels.to_crs("EPSG:4326")
         for i, row in det_wgs.iterrows():
             drop = row.get("drop_height_m", None)
-            label = f"R{i+1} ({drop:.0f}m)" if drop is not None else f"R{i+1}"
+            label = f"R{i + 1} ({drop:.0f}m)" if drop is not None else f"R{i + 1}"
             desc = f"drop_height_m: {drop:.1f}" if drop is not None else ""
-            lines.append(_kml_point_placemark(
-                label, row.geometry.x, row.geometry.y, _KML_COLORS["detected"], desc
-            ))
-    lines.append('</Folder>')
+            lines.append(
+                _kml_point_placemark(
+                    label, row.geometry.x, row.geometry.y, _KML_COLORS["detected"], desc
+                )
+            )
+    lines.append("</Folder>")
 
     # --- Candidate Routes folder (full polygons) ---
     if candidate_routes_gpkg is not None and candidate_routes_gpkg.exists():
         routes = gpd.read_file(candidate_routes_gpkg).to_crs("EPSG:4326")
         if not routes.empty:
-            lines.append('<Folder><name>Candidate Routes</name>')
+            lines.append("<Folder><name>Candidate Routes</name>")
             for i, row in routes.iterrows():
                 desc_m = row.get("total_descent_m", None)
-                label = f"Route {i+1}"
+                label = f"Route {i + 1}"
                 desc = f"descent: {desc_m:.0f}m" if desc_m is not None else ""
                 geom = row.geometry
                 polys = list(geom.geoms) if geom.geom_type == "MultiPolygon" else [geom]
@@ -612,9 +620,9 @@ def export_validation_kml(
                         f"<Polygon><outerBoundaryIs><LinearRing><coordinates>{outer}</coordinates>"
                         f"</LinearRing></outerBoundaryIs>{inner_rings}</Polygon></Placemark>\n"
                     )
-            lines.append('</Folder>')
+            lines.append("</Folder>")
 
-    lines.append('</Document></kml>')
+    lines.append("</Document></kml>")
     out_path.parent.mkdir(parents=True, exist_ok=True)
     out_path.write_text("\n".join(lines), encoding="utf-8")
 

@@ -37,6 +37,7 @@ def _soft_skeleton(p: torch.Tensor, iters: int) -> torch.Tensor:
     Iteratively erode + open, subtract to accumulate a soft skeleton approximation.
     Operates on (B, 1, H, W) tensors in [0, 1].
     """
+
     def erode(x):
         return -F.max_pool2d(-x, kernel_size=3, stride=1, padding=1)
 
@@ -121,9 +122,7 @@ class MultiTaskLoss(nn.Module):
         cld = soft_cldice(
             c_logits, c_target, iters=self.cfg.cldice_iter, smooth=self.cfg.cldice_smooth
         )
-        canyon = (
-            self.cfg.bce_cldice_ratio * bce + (1.0 - self.cfg.bce_cldice_ratio) * cld
-        )
+        canyon = self.cfg.bce_cldice_ratio * bce + (1.0 - self.cfg.bce_cldice_ratio) * cld
         rappel = gaussian_focal_loss(
             r_logits, r_target, alpha=self.cfg.focal_gamma, beta=self.cfg.focal_beta
         )

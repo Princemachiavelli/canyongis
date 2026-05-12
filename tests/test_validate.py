@@ -5,6 +5,7 @@ from __future__ import annotations
 from pathlib import Path
 
 import geopandas as gpd
+import numpy as np
 import pytest
 from shapely.geometry import LineString, Point
 
@@ -15,8 +16,6 @@ from canyongis.validate import (
     parse_kml,
     validate_run,
 )
-
-import numpy as np
 
 FIXTURE_KML = Path.home() / "Downloads" / "Great_Falls_of_the_Fox.kml"
 FIXTURE_KML_FOX = Path.home() / "Downloads" / "Fantastic_Mr._Fox_Canyon.kml"
@@ -96,9 +95,7 @@ def test_score_points_inside_outside(tmp_path):
     # Build a short descent line in UTM 11N (matches the project's DEM CRS)
     crs = "EPSG:26911"
     line = LineString([(400000, 3790000), (400100, 3790000)])
-    descent_gdf = gpd.GeoDataFrame(
-        {"name": ["Fake Descent"], "geometry": [line]}, crs=crs
-    )
+    descent_gdf = gpd.GeoDataFrame({"name": ["Fake Descent"], "geometry": [line]}, crs=crs)
 
     inside_pts = [Point(400010, 3790005), Point(400050, 3790010), Point(400090, 3789995)]
     outside_pts = [Point(400500, 3790500), Point(399000, 3789000)]
@@ -147,9 +144,7 @@ def test_rappel_point_pattern_recognition():
     assert not RAPPEL_POINT_PATTERN.search("Summit")
 
 
-@pytest.mark.skipif(
-    not FIXTURE_KML_FOX.exists(), reason="Fantastic_Mr._Fox_Canyon.kml not present"
-)
+@pytest.mark.skipif(not FIXTURE_KML_FOX.exists(), reason="Fantastic_Mr._Fox_Canyon.kml not present")
 def test_parse_fantastic_mr_fox_kml():
     feats = parse_kml(FIXTURE_KML_FOX)
     # Three classified lines: Descent (+Exit is approach), Approach, Exit.
@@ -180,15 +175,16 @@ def test_ground_truth_rappels_scoring(tmp_path):
     gt_coords_utm = [(400000, 3790000), (400100, 3790050)]
     # Build a KML in WGS84
     from pyproj import Transformer
+
     t = Transformer.from_crs(crs, "EPSG:4326", always_xy=True)
     kml_coords = [t.transform(x, y) for x, y in gt_coords_utm]
 
     kml = tmp_path / "synth.kml"
     kml.write_text(
         '<?xml version="1.0"?><kml xmlns="http://www.opengis.net/kml/2.2"><Document>'
-        f'<Placemark><name>Rappel 1</name><Point><coordinates>{kml_coords[0][0]},{kml_coords[0][1]},0</coordinates></Point></Placemark>'
-        f'<Placemark><name>Rappel 2</name><Point><coordinates>{kml_coords[1][0]},{kml_coords[1][1]},0</coordinates></Point></Placemark>'
-        '</Document></kml>'
+        f"<Placemark><name>Rappel 1</name><Point><coordinates>{kml_coords[0][0]},{kml_coords[0][1]},0</coordinates></Point></Placemark>"
+        f"<Placemark><name>Rappel 2</name><Point><coordinates>{kml_coords[1][0]},{kml_coords[1][1]},0</coordinates></Point></Placemark>"
+        "</Document></kml>"
     )
 
     # Detections: one 10m from Rappel 1 (HIT), one 100m from Rappel 2 (miss)

@@ -20,12 +20,13 @@ export type Job = {
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
+  const headers = new Headers(init?.headers);
+  if (!(init?.body instanceof FormData) && !headers.has("content-type")) {
+    headers.set("content-type", "application/json");
+  }
   const res = await fetch(path, {
     ...init,
-    headers: {
-      "content-type": "application/json",
-      ...(init?.headers ?? {})
-    }
+    headers
   });
   if (!res.ok) {
     throw new Error(await res.text());
@@ -42,6 +43,22 @@ export async function buildDem(name: string, bounds: Bounds, bufferM: number): P
   return request<Job>("/api/jobs/build-dem", {
     method: "POST",
     body: JSON.stringify({ name, bounds, buffer_m: bufferM })
+  });
+}
+
+export async function uploadKmlFile(file: File): Promise<Job> {
+  const body = new FormData();
+  body.append("file", file);
+  return request<Job>("/api/jobs/import-kml-file", {
+    method: "POST",
+    body
+  });
+}
+
+export async function importRopewikiKml(source: string): Promise<Job> {
+  return request<Job>("/api/jobs/import-kml-ropewiki", {
+    method: "POST",
+    body: JSON.stringify({ source })
   });
 }
 

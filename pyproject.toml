@@ -31,6 +31,7 @@ dependencies = [
   "pyogrio",
   "folium",
   "fastapi",
+  "python-multipart",
   "Pillow",
   "pandas",
   "zarr",
@@ -87,6 +88,11 @@ select = [
 ignore = [
   "E501", # line length handled by formatter
 ]
+
+[tool.ruff.lint.per-file-ignores]
+# Greek letters (γ, α, β) in this docstring are intentional math notation
+# matching the function's alpha/beta parameters; not ambiguous to a reader.
+"src/canyongis/ml/losses.py" = ["RUF002"]
 
 [tool.ruff.format]
 quote-style = "double"

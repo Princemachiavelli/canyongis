@@ -106,7 +106,7 @@ def compute_a_geomorphon(
     score = None
     forms_paths: list[str] = []
     for scale_m in scales_m:
-        sub = work_dir / f"geomorphon_{int(round(scale_m))}m"
+        sub = work_dir / f"geomorphon_{round(scale_m)}m"
         sub.mkdir(parents=True, exist_ok=True)
         export_geomorphons(
             dem_path,
@@ -446,8 +446,10 @@ def export_ravine_compare(
     hillshade = compute_hillshade(elev, pixel_size)
 
     emit(f"computing A (geomorphon, scales={geomorphon_scales_m}m)")
-    work_root = out_dir / "_geomorphon_work" if keep_geomorphon_work else Path(
-        tempfile.mkdtemp(prefix="ravine_compare_geo_")
+    work_root = (
+        out_dir / "_geomorphon_work"
+        if keep_geomorphon_work
+        else Path(tempfile.mkdtemp(prefix="ravine_compare_geo_"))
     )
     try:
         a_score, a_meta = compute_a_geomorphon(
@@ -505,17 +507,23 @@ def export_ravine_compare(
             _overlay_kml_mask(img, kml_mask, opacity=kml_opacity, width_px=kml_width_px)
 
     a_label = "A. geomorphon (hollow|valley count)"
-    scales_str = ",".join(f"{int(round(s))}" if s == int(s) else f"{s:g}" for s in tpi_scales_m)
+    scales_str = ",".join(f"{round(s)}" if s == int(s) else f"{s:g}" for s in tpi_scales_m)
     b_label = f"B. multi-scale TPI [{tpi_combine}, {scales_str}m]"
     c_label = "C. plan curvature"
     hs_label = "hillshade" + (" + KML" if kml_mask is not None and kml_mask.any() else "")
 
-    hs_panel.save(out_dir / "panel_hillshade.png")
-    a_panel.save(out_dir / "panel_a_geomorphon.png")
+    _downsample_by_factor(hs_panel, OVERLAY_DOWNSAMPLE_FACTOR).save(
+        out_dir / "panel_hillshade.webp", quality=85, method=4
+    )
+    _downsample_by_factor(a_panel, OVERLAY_DOWNSAMPLE_FACTOR).save(
+        out_dir / "panel_a_geomorphon.webp", quality=85, method=4
+    )
     _downsample_by_factor(b_panel, OVERLAY_DOWNSAMPLE_FACTOR).save(
         out_dir / "panel_b_tpi.webp", quality=85, method=4
     )
-    c_panel.save(out_dir / "panel_c_curvature.png")
+    _downsample_by_factor(c_panel, OVERLAY_DOWNSAMPLE_FACTOR).save(
+        out_dir / "panel_c_curvature.webp", quality=85, method=4
+    )
 
     panels_small = [
         _label_panel(_downsample(hs_panel, display_max_px // 2), hs_label),

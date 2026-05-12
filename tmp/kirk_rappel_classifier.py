@@ -21,9 +21,9 @@ OUT_PNG = Path("tmp/kirk-previews/Kirk_Creek_Canyon_ternary_rappel_classificatio
 
 # (form_code, ternary_code) → (label, RGB)
 RULES: dict[tuple[int, int], tuple[str, tuple[int, int, int]]] = {
-    (6, 80):  ("slope · 00002222 (rim/wall split)", (255, 64, 64)),    # red
-    (5, 26):  ("spur · 00000222 (asymmetric rim)",  (255, 165, 0)),    # orange
-    (7, 242): ("hollow · 00222222 (encased lip)",   (255, 230, 0)),    # yellow
+    (6, 80): ("slope · 00002222 (rim/wall split)", (255, 64, 64)),  # red
+    (5, 26): ("spur · 00000222 (asymmetric rim)", (255, 165, 0)),  # orange
+    (7, 242): ("hollow · 00222222 (encased lip)", (255, 230, 0)),  # yellow
 }
 BANDPASS_THRESHOLD_M = 1.5
 
@@ -81,7 +81,9 @@ def main() -> None:
     # Legend strip on the right.
     legend_w = 520
     title_h = 40
-    final = Image.new("RGB", (img.width + legend_w, max(img.height, 60 * (len(RULES) + 3)) + title_h), "white")
+    final = Image.new(
+        "RGB", (img.width + legend_w, max(img.height, 60 * (len(RULES) + 3)) + title_h), "white"
+    )
     final.paste(img, (0, title_h))
     draw = ImageDraw.Draw(final)
     try:
@@ -93,8 +95,12 @@ def main() -> None:
         font_sm = font
         font_title = font
 
-    draw.text((10, 8), f"Kirk Creek — ternary rappel classification (bandpass 2m-5m ≥ {BANDPASS_THRESHOLD_M:.1f}m)",
-              fill=(0, 0, 0), font=font_title)
+    draw.text(
+        (10, 8),
+        f"Kirk Creek — ternary rappel classification (bandpass 2m-5m ≥ {BANDPASS_THRESHOLD_M:.1f}m)",
+        fill=(0, 0, 0),
+        font=font_title,
+    )
 
     lx = img.width + 16
     ly = title_h + 16
@@ -103,15 +109,23 @@ def main() -> None:
     for (fc, tc), (label, color) in RULES.items():
         draw.rectangle([lx, ly, lx + 28, ly + 22], fill=color, outline=(0, 0, 0))
         draw.text((lx + 38, ly + 1), f"form={fc} · tern={tc}", fill=(0, 0, 0), font=font)
-        draw.text((lx + 38, ly + 22), f"  {label}  · n={counts[(fc, tc)]}", fill=(60, 60, 60), font=font_sm)
+        draw.text(
+            (lx + 38, ly + 22),
+            f"  {label}  · n={counts[(fc, tc)]}",
+            fill=(60, 60, 60),
+            font=font_sm,
+        )
         ly += 56
 
     draw.rectangle([lx, ly, lx + 28, ly + 22], fill=(0, 255, 255), outline=(0, 0, 0))
     draw.text((lx + 38, ly + 1), "descent line (KML)", fill=(0, 0, 0), font=font)
     ly += 36
-    draw.text((lx, ly + 8),
-              f"Total matched pixels: {int(matched_total.sum()):,}",
-              fill=(0, 0, 0), font=font)
+    draw.text(
+        (lx, ly + 8),
+        f"Total matched pixels: {int(matched_total.sum()):,}",
+        fill=(0, 0, 0),
+        font=font,
+    )
 
     OUT_PNG.parent.mkdir(parents=True, exist_ok=True)
     final.save(OUT_PNG)

@@ -102,7 +102,9 @@ def _safe_output_nodata(nodata: float | int | None, dtype: str) -> float | int:
     return nodata
 
 
-def _descent_bounds_in_crs(kml_path: str | Path, crs, buffer_m: float) -> tuple[float, float, float, float]:
+def _descent_bounds_in_crs(
+    kml_path: str | Path, crs, buffer_m: float
+) -> tuple[float, float, float, float]:
     features = parse_kml(kml_path)
     if features.descent_lines.empty:
         raise ValueError(f"KML has no descent lines: {kml_path}")
@@ -128,11 +130,15 @@ def _intersects_bounds(path: Path, bounds: tuple[float, float, float, float]) ->
         return box(*bounds).intersects(box(*src.bounds))
 
 
-def _bounds_intersect(a: tuple[float, float, float, float], b: tuple[float, float, float, float]) -> bool:
+def _bounds_intersect(
+    a: tuple[float, float, float, float], b: tuple[float, float, float, float]
+) -> bool:
     return not (a[2] < b[0] or b[2] < a[0] or a[3] < b[1] or b[3] < a[1])
 
 
-def _bounds_union(bounds: list[tuple[float, float, float, float]]) -> tuple[float, float, float, float]:
+def _bounds_union(
+    bounds: list[tuple[float, float, float, float]],
+) -> tuple[float, float, float, float]:
     if not bounds:
         raise ValueError("bounds must not be empty")
     return (
@@ -187,8 +193,7 @@ def _planned_mosaic_bounds_wgs84(
                 intersecting.append(path)
     if not intersecting:
         raise ValueError(
-            "no source DEM intersects buffered descent bounds for "
-            f"{', '.join(map(str, kml_paths))}"
+            f"no source DEM intersects buffered descent bounds for {', '.join(map(str, kml_paths))}"
         )
 
     with rasterio.open(intersecting[0]) as src:
@@ -300,7 +305,9 @@ def _descent_coverage_counts(kml_path: str | Path, dem_path: str | Path) -> tupl
         dem_bounds = box(*src.bounds)
         descent_bounds = box(*descent.total_bounds)
         if not dem_bounds.covers(descent_bounds):
-            raise ValueError(f"DEM bounds do not fully cover descent bounds: {kml_path} -> {dem_path}")
+            raise ValueError(
+                f"DEM bounds do not fully cover descent bounds: {kml_path} -> {dem_path}"
+            )
 
         geoms = [
             (geom, 1)
@@ -390,7 +397,9 @@ def _write_kml_mosaic(
     try:
         for src in srcs:
             if src.crs != crs:
-                raise ValueError(f"source DEM CRS mismatch: {src.name} has {src.crs}, expected {crs}")
+                raise ValueError(
+                    f"source DEM CRS mismatch: {src.name} has {src.crs}, expected {crs}"
+                )
         res_x = abs(srcs[0].transform.a)
         res_y = abs(srcs[0].transform.e)
         width = math.ceil((bounds[2] - bounds[0]) / res_x)
@@ -531,10 +540,7 @@ def build_mosaic_manifest(
                 source_count, shape = _write_kml_mosaic(
                     group, source_dems, out_dem, buffer_m, max_pixels
                 )
-                log(
-                    f"mosaic repaired: {out_dem} "
-                    f"({shape[1]}x{shape[0]}, sources={source_count})"
-                )
+                log(f"mosaic repaired: {out_dem} ({shape[1]}x{shape[0]}, sources={source_count})")
                 is_ready = True
             except ValueError as repair_exc:
                 coverage_errors.append(str(repair_exc))

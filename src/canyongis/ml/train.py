@@ -369,9 +369,7 @@ def train_fold(
                     batch_size,
                     train_started,
                 )
-                _log_loss_components(
-                    fold_idx, epoch, "train", running_losses, train_batches
-                )
+                _log_loss_components(fold_idx, epoch, "train", running_losses, train_batches)
             if _timing_sync_after_batch(step, cfg):
                 _sync_for_timing(device)
             batch_done = time.perf_counter()
@@ -379,8 +377,7 @@ def train_fold(
                 _record_timing(train_timing, "total", (batch_done - batch_started) * 1000.0)
             batch_gap_started = batch_done
         train_components = {
-            k: float((v / max(train_batches, 1)).detach().cpu())
-            for k, v in running_losses.items()
+            k: float((v / max(train_batches, 1)).detach().cpu()) for k, v in running_losses.items()
         }
         train_loss = train_components["loss"]
         _log_loss_components(fold_idx, epoch, "train", running_losses, train_batches)

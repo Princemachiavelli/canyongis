@@ -46,12 +46,16 @@ def render_folium_map(
                 fields=tooltip_fields,
                 aliases=[f.replace("_", " ") for f in tooltip_fields],
                 localize=True,
-            ) if tooltip_fields else None,
+            )
+            if tooltip_fields
+            else None,
         ).add_to(m)
 
     if not pts.empty:
         prob_col = "prob" if "prob" in pts.columns else None
-        pts_render = pts if prob_col is None else pts.sort_values(prob_col, ascending=False).head(max_points)
+        pts_render = (
+            pts if prob_col is None else pts.sort_values(prob_col, ascending=False).head(max_points)
+        )
         fg = folium.FeatureGroup(name="Rappel candidates")
         for _, row in pts_render.iterrows():
             p = float(row[prob_col]) if prob_col else 1.0

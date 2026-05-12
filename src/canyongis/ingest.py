@@ -224,7 +224,9 @@ def dem_descent_coverage_counts(kml_path: str | Path, dem_path: str | Path) -> t
         dem_bounds = box(*src.bounds)
         descent_bounds = box(*descent.total_bounds)
         if not dem_bounds.covers(descent_bounds):
-            raise ValueError(f"DEM bounds do not fully cover descent bounds: {kml_path} -> {dem_path}")
+            raise ValueError(
+                f"DEM bounds do not fully cover descent bounds: {kml_path} -> {dem_path}"
+            )
 
         geoms = [
             (geom, 1)
@@ -352,7 +354,7 @@ def _rank_tnm_products(
             and item_bounds[1] <= bounds_wgs84[1]
             and item_bounds[2] >= bounds_wgs84[2]
             and item_bounds[3] >= bounds_wgs84[3]
-            ):
+        ):
             containing.append(item)
     candidates = containing or items
     candidates.sort(key=lambda item: str(item.get("title", "")))

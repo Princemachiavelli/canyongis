@@ -51,7 +51,11 @@ kwargs = {
     "dist": dist_m,
 }
 if nprocs:
-    kwargs["nprocs"] = int(nprocs)
+    # r.geomorphon only gained `nprocs` in GRASS 8.5; older releases (e.g. 8.4.x)
+    # reject the parameter. Probe the module interface and only pass it if supported.
+    iface = gs.read_command("r.geomorphon", "--interface-description")
+    if 'name="nprocs"' in iface:
+        kwargs["nprocs"] = int(nprocs)
 for name in outputs:
     kwargs[name] = name
 

@@ -34,6 +34,14 @@
               cudaSupport = (system == "x86_64-linux");
               cudaCapabilities = [ "8.6" ];
             };
+            overlays = [
+              # nixos-unstable currently pins GRASS 8.4.2, which lacks `nprocs`
+              # support in r.geomorphon (added upstream in 8.5). Pull the master
+              # derivation locally so the web ravine-compare flow works.
+              (_final: prev: {
+                grass = prev.callPackage ./nix/grass.nix { };
+              })
+            ];
           };
 
           # Override the python package set so rasterio and pyogrio share a single
@@ -63,7 +71,7 @@
           };
         in
         {
-	  legacyPackages = pkgs;
+          legacyPackages = pkgs;
           packages = {
             default = canyongis;
             canyongis = canyongis;
