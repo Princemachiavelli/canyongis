@@ -334,7 +334,7 @@ def create_app(
                 "bounds_wgs84": bounds,
                 "b_tpi_path": str(out_dir / "b_tpi.tif"),
                 "compare_png_url": ctx.output_url(result.compare_png_path),
-                "panel_b_tpi_url": ctx.output_url(out_dir / "panel_b_tpi.png"),
+                "panel_b_tpi_url": ctx.output_url(out_dir / "panel_b_tpi.webp"),
             }
 
         job = ctx.submit("ravine-compare", params, run)

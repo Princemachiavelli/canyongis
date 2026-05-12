@@ -11,7 +11,13 @@ from PIL import Image
 
 from .hydrology import compute_flow_accum
 from .io import log, read_dem, write_raster
-from .ravine_compare import _blend_over_hillshade, _percentile_stretch, compute_hillshade
+from .ravine_compare import (
+    OVERLAY_DOWNSAMPLE_FACTOR,
+    _blend_over_hillshade,
+    _downsample_by_factor,
+    _percentile_stretch,
+    compute_hillshade,
+)
 
 
 @dataclass(frozen=True)
@@ -111,8 +117,10 @@ def export_drainage_previews(
     flow_log = np.log1p(np.clip(flow_accum, 0.0, None)).astype(np.float32)
     flow01, lo, hi = _percentile_stretch(flow_log, 1.0, preview_hi_pct)
     flow_preview = _blend_over_hillshade(hillshade, flow01, alpha_gamma=0.65)
-    flow_preview_path = out_dir / "flow_accum_log_preview.png"
-    flow_preview.save(flow_preview_path)
+    flow_preview_path = out_dir / "flow_accum_log_preview.webp"
+    _downsample_by_factor(flow_preview, OVERLAY_DOWNSAMPLE_FACTOR).save(
+        flow_preview_path, quality=85, method=4
+    )
 
     stream_pixels: dict[str, int] = {}
     for threshold in thresholds:
@@ -126,8 +134,10 @@ def export_drainage_previews(
         thresholds,
         line_width_px=line_width_px,
     )
-    stream_preview_path = out_dir / "stream_network_preview.png"
-    stream_preview.save(stream_preview_path)
+    stream_preview_path = out_dir / "stream_network_preview.webp"
+    _downsample_by_factor(stream_preview, OVERLAY_DOWNSAMPLE_FACTOR).save(
+        stream_preview_path, quality=85, method=4
+    )
 
     summary = {
         "dem_path": str(dem_path),
@@ -140,8 +150,8 @@ def export_drainage_previews(
         "flow_log_display_hi": hi,
         "outputs": {
             "flow_accum_tif": str(flow_path),
-            "flow_accum_log_preview_png": str(flow_preview_path),
-            "stream_network_preview_png": str(stream_preview_path),
+            "flow_accum_log_preview_webp": str(flow_preview_path),
+            "stream_network_preview_webp": str(stream_preview_path),
         },
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")

@@ -14,18 +14,25 @@ export type Footprint = {
   bounds: Bounds;
 };
 
+export type PanRequest = {
+  bounds: Bounds;
+  nonce: number;
+};
+
 type AppState = {
   bounds?: Bounds;
   activeDemJob?: Job;
   activeCompareJob?: Job;
   overlay?: Overlay;
   footprints: Record<string, Footprint>;
+  panRequest?: PanRequest;
   setBounds: (bounds?: Bounds) => void;
   setActiveDemJob: (job?: Job) => void;
   setActiveCompareJob: (job?: Job) => void;
   setOverlay: (overlay?: Overlay) => void;
   toggleFootprint: (footprint: Footprint) => void;
   clearFootprints: () => void;
+  requestPan: (bounds: Bounds) => void;
 };
 
 export const useAppStore = create<AppState>((set) => ({
@@ -44,5 +51,6 @@ export const useAppStore = create<AppState>((set) => ({
       }
       return { footprints: next };
     }),
-  clearFootprints: () => set({ footprints: {} })
+  clearFootprints: () => set({ footprints: {} }),
+  requestPan: (bounds) => set({ panRequest: { bounds, nonce: Date.now() } })
 }));

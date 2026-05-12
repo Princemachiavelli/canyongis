@@ -320,11 +320,24 @@ def _label_panel(panel: Image.Image, title: str) -> Image.Image:
     return out
 
 
+OVERLAY_DOWNSAMPLE_FACTOR = 2
+
+
 def _downsample(image: Image.Image, max_px: int) -> Image.Image:
     if max(image.size) <= max_px:
         return image
     scale = max_px / max(image.size)
     new_size = (max(1, round(image.size[0] * scale)), max(1, round(image.size[1] * scale)))
+    return image.resize(new_size, Image.LANCZOS)
+
+
+def _downsample_by_factor(image: Image.Image, factor: float) -> Image.Image:
+    if factor <= 1:
+        return image
+    new_size = (
+        max(1, round(image.size[0] / factor)),
+        max(1, round(image.size[1] / factor)),
+    )
     return image.resize(new_size, Image.LANCZOS)
 
 
@@ -499,7 +512,9 @@ def export_ravine_compare(
 
     hs_panel.save(out_dir / "panel_hillshade.png")
     a_panel.save(out_dir / "panel_a_geomorphon.png")
-    b_panel.save(out_dir / "panel_b_tpi.png")
+    _downsample_by_factor(b_panel, OVERLAY_DOWNSAMPLE_FACTOR).save(
+        out_dir / "panel_b_tpi.webp", quality=85, method=4
+    )
     c_panel.save(out_dir / "panel_c_curvature.png")
 
     panels_small = [

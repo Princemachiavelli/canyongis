@@ -13,6 +13,18 @@ function leafletBounds(bounds: Bounds): L.LatLngBoundsExpression {
   ];
 }
 
+function PanController() {
+  const map = useMap();
+  const panRequest = useAppStore((state) => state.panRequest);
+
+  useEffect(() => {
+    if (!panRequest) return;
+    map.fitBounds(leafletBounds(panRequest.bounds), { padding: [24, 24] });
+  }, [map, panRequest]);
+
+  return null;
+}
+
 function MapControls() {
   const map = useMap();
   const setBounds = useAppStore((state) => state.setBounds);
@@ -75,6 +87,7 @@ export function MapView() {
         opacity={0.35}
       />
       <MapControls />
+      <PanController />
       {Object.values(footprints).map((fp) => (
         <Rectangle
           key={fp.id}

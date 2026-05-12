@@ -63,6 +63,7 @@ canyongis-drainage-previews = "canyongis.drainage_preview:drainage_previews_cli"
 canyongis-ravine-compare = "canyongis.ravine_compare:ravine_compare_cli"
 canyongis-ravine-spine = "canyongis.ravine_spine:ravine_spine_cli"
 canyongis-web = "canyongis.web.server:cli"
+canyongis-web-migrate-previews = "canyongis.web.migrate_previews:cli"
 
 [tool.setuptools.packages.find]
 where = ["src"]

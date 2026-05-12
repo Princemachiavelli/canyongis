@@ -66,6 +66,40 @@ function formatBounds(b: Bounds): string {
   return `${b.west.toFixed(4)}, ${b.south.toFixed(4)} → ${b.east.toFixed(4)}, ${b.north.toFixed(4)}`;
 }
 
+function aoiLongEdgeKm(b: Bounds): number {
+  const midLat = (b.north + b.south) / 2;
+  const dLatKm = (b.north - b.south) * 111;
+  const dLonKm = (b.east - b.west) * 111 * Math.cos((midLat * Math.PI) / 180);
+  return Math.max(dLatKm, dLonKm);
+}
+
+function nominatimZoom(km: number): number {
+  if (km < 2) return 16;
+  if (km < 10) return 13;
+  if (km < 50) return 10;
+  if (km < 200) return 8;
+  return 6;
+}
+
+function useAoiName(bounds: Bounds) {
+  const lat = (bounds.north + bounds.south) / 2;
+  const lon = (bounds.east + bounds.west) / 2;
+  const zoom = nominatimZoom(aoiLongEdgeKm(bounds));
+  return useQuery({
+    queryKey: ["aoi-name", lat.toFixed(3), lon.toFixed(3), zoom],
+    queryFn: async () => {
+      const url = `https://nominatim.openstreetmap.org/reverse?format=jsonv2&lat=${lat}&lon=${lon}&zoom=${zoom}`;
+      const res = await fetch(url, { headers: { "Accept-Language": "en" } });
+      if (!res.ok) throw new Error(`nominatim ${res.status}`);
+      const data = (await res.json()) as { display_name?: string };
+      return String(data.display_name ?? "").split(",")[0].trim() || undefined;
+    },
+    staleTime: Infinity,
+    gcTime: Infinity,
+    retry: 1
+  });
+}
+
 function StatusBadge({ status }: { status: Job["status"] }) {
   return <span className={`statusBadge ${status}`}>{status}</span>;
 }
@@ -131,15 +165,28 @@ function DerivedRow({ job, role }: { job: Job; role: "drainage" | "compare" | "s
 function AreaCard({ area }: { area: Area }) {
   const setActiveDemJob = useAppStore((s) => s.setActiveDemJob);
   const toggleFootprint = useAppStore((s) => s.toggleFootprint);
+  const requestPan = useAppStore((s) => s.requestPan);
   const footprintVisible = useAppStore((s) => Boolean(s.footprints[area.demJob.id]));
   const activeDemId = useAppStore((s) => s.activeDemJob?.id);
   const isActive = activeDemId === area.demJob.id;
+  const friendly = useAoiName(area.bounds);
+  const label = friendly.data ?? area.name;
 
   return (
     <div className={`area ${isActive ? "active" : ""}`}>
       <div className="areaHead">
         <div>
-          <strong>{area.name}</strong>
+          <button
+            type="button"
+            className="areaNameButton"
+            onClick={() => requestPan(area.bounds)}
+            title={`Snap map to ${label}`}
+          >
+            {label}
+          </button>
+          {friendly.data && area.name !== friendly.data && (
+            <code className="areaSubName">{area.name}</code>
+          )}
           <code>{area.demJob.id}</code>
         </div>
       </div>

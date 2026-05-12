@@ -243,6 +243,28 @@ label {
   font-size: 13px;
 }
 
+.areaNameButton {
+  background: none;
+  border: none;
+  padding: 0;
+  min-height: auto;
+  font-size: 13px;
+  font-weight: 600;
+  color: #0c6b58;
+  cursor: pointer;
+  text-align: left;
+}
+
+.areaNameButton:hover {
+  text-decoration: underline;
+}
+
+.areaSubName {
+  font-size: 11px;
+  color: #8c969c;
+  margin-left: 6px;
+}
+
 .areaHead code,
 .derivedRowHead code,
 .job code {
