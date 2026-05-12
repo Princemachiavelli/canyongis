@@ -1,8 +1,9 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, ExternalLink, Eye, Layers, LocateFixed, Map, Play, RefreshCw, Square, Upload } from "lucide-react";
+import { Activity, ExternalLink, Eye, Layers, LocateFixed, Map, Play, RefreshCw, Square, Trash2, Upload } from "lucide-react";
 import {
   buildDem,
+  deleteFailedJob,
   importRopewikiKml,
   listJobs,
   runDrainage,
@@ -119,28 +120,50 @@ function StatusBadge({ status }: { status: Job["status"] }) {
   return <span className={`statusBadge ${status}`}>{status}</span>;
 }
 
-function ProgressTail({ job }: { job: Job }) {
+function ProgressTail({ job, onDelete }: { job: Job; onDelete?: (job: Job) => void }) {
   if (job.status !== "running" && job.status !== "queued" && job.status !== "failed") return null;
   const tailCount = job.status === "failed" ? 20 : 4;
   const tail = (job.progress ?? []).slice(-tailCount);
   if (tail.length === 0 && !job.error) return null;
+  if (job.status === "failed") {
+    return (
+      <details className="jobLogDetails">
+        <summary>Error log</summary>
+        {onDelete && (
+          <button className="danger miniButton" onClick={() => onDelete(job)}>
+            <Trash2 size={12} />
+            Delete failed job
+          </button>
+        )}
+        {tail.length > 0 && (
+          <pre className="progressTail failed">
+            {tail.map((line, i) => (
+              <div key={i}>{line}</div>
+            ))}
+          </pre>
+        )}
+        {job.error && <pre className="jobError">{job.error}</pre>}
+      </details>
+    );
+  }
   return (
-    <>
-      {tail.length > 0 && (
-        <pre className={`progressTail ${job.status === "failed" ? "failed" : ""}`}>
-          {tail.map((line, i) => (
-            <div key={i}>{line}</div>
-          ))}
-        </pre>
-      )}
-      {job.status === "failed" && job.error && (
-        <pre className="jobError">{job.error}</pre>
-      )}
-    </>
+    <pre className="progressTail">
+      {tail.map((line, i) => (
+        <div key={i}>{line}</div>
+      ))}
+    </pre>
   );
 }
 
-function DerivedRow({ job, role }: { job: Job; role: "drainage" | "compare" | "spine" }) {
+function DerivedRow({
+  job,
+  role,
+  onDelete
+}: {
+  job: Job;
+  role: "drainage" | "compare" | "spine";
+  onDelete?: (job: Job) => void;
+}) {
   const setActiveCompareJob = useAppStore((s) => s.setActiveCompareJob);
   const setOverlay = useAppStore((s) => s.setOverlay);
   const overlay = useAppStore((s) => s.overlay);
@@ -161,7 +184,8 @@ function DerivedRow({ job, role }: { job: Job; role: "drainage" | "compare" | "s
         {bounds &&
           job.status === "succeeded" &&
           previews.map((preview) => {
-            const isActive = overlay?.url === preview.url;
+            const overlayId = `${job.id}:${preview.key}`;
+            const isActive = overlay?.id === overlayId;
             return (
               <button
                 key={preview.key}
@@ -170,7 +194,7 @@ function DerivedRow({ job, role }: { job: Job; role: "drainage" | "compare" | "s
                   isActive
                     ? setOverlay(undefined)
                     : setOverlay({
-                        id: `${job.id}:${preview.key}`,
+                        id: overlayId,
                         name: preview.label,
                         url: preview.url,
                         bounds
@@ -195,12 +219,12 @@ function DerivedRow({ job, role }: { job: Job; role: "drainage" | "compare" | "s
           </a>
         )}
       </div>
-      <ProgressTail job={job} />
+      <ProgressTail job={job} onDelete={onDelete} />
     </div>
   );
 }
 
-function AreaCard({ area }: { area: Area }) {
+function AreaCard({ area, onDeleteJob }: { area: Area; onDeleteJob?: (job: Job) => void }) {
   const setActiveDemJob = useAppStore((s) => s.setActiveDemJob);
   const toggleFootprint = useAppStore((s) => s.toggleFootprint);
   const requestPan = useAppStore((s) => s.requestPan);
@@ -250,11 +274,11 @@ function AreaCard({ area }: { area: Area }) {
           <div className="derivedList">
             {area.compareGroups.map((group) => (
               <div key={group.job.id} className="compareGroup">
-                <DerivedRow job={group.job} role="compare" />
+                <DerivedRow job={group.job} role="compare" onDelete={onDeleteJob} />
                 {group.spineJobs.length > 0 && (
                   <div className="spineNest">
                     {group.spineJobs.map((s) => (
-                      <DerivedRow key={s.id} job={s} role="spine" />
+                      <DerivedRow key={s.id} job={s} role="spine" onDelete={onDeleteJob} />
                     ))}
                   </div>
                 )}
@@ -269,7 +293,7 @@ function AreaCard({ area }: { area: Area }) {
           <summary>Drainage ({area.drainageJobs.length})</summary>
           <div className="derivedList">
             {area.drainageJobs.map((j) => (
-              <DerivedRow key={j.id} job={j} role="drainage" />
+              <DerivedRow key={j.id} job={j} role="drainage" onDelete={onDeleteJob} />
             ))}
           </div>
         </details>
@@ -278,7 +302,7 @@ function AreaCard({ area }: { area: Area }) {
   );
 }
 
-function KmlImportRow({ job }: { job: Job }) {
+function KmlImportRow({ job, onDelete }: { job: Job; onDelete?: (job: Job) => void }) {
   const bounds = jobBoundsWgs84(job);
   const setBounds = useAppStore((s) => s.setBounds);
   const requestPan = useAppStore((s) => s.requestPan);
@@ -318,7 +342,7 @@ function KmlImportRow({ job }: { job: Job }) {
           </a>
         )}
       </div>
-      <ProgressTail job={job} />
+      <ProgressTail job={job} onDelete={onDelete} />
     </div>
   );
 }
@@ -398,6 +422,11 @@ export function App() {
       invalidate();
     }
   });
+  const deleteJobMutation = useMutation({
+    mutationFn: (job: Job) => deleteFailedJob(job.id),
+    onSuccess: invalidate
+  });
+  const deleteJob = (job: Job) => deleteJobMutation.mutate(job);
 
   const error = useMemo(() => {
     return (
@@ -407,6 +436,7 @@ export function App() {
       spineMutation.error ??
       uploadKmlMutation.error ??
       ropewikiKmlMutation.error ??
+      deleteJobMutation.error ??
       jobsQuery.error
     );
   }, [
@@ -416,6 +446,7 @@ export function App() {
     spineMutation.error,
     uploadKmlMutation.error,
     ropewikiKmlMutation.error,
+    deleteJobMutation.error,
     jobsQuery.error
   ]);
 
@@ -527,7 +558,7 @@ export function App() {
             </div>
             {areas.length === 0 && <div className="empty">No DEMs built yet.</div>}
             {areas.map((area) => (
-              <AreaCard key={area.demJob.id} area={area} />
+              <AreaCard key={area.demJob.id} area={area} onDeleteJob={deleteJob} />
             ))}
           </div>
 
@@ -538,7 +569,7 @@ export function App() {
             </div>
             {kmlImports.length === 0 && <div className="empty">No KMLs imported yet.</div>}
             {kmlImports.map((job) => (
-              <KmlImportRow key={job.id} job={job} />
+              <KmlImportRow key={job.id} job={job} onDelete={deleteJob} />
             ))}
           </div>
 
@@ -554,7 +585,15 @@ export function App() {
                     <strong>{job.kind}</strong>
                     <code>{job.id}</code>
                   </div>
-                  <StatusBadge status={job.status} />
+                  <div className="jobFooter">
+                    <StatusBadge status={job.status} />
+                    {job.status === "failed" && (
+                      <button className="danger miniButton" onClick={() => deleteJob(job)}>
+                        <Trash2 size={12} />
+                        Delete
+                      </button>
+                    )}
+                  </div>
                 </div>
               ))}
             </div>

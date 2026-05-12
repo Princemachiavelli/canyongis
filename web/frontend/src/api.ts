@@ -39,6 +39,12 @@ export async function listJobs(): Promise<Job[]> {
   return data.jobs;
 }
 
+export async function deleteFailedJob(jobId: string): Promise<void> {
+  await request<{ deleted: boolean; job_id: string }>(`/api/jobs/${jobId}`, {
+    method: "DELETE"
+  });
+}
+
 export async function buildDem(name: string, bounds: Bounds, bufferM: number): Promise<Job> {
   return request<Job>("/api/jobs/build-dem", {
     method: "POST",

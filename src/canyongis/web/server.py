@@ -323,6 +323,18 @@ def create_app(
     def get_job(job_id: str) -> dict[str, Any]:
         return asdict(ctx.job_or_404(job_id))
 
+    @app.delete("/api/jobs/{job_id}")
+    def delete_failed_job(job_id: str) -> dict[str, Any]:
+        with ctx.lock:
+            job = ctx.store.jobs.get(job_id)
+            if job is None:
+                raise HTTPException(status_code=404, detail=f"job not found: {job_id}")
+            if job.status != "failed":
+                raise HTTPException(status_code=400, detail="only failed jobs can be deleted")
+            del ctx.store.jobs[job_id]
+            ctx.store.save()
+        return {"deleted": True, "job_id": job_id}
+
     @app.post("/api/jobs/import-kml-file")
     async def import_kml_file(file: UploadFile = File(...)) -> dict[str, Any]:
         original_name = file.filename or "uploaded.kml"

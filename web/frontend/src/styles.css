@@ -13,6 +13,13 @@ body {
   margin: 0;
 }
 
+html,
+body,
+#root {
+  height: 100%;
+  overflow: hidden;
+}
+
 button,
 input {
   font: inherit;
@@ -55,9 +62,10 @@ input {
 }
 
 .shell {
-  min-height: 100vh;
+  height: 100vh;
   display: grid;
   grid-template-rows: 44px 1fr;
+  overflow: hidden;
 }
 
 .toolbar {
@@ -78,13 +86,17 @@ input {
 
 .workspace {
   min-height: 0;
+  height: 100%;
   display: grid;
   grid-template-columns: 360px 1fr;
+  overflow: hidden;
 }
 
 .panel {
   min-height: 0;
+  height: calc(100vh - 44px);
   overflow: auto;
+  overscroll-behavior: contain;
   background: #f8fafb;
   border-right: 1px solid #cbd3d8;
   padding: 14px;
@@ -336,6 +348,22 @@ button.toggled {
   border-color: #6cb1cf;
 }
 
+button.danger {
+  color: #8a3434;
+  border-color: #d9a1a1;
+  background: #fff6f6;
+}
+
+button.danger:hover {
+  background: #fdeaea;
+}
+
+button.miniButton {
+  min-height: 24px;
+  font-size: 11px;
+  padding: 0 7px;
+}
+
 .derivedSection {
   border-top: 1px solid #ecf0f2;
   padding-top: 6px;
@@ -470,9 +498,23 @@ button.toggled {
 }
 
 .progressTail.failed {
-  max-height: 240px;
+  max-height: 180px;
   background: #fdecea;
   color: #5b1a14;
+}
+
+.jobLogDetails {
+  margin-top: 4px;
+}
+
+.jobLogDetails summary {
+  cursor: pointer;
+  font-size: 11px;
+  color: #8a3434;
+}
+
+.jobLogDetails .miniButton {
+  margin-top: 6px;
 }
 
 .jobError {
@@ -484,7 +526,7 @@ button.toggled {
   background: #fdecea;
   border: 1px solid #f4b5ad;
   border-radius: 4px;
-  max-height: 240px;
+  max-height: 180px;
   overflow: auto;
   white-space: pre-wrap;
   word-break: break-word;
@@ -504,10 +546,17 @@ button.toggled {
   margin-top: 8px;
 }
 
+.jobFooter {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
 .mapFrame,
 .map {
   min-height: 0;
-  height: calc(100vh - 44px);
+  height: 100%;
 }
 
 .leaflet-container {
