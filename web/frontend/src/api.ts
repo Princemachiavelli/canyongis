@@ -46,6 +46,13 @@ export async function deleteJobRecord(jobId: string): Promise<void> {
   );
 }
 
+export async function deleteGeneratedKmlLayer(jobId: string, layerKey: string): Promise<void> {
+  await request<{ deleted: boolean; job_id: string; layer_key: string; deleted_outputs?: string[] }>(
+    `/api/jobs/${jobId}/kml-layer/${layerKey}`,
+    { method: "DELETE" }
+  );
+}
+
 export async function buildDem(name: string, bounds: Bounds, bufferM: number): Promise<Job> {
   return request<Job>("/api/jobs/build-dem", {
     method: "POST",
@@ -53,19 +60,20 @@ export async function buildDem(name: string, bounds: Bounds, bufferM: number): P
   });
 }
 
-export async function uploadKmlFile(file: File): Promise<Job> {
+export async function uploadKmlFile(file: File, containerDemJobId?: string): Promise<Job> {
   const body = new FormData();
   body.append("file", file);
+  if (containerDemJobId) body.append("container_dem_job_id", containerDemJobId);
   return request<Job>("/api/jobs/import-kml-file", {
     method: "POST",
     body
   });
 }
 
-export async function importRopewikiKml(source: string): Promise<Job> {
+export async function importRopewikiKml(source: string, containerDemJobId?: string): Promise<Job> {
   return request<Job>("/api/jobs/import-kml-ropewiki", {
     method: "POST",
-    body: JSON.stringify({ source })
+    body: JSON.stringify({ source, container_dem_job_id: containerDemJobId })
   });
 }
 
@@ -83,6 +91,25 @@ export async function snapKml(
   }
 ): Promise<Job> {
   return request<Job>(`/api/jobs/${kmlJobId}/snap-kml`, {
+    method: "POST",
+    body: JSON.stringify(payload)
+  });
+}
+
+export type TrackCategory = "descent" | "approach" | "unclassified";
+
+export type TrackProfilePayload = {
+  dem_job_id: string;
+  category: TrackCategory;
+  track_index: number;
+  sample_step_m?: number;
+  rappel_window_m?: number;
+  min_rappel_drop_m?: number;
+  min_rappel_slope?: number;
+};
+
+export async function runTrackProfile(kmlJobId: string, payload: TrackProfilePayload): Promise<Job> {
+  return request<Job>(`/api/jobs/${kmlJobId}/track-profile`, {
     method: "POST",
     body: JSON.stringify(payload)
   });
@@ -107,14 +134,15 @@ export async function runRavineCompare(jobId: string): Promise<Job> {
   });
 }
 
-export async function runRavineSpine(jobId: string): Promise<Job> {
+export async function runRavineSpine(jobId: string, parentKmlJobId?: string): Promise<Job> {
   return request<Job>(`/api/jobs/${jobId}/ravine-spine`, {
     method: "POST",
     body: JSON.stringify({
       threshold_pct: 94,
       hysteresis_ratio: 0.75,
       branch_keep_ratio: 0.2,
-      max_path_slope: 0.3
+      max_path_slope: 0.3,
+      parent_kml_job_id: parentKmlJobId
     })
   });
 }

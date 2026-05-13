@@ -15,7 +15,7 @@ from typing import Any, Literal
 
 import geopandas as gpd
 import rasterio
-from fastapi import FastAPI, File, HTTPException, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -33,6 +33,7 @@ from ..ingest import (
 from ..kml_snap import snap_kml_to_raster
 from ..ravine_compare import export_ravine_compare
 from ..ravine_spine import export_ravine_spines
+from ..track_profile import _rappels_geojson, analyze_track_profile
 from ..validate import parse_kml
 
 JobStatus = Literal["queued", "running", "succeeded", "failed"]
@@ -115,10 +116,12 @@ class RavineSpineRequest(BaseModel):
     hysteresis_ratio: float = 0.75
     branch_keep_ratio: float = 0.20
     max_path_slope: float = 0.30
+    parent_kml_job_id: str | None = None
 
 
 class RopewikiImportRequest(BaseModel):
     source: str = Field(..., min_length=1)
+    container_dem_job_id: str | None = None
 
 
 class KmlSnapRequest(BaseModel):
@@ -128,6 +131,16 @@ class KmlSnapRequest(BaseModel):
     search_radius_m: float = Field(default=30.0, gt=0)
     sample_step_m: float = Field(default=10.0, gt=0)
     high_threshold: float | None = None
+
+
+class TrackProfileRequest(BaseModel):
+    dem_job_id: str
+    category: Literal["descent", "approach", "unclassified"] = "descent"
+    track_index: int = Field(default=0, ge=0)
+    sample_step_m: float = Field(default=5.0, gt=0)
+    rappel_window_m: float = Field(default=10.0, gt=0)
+    min_rappel_drop_m: float = Field(default=3.0, gt=0)
+    min_rappel_slope: float = Field(default=0.45, gt=0)
 
 
 class WebContext:
@@ -249,6 +262,7 @@ def _build_kml_import_result(
     name: str,
     *,
     source: dict[str, Any],
+    container_dem_job_id: str | None = None,
 ) -> dict[str, Any]:
     features = parse_kml(kml_path)
     all_geoms = []
@@ -264,7 +278,7 @@ def _build_kml_import_result(
         raise ValueError("KML contains no geometry (no LineStrings or Points)")
     combined = gpd.GeoSeries(all_geoms, crs="EPSG:4326")
     west, south, east, north = (float(v) for v in combined.total_bounds)
-    return {
+    result = {
         "name": name,
         "kml_path": str(kml_path),
         "kml_url": ctx.output_url(kml_path),
@@ -281,6 +295,111 @@ def _build_kml_import_result(
         },
         "source": source,
     }
+    if container_dem_job_id:
+        result["container_dem_job_id"] = container_dem_job_id
+    return result
+
+
+def _bounds_contains(
+    outer: tuple[float, float, float, float] | list[float],
+    inner: tuple[float, float, float, float] | list[float],
+    *,
+    epsilon: float = 1e-9,
+) -> bool:
+    ow, os, oe, on = (float(v) for v in outer)
+    iw, is_, ie, in_ = (float(v) for v in inner)
+    return iw >= ow - epsilon and is_ >= os - epsilon and ie <= oe + epsilon and in_ <= on + epsilon
+
+
+def _validate_kml_container(ctx: WebContext, container_dem_job_id: str | None, bounds: list[float]) -> None:
+    if not container_dem_job_id:
+        return
+    dem_job = ctx.job_or_404(container_dem_job_id)
+    if dem_job.status != "succeeded" or not dem_job.result:
+        raise ValueError("target DEM container has not succeeded")
+    dem_bounds = dem_job.result.get("bounds_wgs84")
+    if not isinstance(dem_bounds, list) or len(dem_bounds) != 4:
+        raise ValueError("target DEM container is missing bounds")
+    if not _bounds_contains(dem_bounds, bounds):
+        raise ValueError(
+            "KML bounds are outside the selected DEM container; choose a different container "
+            "or build a DEM for this KML first"
+        )
+
+
+def _parsed_kml_layer_result(kml_path: Path) -> dict[str, Any]:
+    features = parse_kml(kml_path)
+    all_geoms = []
+    for gdf in (
+        features.descent_lines,
+        features.approach_lines,
+        features.unclassified_lines,
+        features.points,
+    ):
+        if not gdf.empty:
+            all_geoms.extend(gdf.geometry.tolist())
+    bounds = None
+    if all_geoms:
+        combined = gpd.GeoSeries(all_geoms, crs="EPSG:4326")
+        bounds = [float(v) for v in combined.total_bounds]
+    return {
+        "bounds_wgs84": bounds,
+        "descent_geojson": _gdf_to_geojson(features.descent_lines),
+        "approach_geojson": _gdf_to_geojson(features.approach_lines),
+        "unclassified_geojson": _gdf_to_geojson(features.unclassified_lines),
+        "points_geojson": _gdf_to_geojson(features.points),
+    }
+
+
+def _ravine_spine_layers(ctx: WebContext, result: dict[str, Any]) -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    out_dir = Path(str(result.get("out_dir", ""))) if result.get("out_dir") else None
+    spines_value = result.get("spines_path") or (out_dir / "spines.kml" if out_dir else None)
+    rappels_value = result.get("rappel_candidates_path") or (
+        out_dir / "rappel_candidates.kml" if out_dir else None
+    )
+    spines_path = Path(str(spines_value)) if spines_value else None
+    rappels_path = Path(str(rappels_value)) if rappels_value else None
+    if spines_path and spines_path.exists():
+        out["spines_kml_url"] = ctx.output_url(spines_path)
+        out["spines_layer"] = {
+            "name": "Ravine spines",
+            "kml_path": str(spines_path),
+            "kml_url": ctx.output_url(spines_path),
+            **_parsed_kml_layer_result(spines_path),
+        }
+    if rappels_path and rappels_path.exists():
+        out["rappel_candidates_kml_url"] = ctx.output_url(rappels_path)
+        out["rappel_candidates_layer"] = {
+            "name": "Rappel candidates",
+            "kml_path": str(rappels_path),
+            "kml_url": ctx.output_url(rappels_path),
+            **_parsed_kml_layer_result(rappels_path),
+        }
+    return out
+
+
+def _ravine_spine_layer_path(result: dict[str, Any], layer_key: str) -> Path | None:
+    out_dir = Path(str(result.get("out_dir", ""))) if result.get("out_dir") else None
+    if layer_key == "spines_layer":
+        value = result.get("spines_path") or (out_dir / "spines.kml" if out_dir else None)
+    elif layer_key == "rappel_candidates_layer":
+        value = result.get("rappel_candidates_path") or (
+            out_dir / "rappel_candidates.kml" if out_dir else None
+        )
+    else:
+        return None
+    return Path(str(value)) if value else None
+
+
+def _job_response(ctx: WebContext, job: Job) -> dict[str, Any]:
+    row = asdict(job)
+    if job.kind == "ravine-spine" and job.status == "succeeded" and row.get("result"):
+        try:
+            row["result"] = {**row["result"], **_ravine_spine_layers(ctx, row["result"])}
+        except Exception:
+            row["result"] = row["result"]
+    return row
 
 
 def _kml_import_path(ctx: WebContext, job_id: str, name: str) -> Path:
@@ -400,18 +519,19 @@ def create_app(
                 {"id": "ravine-compare", "label": "TPI / ravine compare"},
                 {"id": "ravine-spine", "label": "Ravine spine from TPI"},
                 {"id": "kml-snap", "label": "Snap KML to terrain"},
+                {"id": "track-profile", "label": "Track elevation profile"},
             ]
         }
 
     @app.get("/api/jobs")
     def list_jobs() -> dict[str, Any]:
         with ctx.lock:
-            jobs = [asdict(job) for job in ctx.store.jobs.values()]
+            jobs = [_job_response(ctx, job) for job in ctx.store.jobs.values()]
         return {"jobs": sorted(jobs, key=lambda row: row["created_at"], reverse=True)}
 
     @app.get("/api/jobs/{job_id}")
     def get_job(job_id: str) -> dict[str, Any]:
-        return asdict(ctx.job_or_404(job_id))
+        return _job_response(ctx, ctx.job_or_404(job_id))
 
     @app.delete("/api/jobs/{job_id}")
     def delete_job(job_id: str) -> dict[str, Any]:
@@ -432,8 +552,44 @@ def create_app(
             ctx.store.save()
         return {"deleted": True, "job_id": job_id, "deleted_outputs": deleted_outputs}
 
+    @app.delete("/api/jobs/{job_id}/kml-layer/{layer_key}")
+    def delete_generated_kml_layer(job_id: str, layer_key: str) -> dict[str, Any]:
+        with ctx.lock:
+            job = ctx.store.jobs.get(job_id)
+            if job is None:
+                raise HTTPException(status_code=404, detail=f"job not found: {job_id}")
+            if job.status in {"queued", "running"}:
+                raise HTTPException(status_code=400, detail="running jobs cannot be modified")
+            if job.kind != "ravine-spine" or not job.result:
+                raise HTTPException(status_code=400, detail="job has no generated KML layers")
+            path = _ravine_spine_layer_path(job.result, layer_key)
+            if path is None:
+                raise HTTPException(status_code=404, detail=f"KML layer not found: {layer_key}")
+            root = ctx.output_root.resolve()
+            deleted_outputs: list[str] = []
+            if path.exists():
+                if not _path_is_within(path, root):
+                    raise HTTPException(status_code=400, detail="refusing to delete outside output root")
+                path.unlink()
+                deleted_outputs.append(str(path))
+            for key in (
+                layer_key,
+                "spines_kml_url" if layer_key == "spines_layer" else "rappel_candidates_kml_url",
+            ):
+                job.result.pop(key, None)
+            ctx.store.save()
+        return {
+            "deleted": True,
+            "job_id": job_id,
+            "layer_key": layer_key,
+            "deleted_outputs": deleted_outputs,
+        }
+
     @app.post("/api/jobs/import-kml-file")
-    async def import_kml_file(file: UploadFile = File(...)) -> dict[str, Any]:
+    async def import_kml_file(
+        file: UploadFile = File(...),
+        container_dem_job_id: str | None = Form(default=None),
+    ) -> dict[str, Any]:
         original_name = file.filename or "uploaded.kml"
         if not original_name.lower().endswith(".kml"):
             raise HTTPException(status_code=400, detail="uploaded file must have a .kml extension")
@@ -441,19 +597,34 @@ def create_app(
         if not content:
             raise HTTPException(status_code=400, detail="uploaded KML file is empty")
         name = _safe_kml_name(original_name)
-        params = {"name": name, "filename": original_name}
+        params = {
+            "name": name,
+            "filename": original_name,
+            "container_dem_job_id": container_dem_job_id,
+        }
 
         def run(progress_cb, job_id: str) -> dict[str, Any]:
             kml_path = _kml_import_path(ctx, job_id, name)
             kml_path.parent.mkdir(parents=True, exist_ok=True)
             progress_cb(f"import-kml-file -> {kml_path}")
             kml_path.write_bytes(content)
-            return _build_kml_import_result(
+            result = _build_kml_import_result(
                 ctx,
                 kml_path,
                 Path(name).stem,
                 source={"type": "file", "filename": original_name},
+                container_dem_job_id=container_dem_job_id,
             )
+            try:
+                _validate_kml_container(
+                    ctx,
+                    container_dem_job_id,
+                    result["bounds_wgs84"],
+                )
+            except Exception:
+                kml_path.unlink(missing_ok=True)
+                raise
+            return result
 
         job = ctx.submit("kml-import", params, run, include_job_id=True)
         return asdict(job)
@@ -463,7 +634,7 @@ def create_app(
         source = req.source.strip()
         if not source:
             raise HTTPException(status_code=400, detail="source is required")
-        params = {"source": source}
+        params = {"source": source, "container_dem_job_id": req.container_dem_job_id}
 
         def run(progress_cb, job_id: str) -> dict[str, Any]:
             ref = parse_ropewiki_ref(source)
@@ -484,7 +655,7 @@ def create_app(
                 if page_title
                 else source
             )
-            return _build_kml_import_result(
+            result = _build_kml_import_result(
                 ctx,
                 kml_path,
                 Path(name).stem,
@@ -496,7 +667,14 @@ def create_app(
                     "file_title": file_title,
                     "download_url": download_url,
                 },
+                container_dem_job_id=req.container_dem_job_id,
             )
+            try:
+                _validate_kml_container(ctx, req.container_dem_job_id, result["bounds_wgs84"])
+            except Exception:
+                kml_path.unlink(missing_ok=True)
+                raise
+            return result
 
         job = ctx.submit("kml-import", params, run, include_job_id=True)
         return asdict(job)
@@ -597,6 +775,10 @@ def create_app(
         compare_job = ctx.job_or_404(compare_job_id)
         if compare_job.status != "succeeded" or not compare_job.result:
             raise HTTPException(status_code=400, detail="ravine-compare job has not succeeded")
+        if req.parent_kml_job_id:
+            parent_kml_job = ctx.job_or_404(req.parent_kml_job_id)
+            if parent_kml_job.status != "succeeded" or not parent_kml_job.result:
+                raise HTTPException(status_code=400, detail="parent KML job has not succeeded")
         params = {"compare_job_id": compare_job_id, **req.model_dump()}
 
         def run(progress_cb) -> dict[str, Any]:
@@ -616,8 +798,8 @@ def create_app(
             return {
                 **asdict(result),
                 "bounds_wgs84": compare_job.result["bounds_wgs84"],
-                "spines_kml_url": ctx.output_url(out_dir / "spines.kml"),
-                "rappel_candidates_kml_url": ctx.output_url(out_dir / "rappel_candidates.kml"),
+                "parent_kml_job_id": req.parent_kml_job_id,
+                **_ravine_spine_layers(ctx, asdict(result)),
             }
 
         job = ctx.submit("ravine-spine", params, run)
@@ -728,6 +910,46 @@ def create_app(
             }
 
         job = ctx.submit("kml-snap", params, run)
+        return asdict(job)
+
+    @app.post("/api/jobs/{kml_job_id}/track-profile")
+    def track_profile(kml_job_id: str, req: TrackProfileRequest) -> dict[str, Any]:
+        kml_job = ctx.job_or_404(kml_job_id)
+        if kml_job.status != "succeeded" or not kml_job.result:
+            raise HTTPException(status_code=400, detail="KML job has not succeeded")
+        dem_job = ctx.job_or_404(req.dem_job_id)
+        if dem_job.status != "succeeded" or not dem_job.result:
+            raise HTTPException(status_code=400, detail="DEM job has not succeeded")
+
+        kml_path = Path(str(kml_job.result["kml_path"]))
+        dem_path = Path(str(dem_job.result["dem_path"]))
+        params = {"kml_job_id": kml_job_id, **req.model_dump()}
+
+        def run(progress_cb) -> dict[str, Any]:
+            progress_cb(
+                f"track-profile {req.category}[{req.track_index}] "
+                f"step={req.sample_step_m:g}m window={req.rappel_window_m:g}m"
+            )
+            result = analyze_track_profile(
+                kml_path,
+                dem_path,
+                category=req.category,
+                track_index=req.track_index,
+                sample_step_m=req.sample_step_m,
+                rappel_window_m=req.rappel_window_m,
+                min_rappel_drop_m=req.min_rappel_drop_m,
+                min_rappel_slope=req.min_rappel_slope,
+            )
+            payload = asdict(result)
+            payload["rappel_candidates_geojson"] = _rappels_geojson(result.rappel_candidates)
+            payload["source"] = {
+                "kind": "track-profile",
+                "kml_job_id": kml_job_id,
+                "dem_job_id": req.dem_job_id,
+            }
+            return payload
+
+        job = ctx.submit("track-profile", params, run)
         return asdict(job)
 
     if ctx.frontend_dist and ctx.frontend_dist.exists():

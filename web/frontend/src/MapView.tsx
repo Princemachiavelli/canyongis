@@ -77,6 +77,7 @@ function geojsonResult(job: Job, field: string) {
 }
 
 type KmlFeature = {
+  id?: string | number;
   type?: string;
   properties?: Record<string, unknown> | null;
   geometry?: {
@@ -172,10 +173,12 @@ function kmlFeaturePopup(feature: KmlFeature, fallbackName: string, fallbackCate
 }
 
 function bindKmlFeature(
+  jobId: string,
   fallbackName: string,
   fallbackCategory: string,
   showLabels: boolean
 ): (feature: KmlFeature, layer: L.Layer) => void {
+  const setSelectedKmlTrack = useAppStore.getState().setSelectedKmlTrack;
   return (feature, layer) => {
     const label = kmlFeatureLabel(feature, fallbackName, fallbackCategory);
     layer.bindPopup(kmlFeaturePopup(feature, fallbackName, fallbackCategory));
@@ -185,6 +188,18 @@ function bindKmlFeature(
       permanent: showLabels,
       sticky: !showLabels
     });
+    if (fallbackCategory !== "point") {
+      layer.on("click", () => {
+        const rawId = feature.id ?? feature.properties?.id ?? 0;
+        const trackIndex = Number.isFinite(Number(rawId)) ? Number(rawId) : 0;
+        setSelectedKmlTrack({
+          kmlJobId: jobId,
+          category: fallbackCategory as "descent" | "approach" | "unclassified",
+          trackIndex,
+          name: featureName(feature, fallbackName)
+        });
+      });
+    }
   };
 }
 
@@ -202,7 +217,7 @@ function KmlImportLayer({ job, showLabels }: { job: Job; showLabels: boolean }) 
           key={`${job.id}:unclassified:${showLabels}`}
           data={unclassified}
           style={{ color: "#59656d", weight: 3, opacity: 0.85, dashArray: "4 4" }}
-          onEachFeature={bindKmlFeature(name, "unclassified", showLabels)}
+          onEachFeature={bindKmlFeature(job.id, name, "unclassified", showLabels)}
         />
       )}
       {approach && (
@@ -210,7 +225,7 @@ function KmlImportLayer({ job, showLabels }: { job: Job; showLabels: boolean }) 
           key={`${job.id}:approach:${showLabels}`}
           data={approach}
           style={{ color: "#2563eb", weight: 3, opacity: 0.9, dashArray: "8 4" }}
-          onEachFeature={bindKmlFeature(name, "approach", showLabels)}
+          onEachFeature={bindKmlFeature(job.id, name, "approach", showLabels)}
         />
       )}
       {descent && (
@@ -218,14 +233,14 @@ function KmlImportLayer({ job, showLabels }: { job: Job; showLabels: boolean }) 
           key={`${job.id}:descent:${showLabels}`}
           data={descent}
           style={{ color: "#d33f2f", weight: 4, opacity: 0.95 }}
-          onEachFeature={bindKmlFeature(name, "descent", showLabels)}
+          onEachFeature={bindKmlFeature(job.id, name, "descent", showLabels)}
         />
       )}
       {points && (
         <GeoJSON
           key={`${job.id}:points:${showLabels}`}
           data={points}
-          onEachFeature={bindKmlFeature(name, "point", showLabels)}
+          onEachFeature={bindKmlFeature(job.id, name, "point", showLabels)}
           pointToLayer={(_feature, latlng) =>
             L.circleMarker(latlng, {
               radius: 5,
@@ -241,7 +256,38 @@ function KmlImportLayer({ job, showLabels }: { job: Job; showLabels: boolean }) 
   );
 }
 
-export function MapView({ kmlImports = [] }: { kmlImports?: Job[] }) {
+function ProfileRappelsLayer({ job }: { job: Job }) {
+  const points = geojsonResult(job, "rappel_candidates_geojson");
+  if (!points) return null;
+  return (
+    <GeoJSON
+      key={`${job.id}:profile-rappels`}
+      data={points}
+      onEachFeature={(feature: KmlFeature, layer) => {
+        const props = feature.properties ?? {};
+        const drop = typeof props.drop_m === "number" ? `${props.drop_m.toFixed(1)} m` : "unknown";
+        const slope = typeof props.slope === "number" ? `${Math.round(props.slope * 100)}%` : "unknown";
+        layer.bindPopup(`<strong>Rappel candidate</strong><div>Drop: ${drop}</div><div>Slope: ${slope}</div>`);
+        layer.bindTooltip(`rappel ${drop}`, {
+          className: "kmlHoverLabel",
+          direction: "top",
+          sticky: true
+        });
+      }}
+      pointToLayer={(_feature, latlng) =>
+        L.circleMarker(latlng, {
+          radius: 6,
+          color: "#111827",
+          weight: 2,
+          fillColor: "#ffcc00",
+          fillOpacity: 0.95
+        })
+      }
+    />
+  );
+}
+
+export function MapView({ kmlImports = [], profileJob }: { kmlImports?: Job[]; profileJob?: Job }) {
   const bounds = useAppStore((state) => state.bounds);
   const overlay = useAppStore((state) => state.overlay);
   const footprints = useAppStore((state) => state.footprints);
@@ -275,6 +321,7 @@ export function MapView({ kmlImports = [] }: { kmlImports?: Job[] }) {
         .map((job) => (
           <KmlImportLayer key={job.id} job={job} showLabels={Boolean(kmlLabels[job.id])} />
         ))}
+      {profileJob?.status === "succeeded" && <ProfileRappelsLayer job={profileJob} />}
     </MapContainer>
   );
 }

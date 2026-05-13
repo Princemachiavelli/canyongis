@@ -19,6 +19,13 @@ export type PanRequest = {
   nonce: number;
 };
 
+export type SelectedKmlTrack = {
+  kmlJobId: string;
+  category: "descent" | "approach" | "unclassified";
+  trackIndex: number;
+  name: string;
+};
+
 type AppState = {
   bounds?: Bounds;
   activeDemJob?: Job;
@@ -27,6 +34,7 @@ type AppState = {
   footprints: Record<string, Footprint>;
   visibleKmls: Record<string, boolean>;
   kmlLabels: Record<string, boolean>;
+  selectedKmlTrack?: SelectedKmlTrack;
   panRequest?: PanRequest;
   setBounds: (bounds?: Bounds) => void;
   setActiveDemJob: (job?: Job) => void;
@@ -36,6 +44,7 @@ type AppState = {
   clearFootprints: () => void;
   toggleKml: (jobId: string) => void;
   toggleKmlLabels: (jobId: string) => void;
+  setSelectedKmlTrack: (track?: SelectedKmlTrack) => void;
   requestPan: (bounds: Bounds) => void;
 };
 
@@ -72,5 +81,6 @@ export const useAppStore = create<AppState>((set) => ({
         [jobId]: !state.kmlLabels[jobId]
       }
     })),
+  setSelectedKmlTrack: (selectedKmlTrack) => set({ selectedKmlTrack }),
   requestPan: (bounds) => set({ panRequest: { bounds, nonce: Date.now() } })
 }));

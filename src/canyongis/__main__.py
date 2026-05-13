@@ -21,6 +21,7 @@ from .ml.inspect import export_feature_pngs_cli
 from .ml.manifest_mosaic import mosaic_manifest_cli
 from .ml.predict import run_inference
 from .ravine_spine import ravine_spine_cli
+from .track_profile import track_profile_cli
 from .web.server import cli as web_cli
 
 
@@ -95,6 +96,11 @@ def cli(argv: list[str] | None = None) -> None:
         help="Snap KML features to nearby DEM lows or ravine-score highs.",
     )
     sub.add_parser(
+        "track-profile",
+        add_help=False,
+        help="Sample a KML track against a DEM and flag steep drops.",
+    )
+    sub.add_parser(
         "drainage-previews",
         add_help=False,
         help="Compute flow accumulation and render drainage-network previews.",
@@ -151,6 +157,9 @@ def cli(argv: list[str] | None = None) -> None:
     if args.command == "kml-snap":
         kml_snap_cli(extra)
         return
+    if args.command == "track-profile":
+        track_profile_cli(extra)
+        return
     if args.command == "drainage-previews":
         drainage_previews_cli(extra)
         return
@@ -173,6 +182,7 @@ def cli(argv: list[str] | None = None) -> None:
             "   or: canyongis geomorphon-previews ...\n"
             "   or: canyongis drop-previews ...\n"
             "   or: canyongis kml-snap ...\n"
+            "   or: canyongis track-profile ...\n"
             "   or: canyongis drainage-previews ...\n"
             "   or: canyongis ravine-spine ...\n"
             "   or: canyongis web ..."
