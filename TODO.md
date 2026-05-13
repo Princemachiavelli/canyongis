@@ -22,3 +22,4 @@
 * The previews are shifted between different ESGI mapping things and have slight black border; ideally we natively operate on the same format to avoid translating that causes this slight mis-match with the original DEM area. OR at least map that area outside to alpha channel. 
 * Ropewiki import failure for https://ropewiki.com/Questionable_Decision_Canyon
 * * KML upload fails. Error not shown anywhere.
+* * It's refusing to add the KML outside the active container (correct) but unselecting the container is not easy to "know". Should make this visable and allow easily creating a new container for outside KML.
