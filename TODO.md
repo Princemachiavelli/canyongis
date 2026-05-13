@@ -21,3 +21,4 @@
 * Dem "Use as DEM" should be redundent - DEM operations are all listed under.
 * The previews are shifted between different ESGI mapping things and have slight black border; ideally we natively operate on the same format to avoid translating that causes this slight mis-match with the original DEM area. OR at least map that area outside to alpha channel. 
 * Ropewiki import failure for https://ropewiki.com/Questionable_Decision_Canyon
+* * KML upload fails. Error not shown anywhere.
