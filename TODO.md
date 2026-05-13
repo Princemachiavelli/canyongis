@@ -18,3 +18,5 @@
 * AIO still asks for name, DEM should just use name of the container. Seperate name not needed.
 * AIO prompt for name does not allow spaces. Again this name is not needed, and container "NAME" should be any valid string.
 * Allow collapsing the "feature preview" list under the DEM. Clearly indicate the "KML" vs "DEM" section
+* Dem "Use as DEM" should be redundent - DEM operations are all listed under.
+* The previews are shifted between different ESGI mapping things and have slight black border; ideally we natively operate on the same format to avoid translating that causes this slight mis-match with the original DEM area. OR at least map that area outside to alpha channel. 
