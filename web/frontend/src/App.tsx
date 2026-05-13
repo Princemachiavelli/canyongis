@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, ExternalLink, Eye, Layers, LineChart, LocateFixed, Map as MapIcon, Play, RefreshCw, Square, Tags, Trash2, Upload } from "lucide-react";
 import {
@@ -6,15 +6,17 @@ import {
   deleteGeneratedKmlLayer,
   deleteJobRecord,
   importRopewikiKml,
+  listJobSpecs,
   listJobs,
-  runDrainage,
-  runRavineCompare,
+  runDemJob,
   runRavineSpine,
   runTrackProfile,
   snapKml,
   uploadKmlFile,
   type Bounds,
   type Job,
+  type JobSpec,
+  type JobSpecVisualization,
   type KmlSnapTarget,
   type TrackCategory
 } from "./api";
@@ -29,22 +31,12 @@ function jobBoundsWgs84(job: Job): Bounds | undefined {
 
 type PreviewLink = { key: string; label: string; url: string };
 
-const PREVIEW_FIELDS: ReadonlyArray<{ field: string; key: string; label: string }> = [
-  { field: "panel_hillshade_url", key: "hillshade", label: "Hillshade" },
-  { field: "panel_a_geomorphon_url", key: "geomorphon", label: "Geomorphon" },
-  { field: "panel_b_tpi_url", key: "tpi", label: "TPI" },
-  { field: "panel_c_curvature_url", key: "curvature", label: "Curvature" },
-  { field: "flow_preview_url", key: "flow", label: "Flow accumulation" },
-  { field: "stream_preview_url", key: "stream", label: "Stream network" },
-  { field: "compare_png_url", key: "compare", label: "Compare grid" }
-];
-
-function previewsFor(job: Job): PreviewLink[] {
+function previewsFor(job: Job, spec: JobSpec): PreviewLink[] {
   const result = (job.result ?? {}) as Record<string, unknown>;
   const out: PreviewLink[] = [];
-  for (const { field, key, label } of PREVIEW_FIELDS) {
-    const url = result[field];
-    if (typeof url === "string") out.push({ key, label, url });
+  for (const vis of spec.visualizations) {
+    const url = result[vis.url_field];
+    if (typeof url === "string") out.push({ key: vis.key, label: vis.label, url });
   }
   return out;
 }
@@ -53,32 +45,40 @@ type Area = {
   demJob: Job;
   name: string;
   bounds: Bounds;
-  drainageJobs: Job[];
-  compareGroups: Array<{ job: Job; spineJobs: Job[] }>;
+  jobsBySpec: Map<string, Job[]>;
+  spineJobsByTpi: Map<string, Job[]>;
 };
 
-function groupAreas(jobs: Job[]): Area[] {
+function tpiJobIdFromSpine(job: Job): string | undefined {
+  const params = job.params as { tpi_job_id?: string; compare_job_id?: string };
+  return params.tpi_job_id ?? params.compare_job_id;
+}
+
+function groupAreas(jobs: Job[], specs: JobSpec[]): Area[] {
   const dems = jobs.filter((j) => j.kind === "build-dem" && j.status === "succeeded");
+  const specKeys = new Set(specs.map((s) => s.key));
   const areas: Area[] = [];
   for (const dem of dems) {
     const bounds = jobBoundsWgs84(dem);
     if (!bounds) continue;
-    const drainage = jobs.filter(
-      (j) => j.kind === "drainage" && (j.params as { dem_job_id?: string }).dem_job_id === dem.id
-    );
-    const compares = jobs.filter(
-      (j) => j.kind === "ravine-compare" && (j.params as { dem_job_id?: string }).dem_job_id === dem.id
-    );
-    const compareGroups = compares.map((c) => ({
-      job: c,
-      spineJobs: jobs.filter(
-        (j) =>
-          j.kind === "ravine-spine" &&
-          (j.params as { compare_job_id?: string }).compare_job_id === c.id
-      )
-    }));
+    const jobsBySpec = new Map<string, Job[]>();
+    for (const spec of specs) jobsBySpec.set(spec.key, []);
+    const spineJobsByTpi = new Map<string, Job[]>();
+    for (const j of jobs) {
+      const demId = (j.params as { dem_job_id?: string }).dem_job_id;
+      if (specKeys.has(j.kind) && demId === dem.id) {
+        jobsBySpec.get(j.kind)?.push(j);
+      }
+      if (j.kind === "ravine-spine") {
+        const tpiId = tpiJobIdFromSpine(j);
+        if (tpiId) {
+          if (!spineJobsByTpi.has(tpiId)) spineJobsByTpi.set(tpiId, []);
+          spineJobsByTpi.get(tpiId)?.push(j);
+        }
+      }
+    }
     const name = (dem.params as { name?: string }).name ?? dem.id;
-    areas.push({ demJob: dem, name, bounds, drainageJobs: drainage, compareGroups });
+    areas.push({ demJob: dem, name, bounds, jobsBySpec, spineJobsByTpi });
   }
   return areas;
 }
@@ -89,8 +89,8 @@ function ravineSpineLayerJobs(jobs: Job[]): Job[] {
     if (job.kind !== "ravine-spine" || job.status !== "succeeded" || !job.result) continue;
     const fallbackBounds = job.result.bounds_wgs84;
     const parentKmlJobId = job.params.parent_kml_job_id ?? job.result.parent_kml_job_id;
-    const compareJobId = job.params.compare_job_id;
-    const compareJob = typeof compareJobId === "string" ? jobs.find((candidate) => candidate.id === compareJobId) : undefined;
+    const tpiJobId = tpiJobIdFromSpine(job);
+    const compareJob = tpiJobId ? jobs.find((candidate) => candidate.id === tpiJobId) : undefined;
     const containerDemJobId = compareJob?.params.dem_job_id;
     for (const [key, label] of [
       ["spines_layer", "Ravine spines"],
@@ -299,14 +299,18 @@ function ProgressTail({ job, onDelete }: { job: Job; onDelete?: (job: Job) => vo
   );
 }
 
+function isTpiProducer(job: Job): boolean {
+  return typeof (job.result as Record<string, unknown> | undefined)?.b_tpi_path === "string";
+}
+
 function DerivedRow({
   job,
-  role,
+  spec,
   demJob,
   onDelete
 }: {
   job: Job;
-  role: "drainage" | "compare" | "spine";
+  spec?: JobSpec;
   demJob?: Job;
   onDelete?: (job: Job) => void;
 }) {
@@ -315,23 +319,24 @@ function DerivedRow({
   const setOverlay = useAppStore((s) => s.setOverlay);
   const overlay = useAppStore((s) => s.overlay);
   const activeCompareId = useAppStore((s) => s.activeCompareJob?.id);
-  const previews = previewsFor(job);
+  const previews = spec ? previewsFor(job, spec) : [];
   const bounds = jobBoundsWgs84(job);
-  const isActiveCompare = role === "compare" && activeCompareId === job.id;
+  const canBeTpi = isTpiProducer(job);
+  const isActiveTpi = canBeTpi && activeCompareId === job.id;
   const useAsTpi = () => {
     if (demJob) setActiveDemJob(demJob);
     setActiveCompareJob(job);
   };
   return (
-    <div className={`derivedRow ${job.status} ${isActiveCompare ? "active" : ""}`}>
+    <div className={`derivedRow ${job.status} ${isActiveTpi ? "active" : ""}`}>
       <div className="derivedRowHead">
         <code>{job.id}</code>
         <StatusBadge status={job.status} />
       </div>
       <div className="derivedRowActions">
-        {role === "compare" && job.status === "succeeded" && (
-          <button className={isActiveCompare ? "toggled" : ""} disabled={isActiveCompare} onClick={useAsTpi}>
-            {isActiveCompare ? "Active TPI" : "Use as TPI"}
+        {canBeTpi && job.status === "succeeded" && (
+          <button className={isActiveTpi ? "toggled" : ""} disabled={isActiveTpi} onClick={useAsTpi}>
+            {isActiveTpi ? "Active TPI" : "Use as TPI"}
           </button>
         )}
         {bounds &&
@@ -365,7 +370,99 @@ function DerivedRow({
   );
 }
 
-function AreaCard({ area, onDeleteJob }: { area: Area; onDeleteJob?: (job: Job) => void }) {
+function JobSpecSection({
+  area,
+  spec,
+  runs,
+  spineJobsByTpi,
+  onRunJob,
+  onDeleteJob,
+  isPending
+}: {
+  area: Area;
+  spec: JobSpec;
+  runs: Job[];
+  spineJobsByTpi: Map<string, Job[]>;
+  onRunJob: (demJob: Job, spec: JobSpec) => void;
+  onDeleteJob?: (job: Job) => void;
+  isPending: boolean;
+}) {
+  const setOverlay = useAppStore((s) => s.setOverlay);
+  const overlay = useAppStore((s) => s.overlay);
+  const hasRuns = runs.length > 0;
+  const unavailable = !spec.available;
+  const runButtonLabel = hasRuns ? "Run again" : "Run";
+  const triggerRun = () => {
+    if (!unavailable && !isPending) onRunJob(area.demJob, spec);
+  };
+
+  return (
+    <details className="derivedSection jobSpec" open={hasRuns}>
+      <summary>
+        <span className="jobSpecLabel">{spec.label}</span>
+        {hasRuns && <span className="jobSpecCount">({runs.length})</span>}
+        <button
+          className="miniButton"
+          disabled={unavailable || isPending}
+          title={unavailable ? spec.unavailable_reason ?? "Unavailable" : spec.description}
+          onClick={(e) => {
+            e.preventDefault();
+            triggerRun();
+          }}
+        >
+          <Play size={12} />
+          {unavailable ? "Unavailable" : runButtonLabel}
+        </button>
+      </summary>
+      <div className="derivedList">
+        {!hasRuns && (
+          <ul className="visListMuted" onClick={triggerRun}>
+            {spec.visualizations.map((v: JobSpecVisualization) => (
+              <li key={v.key} className="muted" title="Click to run this job">
+                {v.label}
+              </li>
+            ))}
+          </ul>
+        )}
+        {runs.map((job) => {
+          const isTpi = isTpiProducer(job);
+          const spineJobs = isTpi ? spineJobsByTpi.get(job.id) ?? [] : [];
+          return (
+            <div key={job.id} className="jobRunGroup">
+              <DerivedRow
+                job={job}
+                spec={spec}
+                demJob={area.demJob}
+                onDelete={onDeleteJob}
+              />
+              {spineJobs.length > 0 && (
+                <div className="spineNest">
+                  {spineJobs.map((s) => (
+                    <DerivedRow key={s.id} job={s} onDelete={onDeleteJob} />
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </details>
+  );
+}
+
+function AreaCard({
+  area,
+  specs,
+  onRunJob,
+  pendingKey,
+  onDeleteJob
+}: {
+  area: Area;
+  specs: JobSpec[];
+  onRunJob: (demJob: Job, spec: JobSpec) => void;
+  pendingKey?: string;
+  onDeleteJob?: (job: Job) => void;
+}) {
   const setActiveDemJob = useAppStore((s) => s.setActiveDemJob);
   const toggleFootprint = useAppStore((s) => s.toggleFootprint);
   const requestPan = useAppStore((s) => s.requestPan);
@@ -409,41 +506,24 @@ function AreaCard({ area, onDeleteJob }: { area: Area; onDeleteJob?: (job: Job) 
         </button>
       </div>
 
-      {area.compareGroups.length > 0 && (
-        <details open className="derivedSection">
-          <summary>TPI / Compare ({area.compareGroups.length})</summary>
-          <div className="derivedList">
-            {area.compareGroups.map((group) => (
-              <div key={group.job.id} className="compareGroup">
-                <DerivedRow
-                  job={group.job}
-                  role="compare"
-                  demJob={area.demJob}
-                  onDelete={onDeleteJob}
-                />
-                {group.spineJobs.length > 0 && (
-                  <div className="spineNest">
-                    {group.spineJobs.map((s) => (
-                      <DerivedRow key={s.id} job={s} role="spine" onDelete={onDeleteJob} />
-                    ))}
-                  </div>
-                )}
-              </div>
-            ))}
-          </div>
-        </details>
-      )}
-
-      {area.drainageJobs.length > 0 && (
-        <details className="derivedSection">
-          <summary>Drainage ({area.drainageJobs.length})</summary>
-          <div className="derivedList">
-            {area.drainageJobs.map((j) => (
-              <DerivedRow key={j.id} job={j} role="drainage" onDelete={onDeleteJob} />
-            ))}
-          </div>
-        </details>
-      )}
+      <div className="jobSpecList">
+        {specs.map((spec) => {
+          const runs = area.jobsBySpec.get(spec.key) ?? [];
+          const key = `${area.demJob.id}:${spec.key}`;
+          return (
+            <JobSpecSection
+              key={spec.key}
+              area={area}
+              spec={spec}
+              runs={runs}
+              spineJobsByTpi={area.spineJobsByTpi}
+              onRunJob={onRunJob}
+              onDeleteJob={onDeleteJob}
+              isPending={pendingKey === key}
+            />
+          );
+        })}
+      </div>
     </div>
   );
 }
@@ -702,12 +782,14 @@ export function App() {
   const setOverlay = useAppStore((state) => state.setOverlay);
   const clearFootprints = useAppStore((state) => state.clearFootprints);
   const footprintCount = useAppStore((state) => Object.keys(state.footprints).length);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const ropewikiDialogRef = useRef<HTMLDialogElement>(null);
   const [name, setName] = useState("aoi");
   const [bufferM, setBufferM] = useState(200);
-  const [kmlFile, setKmlFile] = useState<File | undefined>();
-  const [ropewikiSource, setRopewikiSource] = useState("");
   const [snapRadiusM, setSnapRadiusM] = useState(30);
   const [snapStepM, setSnapStepM] = useState(10);
+  const [openMapTool, setOpenMapTool] = useState<"aoi" | "kml" | "ravine" | undefined>();
+  const [ropewikiSource, setRopewikiSource] = useState("");
 
   const jobsQuery = useQuery({
     queryKey: ["jobs"],
@@ -715,8 +797,16 @@ export function App() {
     refetchInterval: 2000
   });
 
+  const specsQuery = useQuery({
+    queryKey: ["job-specs"],
+    queryFn: listJobSpecs,
+    staleTime: Infinity,
+    gcTime: Infinity
+  });
+
   const jobs = jobsQuery.data ?? [];
-  const areas = useMemo(() => groupAreas(jobs), [jobs]);
+  const specs = useMemo(() => specsQuery.data ?? [], [specsQuery.data]);
+  const areas = useMemo(() => groupAreas(jobs, specs), [jobs, specs]);
   const baseKmlJobs = useMemo(
     () => jobs.filter((j) => j.kind === "kml-import" || j.kind === "kml-snap"),
     [jobs]
@@ -752,26 +842,24 @@ export function App() {
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["jobs"] });
   const buildMutation = useMutation({
-    mutationFn: () => {
-      if (!bounds) throw new Error("Draw or select an AOI first");
-      return buildDem(name, bounds, bufferM);
-    },
+    mutationFn: (payload: { name: string; bounds: Bounds; bufferM: number }) =>
+      buildDem(payload.name, payload.bounds, payload.bufferM),
     onSuccess: invalidate
   });
-  const drainageMutation = useMutation({
-    mutationFn: () => {
-      if (!activeDemJob) throw new Error("Select a completed DEM job");
-      return runDrainage(activeDemJob.id);
+  const [pendingRunKey, setPendingRunKey] = useState<string | undefined>();
+  const runJobMutation = useMutation({
+    mutationFn: ({ demJob, spec }: { demJob: Job; spec: JobSpec }) =>
+      runDemJob(demJob.id, spec.key, {}),
+    onMutate: ({ demJob, spec }) => {
+      setPendingRunKey(`${demJob.id}:${spec.key}`);
     },
-    onSuccess: invalidate
+    onSettled: () => {
+      setPendingRunKey(undefined);
+      invalidate();
+    }
   });
-  const compareMutation = useMutation({
-    mutationFn: () => {
-      if (!activeDemJob) throw new Error("Select a completed DEM job");
-      return runRavineCompare(activeDemJob.id);
-    },
-    onSuccess: invalidate
-  });
+  const onRunJob = (demJob: Job, spec: JobSpec) =>
+    runJobMutation.mutate({ demJob, spec });
   const spineMutation = useMutation({
     mutationFn: () => {
       if (!activeCompareJob) throw new Error("Select a completed TPI job");
@@ -780,44 +868,48 @@ export function App() {
     onSuccess: invalidate
   });
   const uploadKmlMutation = useMutation({
-    mutationFn: () => {
-      if (!kmlFile) throw new Error("Choose a KML file first");
-      return uploadKmlFile(kmlFile, activeDemJob?.id);
-    },
+    mutationFn: (file: File) => uploadKmlFile(file, activeDemJob?.id),
     onSuccess: () => {
-      setKmlFile(undefined);
       invalidate();
     }
   });
   const ropewikiKmlMutation = useMutation({
-    mutationFn: () => {
-      const source = ropewikiSource.trim();
+    mutationFn: (source: string) => {
       if (!source) throw new Error("Enter a Ropewiki URL or title");
       return importRopewikiKml(source, activeDemJob?.id);
     },
-    onSuccess: () => {
-      setRopewikiSource("");
-      invalidate();
-    }
+    onSuccess: invalidate
   });
   const snapKmlMutation = useMutation({
-    mutationFn: ({ job, target, demJob }: { job: Job; target: KmlSnapTarget; demJob?: Job }) => {
+    mutationFn: ({
+      job,
+      target,
+      demJob,
+      searchRadiusM,
+      sampleStepM
+    }: {
+      job: Job;
+      target: KmlSnapTarget;
+      demJob?: Job;
+      searchRadiusM: number;
+      sampleStepM: number;
+    }) => {
       if (target === "dem") {
         const targetDemJob = demJob ?? activeDemJob;
         if (!targetDemJob) throw new Error("Select a completed DEM job first");
         return snapKml(job.id, {
           target,
           dem_job_id: targetDemJob.id,
-          search_radius_m: snapRadiusM,
-          sample_step_m: snapStepM
+          search_radius_m: searchRadiusM,
+          sample_step_m: sampleStepM
         });
       }
       if (!activeCompareJob) throw new Error("Select a completed TPI job first");
       return snapKml(job.id, {
         target,
         compare_job_id: activeCompareJob.id,
-        search_radius_m: snapRadiusM,
-        sample_step_m: snapStepM
+        search_radius_m: searchRadiusM,
+        sample_step_m: sampleStepM
       });
     },
     onSuccess: invalidate
@@ -850,11 +942,65 @@ export function App() {
   });
   const deleteJob = (job: Job) => deleteJobMutation.mutate(job);
 
+  const promptNumber = (label: string, current: number, min: number): number | undefined => {
+    const raw = window.prompt(label, String(current));
+    if (raw === null) return undefined;
+    const value = Number(raw);
+    if (!Number.isFinite(value) || value < min) {
+      window.alert(`${label} must be ${min > 0 ? "a positive number" : "zero or greater"}.`);
+      return undefined;
+    }
+    return value;
+  };
+
+  const runBuildDem = () => {
+    if (!bounds) {
+      window.alert("Draw or select an AOI first.");
+      return;
+    }
+    const nextName = window.prompt("Area name", name)?.trim();
+    if (nextName === undefined) return;
+    const nextBuffer = promptNumber("DEM buffer meters", bufferM, 0);
+    if (nextBuffer === undefined) return;
+    const finalName = nextName || "aoi";
+    setName(finalName);
+    setBufferM(nextBuffer);
+    buildMutation.mutate({ name: finalName, bounds, bufferM: nextBuffer });
+  };
+
+  const runRopewikiImport = () => {
+    const source = ropewikiSource.trim();
+    if (!source) return;
+    ropewikiKmlMutation.mutate(source, {
+      onSuccess: () => {
+        setRopewikiSource("");
+        ropewikiDialogRef.current?.close();
+      }
+    });
+  };
+
+  const openRopewikiDialog = () => {
+    const dialog = ropewikiDialogRef.current;
+    if (!dialog) return;
+    if (!dialog.open) dialog.showModal();
+  };
+
+  const runSnap = (job: Job, target: KmlSnapTarget, demJob?: Job) => {
+    const searchRadiusM = promptNumber("Snap radius meters", snapRadiusM, 1);
+    if (searchRadiusM === undefined) return;
+    const sampleStepM = promptNumber("Snap sample step meters", snapStepM, 1);
+    if (sampleStepM === undefined) return;
+    setSnapRadiusM(searchRadiusM);
+    setSnapStepM(sampleStepM);
+    snapKmlMutation.mutate({ job, target, demJob, searchRadiusM, sampleStepM });
+  };
+
+  const selectedAoiText = bounds ? formatBounds(bounds) : "No AOI selected";
+
   const error = useMemo(() => {
     return (
       buildMutation.error ??
-      drainageMutation.error ??
-      compareMutation.error ??
+      runJobMutation.error ??
       spineMutation.error ??
       uploadKmlMutation.error ??
       ropewikiKmlMutation.error ??
@@ -865,8 +1011,7 @@ export function App() {
     );
   }, [
     buildMutation.error,
-    drainageMutation.error,
-    compareMutation.error,
+    runJobMutation.error,
     spineMutation.error,
     uploadKmlMutation.error,
     ropewikiKmlMutation.error,
@@ -892,88 +1037,7 @@ export function App() {
         <aside className="panel">
           <div className="panelHeader">
             <Layers size={16} />
-            <h1>AOI Tools</h1>
-          </div>
-
-          <label>
-            Area name
-            <input value={name} onChange={(event) => setName(event.target.value)} />
-          </label>
-          <label>
-            DEM buffer meters
-            <input
-              type="number"
-              min={0}
-              step={50}
-              value={bufferM}
-              onChange={(event) => setBufferM(Number(event.target.value))}
-            />
-          </label>
-          <button className="primary" disabled={!bounds || buildMutation.isPending} onClick={() => buildMutation.mutate()}>
-            <Play size={16} />
-            Build DEM Mosaic
-          </button>
-
-          <div className="importPanel">
-            <div className="jobsHeader">
-              <Upload size={16} />
-              <h2>Import KML</h2>
-            </div>
-            {activeDemJob && (
-              <div className="areaBounds">
-                Target container: DEM {activeDemJob.id}. KMLs outside this DEM will be rejected.
-              </div>
-            )}
-            <label>
-              KML file
-              <input
-                type="file"
-                accept=".kml,application/vnd.google-earth.kml+xml"
-                onChange={(event) => setKmlFile(event.target.files?.[0])}
-              />
-            </label>
-            <button disabled={!kmlFile || uploadKmlMutation.isPending} onClick={() => uploadKmlMutation.mutate()}>
-              Upload KML
-            </button>
-            <label>
-              Ropewiki URL or title
-              <input value={ropewikiSource} onChange={(event) => setRopewikiSource(event.target.value)} />
-            </label>
-            <button disabled={!ropewikiSource.trim() || ropewikiKmlMutation.isPending} onClick={() => ropewikiKmlMutation.mutate()}>
-              Import Ropewiki KML
-            </button>
-            <label>
-              Snap radius meters
-              <input
-                type="number"
-                min={1}
-                step={5}
-                value={snapRadiusM}
-                onChange={(event) => setSnapRadiusM(Number(event.target.value))}
-              />
-            </label>
-            <label>
-              Snap sample step meters
-              <input
-                type="number"
-                min={1}
-                step={1}
-                value={snapStepM}
-                onChange={(event) => setSnapStepM(Number(event.target.value))}
-              />
-            </label>
-          </div>
-
-          <div className="toolGroup">
-            <button disabled={!activeDemJob || drainageMutation.isPending} onClick={() => drainageMutation.mutate()}>
-              Flow Preview
-            </button>
-            <button disabled={!activeDemJob || compareMutation.isPending} onClick={() => compareMutation.mutate()}>
-              TPI Preview
-            </button>
-            <button disabled={!activeCompareJob || spineMutation.isPending} onClick={() => spineMutation.mutate()}>
-              Ravine Spine
-            </button>
+            <h1>Jobs & Layers</h1>
           </div>
 
           <TrackProfilePanel
@@ -1026,7 +1090,13 @@ export function App() {
                   {area.name} ({kmls.length} KML)
                 </summary>
                 <div className="derivedList">
-                  <AreaCard area={area} onDeleteJob={deleteJob} />
+                  <AreaCard
+                    area={area}
+                    specs={specs}
+                    onRunJob={onRunJob}
+                    pendingKey={pendingRunKey}
+                    onDeleteJob={deleteJob}
+                  />
                   {kmls.length === 0 && <div className="empty">No KMLs in this DEM container.</div>}
                   {kmls.map((job) => (
                     <KmlImportRow
@@ -1035,9 +1105,7 @@ export function App() {
                       childLayers={childLayersFor(job, generated, kmls)}
                       activeDemJob={area.demJob}
                       activeCompareJob={activeCompareJob}
-                      onSnap={(sourceJob, target) =>
-                        snapKmlMutation.mutate({ job: sourceJob, target, demJob: area.demJob })
-                      }
+                      onSnap={(sourceJob, target) => runSnap(sourceJob, target, area.demJob)}
                       onDelete={deleteJob}
                     />
                   ))}
@@ -1074,9 +1142,7 @@ export function App() {
                       childLayers={childLayersFor(job, kmlContainers.looseGenerated, kmlContainers.loose)}
                       activeDemJob={activeDemJob}
                       activeCompareJob={activeCompareJob}
-                      onSnap={(sourceJob, target) =>
-                        snapKmlMutation.mutate({ job: sourceJob, target })
-                      }
+                      onSnap={(sourceJob, target) => runSnap(sourceJob, target)}
                       onDelete={deleteJob}
                     />
                   ))}
@@ -1122,6 +1188,133 @@ export function App() {
         </aside>
 
         <section className="mapFrame">
+          <div className="mapToolDock">
+            <div className="mapToolGroup">
+              <button
+                className={`mapToolIcon ${openMapTool === "aoi" ? "toggled" : ""}`}
+                title="AOI tools"
+                aria-label="AOI tools"
+                onClick={() => setOpenMapTool(openMapTool === "aoi" ? undefined : "aoi")}
+              >
+                <Layers size={14} />
+              </button>
+              {openMapTool === "aoi" && (
+                <div className="mapToolPopover">
+                  <div className="mapToolHead">
+                    <Layers size={14} />
+                    <span>AOI</span>
+                  </div>
+                  <div className="mapToolMeta">{selectedAoiText}</div>
+                  <button className="primary" disabled={!bounds || buildMutation.isPending} onClick={runBuildDem}>
+                    <Play size={14} />
+                    DEM Mosaic
+                  </button>
+                </div>
+              )}
+            </div>
+
+            <div className="mapToolGroup">
+              <button
+                className={`mapToolIcon ${openMapTool === "kml" ? "toggled" : ""}`}
+                title="KML import"
+                aria-label="KML import"
+                onClick={() => setOpenMapTool(openMapTool === "kml" ? undefined : "kml")}
+              >
+                <Upload size={14} />
+              </button>
+              <input
+                ref={fileInputRef}
+                className="hiddenFileInput"
+                type="file"
+                accept=".kml,application/vnd.google-earth.kml+xml"
+                onChange={(event) => {
+                  const file = event.target.files?.[0];
+                  if (file) uploadKmlMutation.mutate(file);
+                  event.currentTarget.value = "";
+                }}
+              />
+              {openMapTool === "kml" && (
+                <div className="mapToolPopover">
+                  <div className="mapToolHead">
+                    <Upload size={14} />
+                    <span>KML</span>
+                  </div>
+                  {activeDemJob && <div className="mapToolMeta">Container {activeDemJob.id}</div>}
+                  <div className="mapToolButtons">
+                    <button disabled={uploadKmlMutation.isPending} onClick={() => fileInputRef.current?.click()}>
+                      Upload
+                    </button>
+                    <button
+                      disabled={ropewikiKmlMutation.isPending}
+                      onClick={openRopewikiDialog}
+                    >
+                      Ropewiki
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+
+            <div className="mapToolGroup">
+              <button
+                className={`mapToolIcon ${openMapTool === "ravine" ? "toggled" : ""}`}
+                title="Ravine tools"
+                aria-label="Ravine tools"
+                onClick={() => setOpenMapTool(openMapTool === "ravine" ? undefined : "ravine")}
+              >
+                <Activity size={14} />
+              </button>
+              {openMapTool === "ravine" && (
+                <div className="mapToolPopover">
+                  <div className="mapToolHead">
+                    <Activity size={14} />
+                    <span>Ravine</span>
+                  </div>
+                  <button disabled={!activeCompareJob || spineMutation.isPending} onClick={() => spineMutation.mutate()}>
+                    Ravine Spine
+                  </button>
+                </div>
+              )}
+            </div>
+          </div>
+          <dialog
+            ref={ropewikiDialogRef}
+            className="appDialog"
+          >
+            <form
+              method="dialog"
+              onSubmit={(event) => {
+                event.preventDefault();
+                runRopewikiImport();
+              }}
+            >
+              <div className="dialogHead">
+                <Upload size={16} />
+                <strong>Import Ropewiki KML</strong>
+              </div>
+              {activeDemJob && <div className="mapToolMeta">Container {activeDemJob.id}</div>}
+              <label>
+                Ropewiki URL or title
+                <input
+                  autoFocus
+                  value={ropewikiSource}
+                  onChange={(event) => setRopewikiSource(event.target.value)}
+                />
+              </label>
+              <div className="dialogActions">
+                <button type="button" onClick={() => ropewikiDialogRef.current?.close()}>
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="primary"
+                  disabled={!ropewikiSource.trim() || ropewikiKmlMutation.isPending}
+                >
+                  Import
+                </button>
+              </div>
+            </form>
+          </dialog>
           <MapView kmlImports={kmlImports} profileJob={selectedProfileJob} />
         </section>
       </section>

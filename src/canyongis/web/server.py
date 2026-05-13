@@ -11,18 +11,17 @@ from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
 from threading import Lock
-from typing import Any, Literal
+from typing import Annotated, Any, Literal
 
 import geopandas as gpd
 import rasterio
-from fastapi import FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, ValidationError
 from rasterio.warp import transform_bounds
 
 from ..aoi_mosaic import build_aoi_dem_mosaic
-from ..drainage_preview import export_drainage_previews
 from ..ingest import (
     ROPEWIKI_PAGE_URL,
     _download_file,
@@ -31,10 +30,10 @@ from ..ingest import (
     parse_ropewiki_ref,
 )
 from ..kml_snap import snap_kml_to_raster
-from ..ravine_compare import export_ravine_compare
 from ..ravine_spine import export_ravine_spines
 from ..track_profile import _rappels_geojson, analyze_track_profile
 from ..validate import parse_kml
+from .dem_jobs import get_spec, list_specs
 
 JobStatus = Literal["queued", "running", "succeeded", "failed"]
 
@@ -95,20 +94,6 @@ class BuildDemRequest(BaseModel):
     bounds: Bounds
     buffer_m: float = 200.0
     max_products: int = 24
-
-
-class DrainageRequest(BaseModel):
-    thresholds: list[int] = Field(default_factory=lambda: [200, 500, 1000, 5000])
-    line_width_px: int = 2
-    fill_depressions: bool = True
-
-
-class RavineCompareRequest(BaseModel):
-    scales_m: list[float] = Field(default_factory=lambda: [5.0, 10.0, 30.0, 100.0])
-    combine: str = "normalized_sum"
-    smooth_m: float = 2.0
-    norm_pct: float = 99.5
-    nprocs: int | None = None
 
 
 class RavineSpineRequest(BaseModel):
@@ -437,10 +422,14 @@ def _compare_display_high(compare_job: Job, target: str) -> float | None:
         summary = json.loads(summary_path.read_text())
     except Exception:
         return None
-    key = {"tpi": "b_tpi", "geomorphon": "a_geomorphon", "curvature": "c_curvature"}.get(target)
-    if not key:
-        return None
-    value = summary.get(key, {}).get("display_hi")
+    nested_key = {"tpi": "b_tpi", "geomorphon": "a_geomorphon", "curvature": "c_curvature"}.get(
+        target
+    )
+    if nested_key and isinstance(summary.get(nested_key), dict):
+        value = summary[nested_key].get("display_hi")
+        if isinstance(value, int | float):
+            return float(value)
+    value = summary.get("display_hi")
     return float(value) if isinstance(value, int | float) else None
 
 
@@ -512,16 +501,39 @@ def create_app(
 
     @app.get("/api/tools")
     def tools() -> dict[str, Any]:
-        return {
-            "tools": [
-                {"id": "build-dem", "label": "Build DEM mosaic"},
-                {"id": "drainage", "label": "Flow / drainage preview"},
-                {"id": "ravine-compare", "label": "TPI / ravine compare"},
-                {"id": "ravine-spine", "label": "Ravine spine from TPI"},
-                {"id": "kml-snap", "label": "Snap KML to terrain"},
-                {"id": "track-profile", "label": "Track elevation profile"},
-            ]
-        }
+        builtins = [
+            {"id": "build-dem", "label": "Build DEM mosaic"},
+            {"id": "ravine-spine", "label": "Ravine spine from TPI"},
+            {"id": "kml-snap", "label": "Snap KML to terrain"},
+            {"id": "track-profile", "label": "Track elevation profile"},
+        ]
+        registered = [{"id": s.key, "label": s.label} for s in list_specs()]
+        return {"tools": [*builtins, *registered]}
+
+    @app.get("/api/job-specs")
+    def job_specs() -> dict[str, Any]:
+        out: list[dict[str, Any]] = []
+        for spec in list_specs():
+            try:
+                defaults = spec.request_model().model_dump()
+            except ValidationError:
+                defaults = {}
+            out.append(
+                {
+                    "key": spec.key,
+                    "label": spec.label,
+                    "description": spec.description,
+                    "visualizations": [
+                        {"key": v.key, "label": v.label, "url_field": v.url_field}
+                        for v in spec.visualizations
+                    ],
+                    "request_defaults": defaults,
+                    "request_schema": spec.request_model.model_json_schema(),
+                    "available": spec.available,
+                    "unavailable_reason": spec.unavailable_reason,
+                }
+            )
+        return {"specs": out}
 
     @app.get("/api/jobs")
     def list_jobs() -> dict[str, Any]:
@@ -704,89 +716,69 @@ def create_app(
         job = ctx.submit("build-dem", params, run)
         return asdict(job)
 
-    @app.post("/api/jobs/{dem_job_id}/drainage")
-    def drainage(dem_job_id: str, req: DrainageRequest) -> dict[str, Any]:
+    @app.post("/api/jobs/{dem_job_id}/run/{job_key}")
+    def run_dem_job(
+        dem_job_id: str,
+        job_key: str,
+        body: Annotated[dict[str, Any] | None, Body()] = None,
+    ) -> dict[str, Any]:
+        spec = get_spec(job_key)
+        if spec is None:
+            raise HTTPException(status_code=404, detail=f"unknown job key: {job_key}")
+        if not spec.available:
+            raise HTTPException(
+                status_code=400,
+                detail=spec.unavailable_reason or f"{spec.label} is unavailable",
+            )
         dem_job = ctx.job_or_404(dem_job_id)
         if dem_job.status != "succeeded" or not dem_job.result:
             raise HTTPException(status_code=400, detail="DEM job has not succeeded")
         dem_path = dem_job.result["dem_path"]
-        params = {"dem_job_id": dem_job_id, **req.model_dump()}
+        try:
+            req = spec.request_model.model_validate(body or {})
+        except ValidationError as exc:
+            raise HTTPException(status_code=400, detail=exc.errors()) from exc
+        params = {"dem_job_id": dem_job_id, "job_key": spec.key, **req.model_dump()}
 
         def run(progress_cb) -> dict[str, Any]:
-            out_dir = ctx.output_root / "jobs" / f"drainage-{uuid.uuid4().hex[:8]}"
-            progress_cb(f"drainage-preview → {out_dir} (thresholds={req.thresholds})")
-            result = export_drainage_previews(
-                dem_path,
-                out_dir,
-                thresholds=tuple(req.thresholds),
-                fill_depressions=req.fill_depressions,
-                line_width_px=req.line_width_px,
+            out_dir = ctx.output_root / "jobs" / f"{spec.key}-{uuid.uuid4().hex[:8]}"
+            out_dir.mkdir(parents=True, exist_ok=True)
+            result = spec.runner(
+                dem_path=dem_path,
+                out_dir=out_dir,
+                req=req,
+                progress_cb=progress_cb,
+                output_url=ctx.output_url,
             )
-            bounds = _raster_bounds_wgs84(dem_path)
-            return {
-                **asdict(result),
-                "bounds_wgs84": bounds,
-                "flow_preview_url": ctx.output_url(result.flow_preview_path),
-                "stream_preview_url": ctx.output_url(result.stream_preview_path),
-            }
+            result.setdefault("dem_job_id", dem_job_id)
+            result.setdefault("job_key", spec.key)
+            return result
 
-        job = ctx.submit("drainage", params, run)
+        job = ctx.submit(spec.key, params, run)
         return asdict(job)
 
-    @app.post("/api/jobs/{dem_job_id}/ravine-compare")
-    def ravine_compare(dem_job_id: str, req: RavineCompareRequest) -> dict[str, Any]:
-        dem_job = ctx.job_or_404(dem_job_id)
-        if dem_job.status != "succeeded" or not dem_job.result:
-            raise HTTPException(status_code=400, detail="DEM job has not succeeded")
-        dem_path = dem_job.result["dem_path"]
-        params = {"dem_job_id": dem_job_id, **req.model_dump()}
-
-        def run(progress_cb) -> dict[str, Any]:
-            out_dir = ctx.output_root / "jobs" / f"ravine-compare-{uuid.uuid4().hex[:8]}"
-            result = export_ravine_compare(
-                dem_path,
-                out_dir,
-                tpi_scales_m=tuple(req.scales_m),
-                tpi_combine=req.combine,
-                tpi_smooth_m=req.smooth_m,
-                tpi_norm_pct=req.norm_pct,
-                nprocs=req.nprocs,
-                log_callback=progress_cb,
+    @app.post("/api/jobs/{tpi_job_id}/ravine-spine")
+    def ravine_spine(tpi_job_id: str, req: RavineSpineRequest) -> dict[str, Any]:
+        tpi_job = ctx.job_or_404(tpi_job_id)
+        if tpi_job.status != "succeeded" or not tpi_job.result:
+            raise HTTPException(status_code=400, detail="upstream TPI job has not succeeded")
+        if "b_tpi_path" not in tpi_job.result or "dem_path" not in tpi_job.result:
+            raise HTTPException(
+                status_code=400,
+                detail="upstream job has no b_tpi_path / dem_path; run a TPI job first",
             )
-            return {
-                "dem_path": dem_path,
-                "out_dir": str(out_dir),
-                "bounds_wgs84": result.preview_bounds_wgs84,
-                "a_geomorphon_path": str(out_dir / "a_geomorphon.tif"),
-                "b_tpi_path": str(out_dir / "b_tpi.tif"),
-                "c_curvature_path": str(out_dir / "c_curvature.tif"),
-                "compare_png_url": ctx.output_url(result.compare_png_path),
-                "panel_hillshade_url": ctx.output_url(out_dir / "panel_hillshade.webp"),
-                "panel_a_geomorphon_url": ctx.output_url(out_dir / "panel_a_geomorphon.webp"),
-                "panel_b_tpi_url": ctx.output_url(out_dir / "panel_b_tpi.webp"),
-                "panel_c_curvature_url": ctx.output_url(out_dir / "panel_c_curvature.webp"),
-            }
-
-        job = ctx.submit("ravine-compare", params, run)
-        return asdict(job)
-
-    @app.post("/api/jobs/{compare_job_id}/ravine-spine")
-    def ravine_spine(compare_job_id: str, req: RavineSpineRequest) -> dict[str, Any]:
-        compare_job = ctx.job_or_404(compare_job_id)
-        if compare_job.status != "succeeded" or not compare_job.result:
-            raise HTTPException(status_code=400, detail="ravine-compare job has not succeeded")
         if req.parent_kml_job_id:
             parent_kml_job = ctx.job_or_404(req.parent_kml_job_id)
             if parent_kml_job.status != "succeeded" or not parent_kml_job.result:
                 raise HTTPException(status_code=400, detail="parent KML job has not succeeded")
-        params = {"compare_job_id": compare_job_id, **req.model_dump()}
+        params = {"tpi_job_id": tpi_job_id, **req.model_dump()}
 
         def run(progress_cb) -> dict[str, Any]:
             out_dir = ctx.output_root / "jobs" / f"ravine-spine-{uuid.uuid4().hex[:8]}"
             progress_cb(f"ravine-spine → {out_dir}")
             result = export_ravine_spines(
-                compare_job.result["b_tpi_path"],
-                compare_job.result["dem_path"],
+                tpi_job.result["b_tpi_path"],
+                tpi_job.result["dem_path"],
                 out_dir,
                 score_closing_m=5.0,
                 auto_threshold="fixed",
@@ -797,7 +789,7 @@ def create_app(
             )
             return {
                 **asdict(result),
-                "bounds_wgs84": compare_job.result["bounds_wgs84"],
+                "bounds_wgs84": tpi_job.result.get("bounds_wgs84"),
                 "parent_kml_job_id": req.parent_kml_job_id,
                 **_ravine_spine_layers(ctx, asdict(result)),
             }

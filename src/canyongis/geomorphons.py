@@ -35,7 +35,6 @@ flat_deg = params["flat_deg"]
 dist_m = params["dist_m"]
 outputs = params["outputs"]
 use_extended = params["extended"]
-nprocs = params.get("nprocs")
 quiet = bool(params["quiet"])
 
 out_dir.mkdir(parents=True, exist_ok=True)
@@ -50,19 +49,6 @@ kwargs = {
     "flat": flat_deg,
     "dist": dist_m,
 }
-if nprocs:
-    # r.geomorphon only gained `nprocs` in GRASS 8.5; older releases (e.g. 8.4.x)
-    # reject the parameter. Probe the module interface and only pass it if supported.
-    iface = gs.read_command("r.geomorphon", "--interface-description")
-    if 'name="nprocs"' in iface or "<name>nprocs</name>" in iface:
-        kwargs["nprocs"] = int(nprocs)
-        print(f"r.geomorphon supports nprocs; using nprocs={int(nprocs)}", flush=True)
-    else:
-        print(
-            f"r.geomorphon in this GRASS install does not expose nprocs; "
-            f"requested nprocs={int(nprocs)} will be ignored",
-            flush=True,
-        )
 for name in outputs:
     kwargs[name] = name
 
@@ -97,19 +83,15 @@ def export_geomorphons(
     outputs: tuple[str, ...] = DEFAULT_OUTPUTS,
     extended: bool = True,
     quiet: bool = True,
-    nprocs: int | None = None,
     log_callback: Callable[[str], None] | None = None,
 ) -> dict[str, object]:
     """Run GRASS r.geomorphon against a DEM and export selected outputs as GeoTIFFs.
 
-    nprocs: number of cores for r.geomorphon (None = os.cpu_count()).
     log_callback: optional sink for streamed GRASS stderr lines.
     """
     dem_path = Path(dem_path).resolve()
     out_dir = Path(out_dir).resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
-    if nprocs is None:
-        nprocs = os.cpu_count() or 1
 
     with rasterio.open(dem_path) as src:
         if src.crs is None:
@@ -132,7 +114,6 @@ def export_geomorphons(
         "dist_m": dist_m,
         "outputs": list(outputs),
         "extended": extended,
-        "nprocs": int(nprocs),
         "quiet": quiet,
     }
 
@@ -158,8 +139,7 @@ def export_geomorphons(
         ]
         emit(
             f"running GRASS r.geomorphon (search={search_m}m, skip={skip_m}m, "
-            f"flat={flat_deg}deg; requested nprocs={nprocs}, "
-            "module support will be probed)"
+            f"flat={flat_deg}deg)"
         )
         env = os.environ.copy()
         if quiet:
@@ -235,12 +215,6 @@ def geomorphons_cli(argv: list[str] | None = None) -> None:
     p.add_argument("--flat-deg", type=float, default=1.0, help="Flatness threshold in degrees.")
     p.add_argument("--dist-m", type=float, default=0.0, help="Flatness distance in meters.")
     p.add_argument(
-        "--nprocs",
-        type=int,
-        default=None,
-        help="Cores for r.geomorphon (default: os.cpu_count()).",
-    )
-    p.add_argument(
         "--outputs",
         nargs="+",
         default=list(DEFAULT_OUTPUTS),
@@ -282,6 +256,5 @@ def geomorphons_cli(argv: list[str] | None = None) -> None:
         outputs=tuple(args.outputs),
         extended=not args.no_extended,
         quiet=not args.grass_verbose,
-        nprocs=args.nprocs,
     )
     log(f"wrote {len(summary['outputs'])} geomorphon rasters to {args.outdir}")

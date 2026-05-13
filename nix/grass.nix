@@ -1,7 +1,5 @@
 # GRASS 8.5.0 derivation, copied from nixpkgs master
 # (pkgs/by-name/gr/grass/package.nix at the commit pinned by this comment).
-# Upgraded from nixos-unstable's 8.4.2 because r.geomorphon `nprocs` was only
-# added in 8.5; canyongis's web/ravine-compare pipeline depends on it.
 {
   lib,
   stdenv,

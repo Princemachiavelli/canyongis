@@ -516,9 +516,57 @@ button.miniButton {
   gap: 5px;
 }
 
-.compareGroup {
+.compareGroup,
+.jobRunGroup {
   display: grid;
   gap: 4px;
+}
+
+.jobSpecList {
+  display: grid;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.derivedSection.jobSpec summary {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 2px 0;
+}
+
+.jobSpecLabel {
+  flex: 1 1 auto;
+  font-weight: 500;
+  color: #2c3a42;
+}
+
+.jobSpecCount {
+  font-size: 11px;
+  color: #65737c;
+}
+
+.derivedSection.jobSpec summary .miniButton {
+  margin-left: auto;
+}
+
+.visListMuted {
+  list-style: none;
+  padding: 4px 0 4px 18px;
+  margin: 0;
+  display: grid;
+  gap: 2px;
+  cursor: pointer;
+}
+
+.visListMuted li.muted {
+  color: #98a2a8;
+  font-size: 12px;
+}
+
+.visListMuted:hover li.muted {
+  color: #2d95bf;
+  text-decoration: underline;
 }
 
 .statusBadge {
@@ -645,6 +693,120 @@ button.miniButton {
 .map {
   min-height: 0;
   height: 100%;
+}
+
+.mapFrame {
+  position: relative;
+}
+
+.mapToolDock {
+  position: absolute;
+  top: 12px;
+  left: 52px;
+  z-index: 700;
+  width: 34px;
+  display: grid;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.mapToolGroup {
+  position: relative;
+  pointer-events: auto;
+}
+
+.mapToolIcon {
+  width: 34px;
+  min-width: 34px;
+  height: 34px;
+  min-height: 34px;
+  padding: 0;
+  background: rgba(255, 255, 255, 0.95);
+  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.14);
+}
+
+.mapToolPopover {
+  position: absolute;
+  top: 0;
+  left: 42px;
+  width: min(290px, calc(100vw - 470px));
+  border: 1px solid rgba(126, 143, 153, 0.45);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.94);
+  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.14);
+  padding: 8px;
+  display: grid;
+  gap: 7px;
+}
+
+.mapToolHead {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  font-weight: 650;
+  color: #2c3a42;
+}
+
+.mapToolMeta {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-size: 11px;
+  color: #56656d;
+  font-variant-numeric: tabular-nums;
+}
+
+.mapToolButtons {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 6px;
+}
+
+.mapToolPopover button {
+  min-height: 30px;
+  font-size: 12px;
+}
+
+.hiddenFileInput {
+  display: none;
+}
+
+.appDialog {
+  width: min(380px, calc(100vw - 32px));
+  border: 1px solid #b9c2c8;
+  border-radius: 8px;
+  padding: 0;
+  color: #172026;
+  background: #ffffff;
+  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.24);
+}
+
+.appDialog::backdrop {
+  background: rgba(15, 23, 42, 0.22);
+}
+
+.appDialog form {
+  display: grid;
+  gap: 12px;
+  padding: 14px;
+}
+
+.dialogHead {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 14px;
+}
+
+.dialogActions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 8px;
+}
+
+.dialogActions .primary {
+  width: auto;
 }
 
 .leaflet-container {

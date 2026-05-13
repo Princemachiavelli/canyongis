@@ -28,24 +28,41 @@ def test_export_geomorphons_runs_grass_quietly_by_default(monkeypatch, tmp_path)
 
     calls: list[dict[str, object]] = []
 
-    def fake_run(cmd, **kwargs):
-        params_path = Path(cmd[-1])
-        calls.append(
-            {
-                "cmd": cmd,
-                "kwargs": kwargs,
-                "params": json.loads(params_path.read_text()),
-            }
-        )
-        return subprocess.CompletedProcess(cmd, 0, stdout="", stderr="")
+    class FakePopen:
+        stdout = iter(())
 
-    monkeypatch.setattr(subprocess, "run", fake_run)
+        def __init__(self, cmd, **kwargs):
+            params_path = Path(cmd[-1])
+            calls.append(
+                {
+                    "cmd": cmd,
+                    "kwargs": kwargs,
+                    "params": json.loads(params_path.read_text()),
+                }
+            )
+
+        def wait(self):
+            return 0
+
+    def fake_popen(cmd, **kwargs):
+        return FakePopen(cmd, **kwargs)
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
 
     export_geomorphons(dem_path, tmp_path / "geomorphons", outputs=("forms",))
 
     assert len(calls) == 1
     call = calls[0]
     assert call["params"]["quiet"] is True
+    assert "nprocs" not in call["params"]
     assert call["kwargs"]["stdout"] == subprocess.PIPE
-    assert call["kwargs"]["stderr"] == subprocess.PIPE
+    assert call["kwargs"]["stderr"] == subprocess.STDOUT
     assert call["kwargs"]["env"]["GRASS_VERBOSE"] == "0"
+
+
+def test_export_geomorphons_script_does_not_probe_nprocs():
+    from canyongis.geomorphons import _grass_script
+
+    script = _grass_script()
+    assert "nprocs" not in script
+    assert "--interface-description" not in script

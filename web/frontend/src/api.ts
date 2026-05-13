@@ -115,22 +115,36 @@ export async function runTrackProfile(kmlJobId: string, payload: TrackProfilePay
   });
 }
 
-export async function runDrainage(jobId: string): Promise<Job> {
-  return request<Job>(`/api/jobs/${jobId}/drainage`, {
-    method: "POST",
-    body: JSON.stringify({ thresholds: [200, 500, 1000, 5000], line_width_px: 2 })
-  });
+export type JobSpecVisualization = {
+  key: string;
+  label: string;
+  url_field: string;
+};
+
+export type JobSpec = {
+  key: string;
+  label: string;
+  description: string;
+  visualizations: JobSpecVisualization[];
+  request_defaults: Record<string, unknown>;
+  request_schema: Record<string, unknown>;
+  available: boolean;
+  unavailable_reason: string | null;
+};
+
+export async function listJobSpecs(): Promise<JobSpec[]> {
+  const data = await request<{ specs: JobSpec[] }>("/api/job-specs");
+  return data.specs;
 }
 
-export async function runRavineCompare(jobId: string): Promise<Job> {
-  return request<Job>(`/api/jobs/${jobId}/ravine-compare`, {
+export async function runDemJob(
+  demJobId: string,
+  jobKey: string,
+  body: Record<string, unknown> = {}
+): Promise<Job> {
+  return request<Job>(`/api/jobs/${demJobId}/run/${jobKey}`, {
     method: "POST",
-    body: JSON.stringify({
-      scales_m: [5, 10, 30, 100],
-      combine: "normalized_sum",
-      smooth_m: 2,
-      norm_pct: 99.5
-    })
+    body: JSON.stringify(body)
   });
 }
 

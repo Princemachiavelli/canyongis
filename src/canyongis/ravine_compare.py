@@ -14,7 +14,7 @@ import argparse
 import json
 import shutil
 import tempfile
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -70,15 +70,30 @@ def _parse_scales(value: str) -> tuple[float, ...]:
     return parts
 
 
+DEFAULT_HILLSHADE_AZIMUTHS_DEG: tuple[float, ...] = (225.0, 270.0, 315.0, 360.0)
+
+
 def compute_hillshade(
     elev: np.ndarray,
     pixel_size: float,
     *,
-    azimuth_deg: float = 315.0,
+    azimuths_deg: float | Sequence[float] = DEFAULT_HILLSHADE_AZIMUTHS_DEG,
     altitude_deg: float = 45.0,
     z_factor: float = 1.0,
 ) -> np.ndarray:
-    """8-bit hillshade matching GDAL defaults (Horn slope, single light)."""
+    """8-bit Horn-slope hillshade, averaged over one or more sun azimuths.
+
+    Default is the four-direction multi-directional hillshade of Mark (1992),
+    which removes the directional bias of a single light. Pass a single float
+    (e.g. ``azimuths_deg=315.0``) for the classic GDAL single-light look.
+    """
+    azimuths = (
+        (float(azimuths_deg),)
+        if isinstance(azimuths_deg, int | float)
+        else tuple(float(a) for a in azimuths_deg)
+    )
+    if not azimuths:
+        raise ValueError("compute_hillshade: azimuths_deg must contain at least one azimuth")
     filled = fill_nans(elev)
     kx = np.array([[-1, 0, 1], [-2, 0, 2], [-1, 0, 1]], dtype=np.float32) / (8 * pixel_size)
     ky = np.array([[-1, -2, -1], [0, 0, 0], [1, 2, 1]], dtype=np.float32) / (8 * pixel_size)
@@ -86,10 +101,17 @@ def compute_hillshade(
     dzdy = ndi.convolve(filled * z_factor, ky, mode="nearest")
     slope = np.arctan(np.hypot(dzdx, dzdy))
     aspect = np.arctan2(dzdy, -dzdx)
-    az = np.deg2rad(360.0 - azimuth_deg + 90.0)
     zen = np.deg2rad(90.0 - altitude_deg)
-    cos_inc = np.cos(zen) * np.cos(slope) + np.sin(zen) * np.sin(slope) * np.cos(az - aspect)
-    shade = np.clip(cos_inc, 0.0, 1.0)
+    cos_zen = np.cos(zen)
+    sin_zen = np.sin(zen)
+    cos_slope = np.cos(slope)
+    sin_slope = np.sin(slope)
+    shade_sum = np.zeros_like(slope, dtype=np.float32)
+    for az_deg in azimuths:
+        az = np.deg2rad(360.0 - az_deg + 90.0)
+        cos_inc = cos_zen * cos_slope + sin_zen * sin_slope * np.cos(az - aspect)
+        shade_sum += np.clip(cos_inc, 0.0, 1.0).astype(np.float32)
+    shade = shade_sum / len(azimuths)
     out = (shade * 255.0).astype(np.uint8)
     out[np.isnan(elev)] = 0
     return out
@@ -100,7 +122,6 @@ def compute_a_geomorphon(
     scales_m: tuple[float, ...],
     work_dir: Path,
     *,
-    nprocs: int | None = None,
     log_callback: Callable[[str], None] | None = None,
 ) -> tuple[np.ndarray, dict]:
     """Multi-scale geomorphon ravine score: count of scales classifying a pixel
@@ -118,7 +139,6 @@ def compute_a_geomorphon(
             outputs=("forms",),
             extended=False,
             quiet=True,
-            nprocs=nprocs,
             log_callback=log_callback,
         )
         forms_path = sub / "geomorphon_forms.tif"
@@ -459,7 +479,6 @@ def export_ravine_compare(
     display_max_px: int = 4000,
     alpha_gamma: float = 0.7,
     keep_geomorphon_work: bool = False,
-    nprocs: int | None = None,
     log_callback: Callable[[str], None] | None = None,
 ) -> RavineCompareResult:
     dem_path = Path(dem_path)
@@ -491,7 +510,6 @@ def export_ravine_compare(
             dem_path,
             geomorphon_scales_m,
             work_root,
-            nprocs=nprocs,
             log_callback=log_callback,
         )
     finally:
@@ -612,6 +630,256 @@ def export_ravine_compare(
     )
 
 
+@dataclass(frozen=True)
+class PreviewArtifacts:
+    """Common outputs for a single DEM-derived preview job."""
+
+    out_dir: str
+    bounds_wgs84: tuple[float, float, float, float]
+    panel_path: str
+    tif_path: str
+    meta: dict
+
+
+def _make_emit(log_callback: Callable[[str], None] | None) -> Callable[[str], None]:
+    def emit(msg: str) -> None:
+        log(msg)
+        if log_callback is not None:
+            log_callback(msg)
+
+    return emit
+
+
+def _open_dem(dem_path: Path):
+    elev, transform, crs, pixel_size = read_dem(str(dem_path))
+    with rasterio.open(dem_path) as src:
+        profile = src.profile
+    return elev, transform, crs, pixel_size, profile
+
+
+def _save_panel_webp(
+    panel: Image.Image, transform, crs, out_path: Path
+) -> tuple[float, float, float, float]:
+    overlay, bounds = _warp_rgb_image_to_wgs84(panel, src_transform=transform, src_crs=crs)
+    _downsample_by_factor(overlay, OVERLAY_DOWNSAMPLE_FACTOR).save(
+        out_path, quality=85, method=4
+    )
+    return bounds
+
+
+def _render_score_panel(
+    score: np.ndarray,
+    hillshade: np.ndarray,
+    *,
+    display_pct: tuple[float, float] = (2.0, 98.0),
+    alpha_gamma: float = 0.7,
+) -> tuple[Image.Image, float, float]:
+    score01, lo, hi = _percentile_stretch(score, *display_pct)
+    panel = _blend_over_hillshade(hillshade, score01, alpha_gamma=alpha_gamma)
+    return panel, lo, hi
+
+
+def export_hillshade_preview(
+    dem_path: str | Path,
+    out_dir: str | Path,
+    *,
+    azimuths_deg: float | Sequence[float] = DEFAULT_HILLSHADE_AZIMUTHS_DEG,
+    altitude_deg: float = 45.0,
+    log_callback: Callable[[str], None] | None = None,
+) -> PreviewArtifacts:
+    dem_path = Path(dem_path)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    emit = _make_emit(log_callback)
+    emit(f"hillshade: {dem_path} → {out_dir}")
+    elev, transform, crs, pixel_size, profile = _open_dem(dem_path)
+    hillshade = compute_hillshade(
+        elev, pixel_size, azimuths_deg=azimuths_deg, altitude_deg=altitude_deg
+    )
+    hs_tif = out_dir / "hillshade.tif"
+    _write_hillshade_geotiff(hs_tif, hillshade, profile)
+    hs_panel = Image.fromarray(np.repeat(hillshade[..., None], 3, axis=2), mode="RGB")
+    panel_path = out_dir / "panel_hillshade.webp"
+    bounds = _save_panel_webp(hs_panel, transform, crs, panel_path)
+    az_list = (
+        [float(azimuths_deg)]
+        if isinstance(azimuths_deg, int | float)
+        else [float(a) for a in azimuths_deg]
+    )
+    meta = {
+        "azimuths_deg": az_list,
+        "altitude_deg": float(altitude_deg),
+        "pixel_size_m": pixel_size,
+    }
+    summary = {
+        "dem_path": str(dem_path),
+        "out_dir": str(out_dir),
+        **meta,
+        "preview_bounds_wgs84": list(bounds),
+        "outputs": {"hillshade_tif": str(hs_tif), "panel_hillshade_webp": str(panel_path)},
+    }
+    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    return PreviewArtifacts(
+        out_dir=str(out_dir),
+        bounds_wgs84=bounds,
+        panel_path=str(panel_path),
+        tif_path=str(hs_tif),
+        meta=meta,
+    )
+
+
+def export_geomorphon_ravine_preview(
+    dem_path: str | Path,
+    out_dir: str | Path,
+    *,
+    scales_m: tuple[float, ...] = (30.0, 100.0),
+    display_pct: tuple[float, float] = (2.0, 98.0),
+    alpha_gamma: float = 0.7,
+    keep_work: bool = False,
+    log_callback: Callable[[str], None] | None = None,
+) -> PreviewArtifacts:
+    dem_path = Path(dem_path)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    emit = _make_emit(log_callback)
+    emit(f"geomorphon-ravine: {dem_path} → {out_dir} (scales={scales_m}m)")
+    elev, transform, crs, pixel_size, profile = _open_dem(dem_path)
+    hillshade = compute_hillshade(elev, pixel_size)
+    work_root = (
+        out_dir / "_geomorphon_work"
+        if keep_work
+        else Path(tempfile.mkdtemp(prefix="geomorphon_ravine_"))
+    )
+    try:
+        score, geo_meta = compute_a_geomorphon(
+            dem_path, scales_m, work_root, log_callback=log_callback
+        )
+    finally:
+        if not keep_work:
+            shutil.rmtree(work_root, ignore_errors=True)
+    tif_path = out_dir / "a_geomorphon.tif"
+    _write_score_geotiff(tif_path, score, profile)
+    panel, lo, hi = _render_score_panel(
+        score, hillshade, display_pct=display_pct, alpha_gamma=alpha_gamma
+    )
+    panel_path = out_dir / "panel_a_geomorphon.webp"
+    bounds = _save_panel_webp(panel, transform, crs, panel_path)
+    meta = {**geo_meta, "display_lo": lo, "display_hi": hi}
+    summary = {
+        "dem_path": str(dem_path),
+        "out_dir": str(out_dir),
+        "scales_m": list(scales_m),
+        "display_pct": list(display_pct),
+        "preview_bounds_wgs84": list(bounds),
+        **meta,
+        "outputs": {"a_geomorphon_tif": str(tif_path), "panel_a_geomorphon_webp": str(panel_path)},
+    }
+    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    return PreviewArtifacts(
+        out_dir=str(out_dir),
+        bounds_wgs84=bounds,
+        panel_path=str(panel_path),
+        tif_path=str(tif_path),
+        meta=meta,
+    )
+
+
+def export_tpi_ravine_preview(
+    dem_path: str | Path,
+    out_dir: str | Path,
+    *,
+    scales_m: tuple[float, ...] = (5.0, 10.0, 30.0, 100.0),
+    combine: str = "normalized_sum",
+    smooth_m: float = 1.0,
+    norm_pct: float = 99.0,
+    display_pct: tuple[float, float] = (2.0, 98.0),
+    alpha_gamma: float = 0.7,
+    log_callback: Callable[[str], None] | None = None,
+) -> PreviewArtifacts:
+    dem_path = Path(dem_path)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    emit = _make_emit(log_callback)
+    emit(f"tpi-ravine: {dem_path} → {out_dir} (scales={scales_m}m, combine={combine})")
+    elev, transform, crs, pixel_size, profile = _open_dem(dem_path)
+    hillshade = compute_hillshade(elev, pixel_size)
+    score, tpi_meta = compute_b_tpi(
+        elev, pixel_size, scales_m, combine=combine, smooth_m=smooth_m, norm_pct=norm_pct
+    )
+    tif_path = out_dir / "b_tpi.tif"
+    _write_score_geotiff(tif_path, score, profile)
+    panel, lo, hi = _render_score_panel(
+        score, hillshade, display_pct=display_pct, alpha_gamma=alpha_gamma
+    )
+    panel_path = out_dir / "panel_b_tpi.webp"
+    bounds = _save_panel_webp(panel, transform, crs, panel_path)
+    meta = {**tpi_meta, "display_lo": lo, "display_hi": hi}
+    summary = {
+        "dem_path": str(dem_path),
+        "out_dir": str(out_dir),
+        "scales_m": list(scales_m),
+        "combine": combine,
+        "smooth_m": smooth_m,
+        "norm_pct": norm_pct,
+        "display_pct": list(display_pct),
+        "preview_bounds_wgs84": list(bounds),
+        **meta,
+        "outputs": {"b_tpi_tif": str(tif_path), "panel_b_tpi_webp": str(panel_path)},
+    }
+    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    return PreviewArtifacts(
+        out_dir=str(out_dir),
+        bounds_wgs84=bounds,
+        panel_path=str(panel_path),
+        tif_path=str(tif_path),
+        meta=meta,
+    )
+
+
+def export_curvature_preview(
+    dem_path: str | Path,
+    out_dir: str | Path,
+    *,
+    smooth_m: float = 5.0,
+    display_pct: tuple[float, float] = (2.0, 98.0),
+    alpha_gamma: float = 0.7,
+    log_callback: Callable[[str], None] | None = None,
+) -> PreviewArtifacts:
+    dem_path = Path(dem_path)
+    out_dir = Path(out_dir)
+    out_dir.mkdir(parents=True, exist_ok=True)
+    emit = _make_emit(log_callback)
+    emit(f"curvature: {dem_path} → {out_dir} (smooth={smooth_m}m)")
+    elev, transform, crs, pixel_size, profile = _open_dem(dem_path)
+    hillshade = compute_hillshade(elev, pixel_size)
+    score, cur_meta = compute_c_plan_curvature(elev, pixel_size, smooth_m)
+    tif_path = out_dir / "c_curvature.tif"
+    _write_score_geotiff(tif_path, score, profile)
+    panel, lo, hi = _render_score_panel(
+        score, hillshade, display_pct=display_pct, alpha_gamma=alpha_gamma
+    )
+    panel_path = out_dir / "panel_c_curvature.webp"
+    bounds = _save_panel_webp(panel, transform, crs, panel_path)
+    meta = {**cur_meta, "display_lo": lo, "display_hi": hi}
+    summary = {
+        "dem_path": str(dem_path),
+        "out_dir": str(out_dir),
+        "smooth_m": smooth_m,
+        "display_pct": list(display_pct),
+        "preview_bounds_wgs84": list(bounds),
+        **meta,
+        "outputs": {"c_curvature_tif": str(tif_path), "panel_c_curvature_webp": str(panel_path)},
+    }
+    (out_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
+    return PreviewArtifacts(
+        out_dir=str(out_dir),
+        bounds_wgs84=bounds,
+        panel_path=str(panel_path),
+        tif_path=str(tif_path),
+        meta=meta,
+    )
+
+
 def ravine_compare_cli(argv: list[str] | None = None) -> None:
     p = argparse.ArgumentParser(
         prog="canyongis-ravine-compare",
@@ -699,12 +967,6 @@ def ravine_compare_cli(argv: list[str] | None = None) -> None:
         action="store_true",
         help="Keep intermediate per-scale geomorphon outputs.",
     )
-    p.add_argument(
-        "--nprocs",
-        type=int,
-        default=None,
-        help="Cores for r.geomorphon (default: os.cpu_count()).",
-    )
     args = p.parse_args(argv)
 
     lo_str, hi_str = args.display_pct.split(",")
@@ -726,5 +988,4 @@ def ravine_compare_cli(argv: list[str] | None = None) -> None:
         display_max_px=args.display_max_px,
         alpha_gamma=args.alpha_gamma,
         keep_geomorphon_work=args.keep_geomorphon_work,
-        nprocs=args.nprocs,
     )

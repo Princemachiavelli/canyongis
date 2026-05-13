@@ -1,3 +1,4 @@
+.DS_Store
 # Nix
 result
 result-*
@@ -18,8 +19,14 @@ dist/
 .idea/
 *.swp
 
+# Node
+web/frontend/node_modules/*
+
 # Project outputs
+data/
+runs/
 output/
+newout/
 *.tif
 !tests/**/*.tif
 *.html

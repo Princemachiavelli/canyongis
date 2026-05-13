@@ -16,6 +16,7 @@
   pyproj,
   pysheds,
   rasterio,
+  rvt-py,
   scipy,
   scikit-image,
   segmentation_models_pytorch,
@@ -56,6 +57,7 @@ buildPythonPackage {
     pyproj
     pysheds
     rasterio
+    rvt-py
     scipy
     scikit-image
     segmentation_models_pytorch

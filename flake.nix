@@ -35,9 +35,8 @@
               cudaCapabilities = [ "8.6" ];
             };
             overlays = [
-              # nixos-unstable currently pins GRASS 8.4.2, which lacks `nprocs`
-              # support in r.geomorphon (added upstream in 8.5). Pull the master
-              # derivation locally so the web ravine-compare flow works.
+              # Keep GRASS pinned to 8.5.0 rather than depending on the nixpkgs
+              # channel's GRASS version for terrain-analysis behavior.
               (_final: prev: {
                 grass = prev.callPackage ./nix/grass.nix { };
               })
@@ -60,11 +59,13 @@
           };
 
           pysheds = python.pkgs.callPackage ./nix/pysheds.nix { };
+          rvt-py = python.pkgs.callPackage ./nix/rvt-py.nix { };
 
           canyongis-web-frontend = pkgs.callPackage ./web/frontend { };
 
           canyongis = python.pkgs.callPackage ./nix/package.nix {
             inherit pysheds;
+            inherit rvt-py;
             webFrontend = canyongis-web-frontend;
             torch = python.pkgs.torch;
             segmentation_models_pytorch = python.pkgs.segmentation_models_pytorch;
@@ -77,6 +78,7 @@
             canyongis = canyongis;
             inherit canyongis-web-frontend;
             inherit pysheds;
+            inherit rvt-py;
             segmentation_models_pytorch = python.pkgs.segmentation_models_pytorch;
           };
 
