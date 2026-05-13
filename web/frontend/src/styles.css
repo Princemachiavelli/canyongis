@@ -348,6 +348,13 @@ button.toggled {
   border-color: #6cb1cf;
 }
 
+button:disabled {
+  color: #9aa5ab;
+  background: #eef2f4;
+  border-color: #d6dde1;
+  cursor: not-allowed;
+}
+
 button.danger {
   color: #8a3434;
   border-color: #d9a1a1;
@@ -561,4 +568,21 @@ button.miniButton {
 
 .leaflet-container {
   background: #d9e0e4;
+}
+
+.leaflet-tooltip.kmlLabel,
+.leaflet-tooltip.kmlHoverLabel {
+  padding: 2px 6px;
+  color: #263238;
+  background: rgba(255, 255, 255, 0.92);
+  border: 1px solid rgba(64, 78, 86, 0.28);
+  border-radius: 4px;
+  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.18);
+  font-size: 11px;
+  font-weight: 650;
+}
+
+.leaflet-tooltip.kmlLabel::before,
+.leaflet-tooltip.kmlHoverLabel::before {
+  display: none;
 }

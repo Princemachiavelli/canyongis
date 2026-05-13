@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import shutil
 import traceback
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -29,6 +30,7 @@ from ..ingest import (
     _get_kml_download_url,
     parse_ropewiki_ref,
 )
+from ..kml_snap import snap_kml_to_raster
 from ..ravine_compare import export_ravine_compare
 from ..ravine_spine import export_ravine_spines
 from ..validate import parse_kml
@@ -117,6 +119,15 @@ class RavineSpineRequest(BaseModel):
 
 class RopewikiImportRequest(BaseModel):
     source: str = Field(..., min_length=1)
+
+
+class KmlSnapRequest(BaseModel):
+    dem_job_id: str | None = None
+    compare_job_id: str | None = None
+    target: Literal["dem", "tpi", "geomorphon", "curvature"] = "dem"
+    search_radius_m: float = Field(default=30.0, gt=0)
+    sample_step_m: float = Field(default=10.0, gt=0)
+    high_threshold: float | None = None
 
 
 class WebContext:
@@ -276,6 +287,84 @@ def _kml_import_path(ctx: WebContext, job_id: str, name: str) -> Path:
     return ctx.output_root / "kml" / job_id / _safe_kml_name(name)
 
 
+def _compare_raster_path(compare_job: Job, target: str) -> Path:
+    if not compare_job.result:
+        raise HTTPException(status_code=400, detail="ravine-compare job has no result")
+    if target == "tpi":
+        return Path(str(compare_job.result["b_tpi_path"]))
+    direct_field = {"geomorphon": "a_geomorphon_path", "curvature": "c_curvature_path"}.get(target)
+    if direct_field and compare_job.result.get(direct_field):
+        return Path(str(compare_job.result[direct_field]))
+    out_dir = Path(str(compare_job.result.get("out_dir", "")))
+    if not out_dir:
+        raise HTTPException(
+            status_code=400, detail="ravine-compare job is missing output directory"
+        )
+    if target == "geomorphon":
+        return out_dir / "a_geomorphon.tif"
+    if target == "curvature":
+        return out_dir / "c_curvature.tif"
+    raise HTTPException(status_code=400, detail=f"unsupported snap target: {target}")
+
+
+def _compare_display_high(compare_job: Job, target: str) -> float | None:
+    if not compare_job.result:
+        return None
+    out_dir = Path(str(compare_job.result.get("out_dir", "")))
+    summary_path = out_dir / "summary.json"
+    if not summary_path.exists():
+        return None
+    try:
+        summary = json.loads(summary_path.read_text())
+    except Exception:
+        return None
+    key = {"tpi": "b_tpi", "geomorphon": "a_geomorphon", "curvature": "c_curvature"}.get(target)
+    if not key:
+        return None
+    value = summary.get(key, {}).get("display_hi")
+    return float(value) if isinstance(value, int | float) else None
+
+
+def _path_is_within(path: Path, root: Path) -> bool:
+    try:
+        path.resolve().relative_to(root.resolve())
+    except ValueError:
+        return False
+    return True
+
+
+def _delete_kml_job_outputs(ctx: WebContext, job: Job) -> list[str]:
+    if not job.result:
+        return []
+    root = ctx.output_root.resolve()
+    deleted: list[str] = []
+    paths = []
+    for key in ("kml_path", "snapped_kml_path", "snapped_gpkg_path"):
+        value = job.result.get(key)
+        if isinstance(value, str) and value:
+            paths.append(Path(value))
+
+    dirs = []
+    for path in paths:
+        if not _path_is_within(path, root):
+            continue
+        path = path.resolve()
+        parent = path.parent
+        is_import_dir = parent.parent == root / "kml" and parent.name == job.id
+        is_snap_dir = parent.parent == root / "jobs" and parent.name.startswith("kml-snap-")
+        if is_import_dir or is_snap_dir:
+            dirs.append(parent)
+        elif path.exists() and path.is_file():
+            path.unlink()
+            deleted.append(str(path))
+
+    for directory in sorted(set(dirs), key=lambda item: len(item.parts), reverse=True):
+        if directory.exists() and directory.is_dir() and _path_is_within(directory, root):
+            shutil.rmtree(directory)
+            deleted.append(str(directory))
+    return deleted
+
+
 def create_app(
     *,
     output_root: str | Path = "runs/web",
@@ -310,6 +399,7 @@ def create_app(
                 {"id": "drainage", "label": "Flow / drainage preview"},
                 {"id": "ravine-compare", "label": "TPI / ravine compare"},
                 {"id": "ravine-spine", "label": "Ravine spine from TPI"},
+                {"id": "kml-snap", "label": "Snap KML to terrain"},
             ]
         }
 
@@ -324,16 +414,23 @@ def create_app(
         return asdict(ctx.job_or_404(job_id))
 
     @app.delete("/api/jobs/{job_id}")
-    def delete_failed_job(job_id: str) -> dict[str, Any]:
+    def delete_job(job_id: str) -> dict[str, Any]:
         with ctx.lock:
             job = ctx.store.jobs.get(job_id)
             if job is None:
                 raise HTTPException(status_code=404, detail=f"job not found: {job_id}")
-            if job.status != "failed":
-                raise HTTPException(status_code=400, detail="only failed jobs can be deleted")
+            if job.status in {"queued", "running"}:
+                raise HTTPException(status_code=400, detail="running jobs cannot be deleted")
+            if job.status != "failed" and job.kind not in {"kml-import", "kml-snap"}:
+                raise HTTPException(
+                    status_code=400, detail="only failed jobs and KML layers can be deleted"
+                )
+            deleted_outputs = (
+                _delete_kml_job_outputs(ctx, job) if job.kind in {"kml-import", "kml-snap"} else []
+            )
             del ctx.store.jobs[job_id]
             ctx.store.save()
-        return {"deleted": True, "job_id": job_id}
+        return {"deleted": True, "job_id": job_id, "deleted_outputs": deleted_outputs}
 
     @app.post("/api/jobs/import-kml-file")
     async def import_kml_file(file: UploadFile = File(...)) -> dict[str, Any]:
@@ -478,12 +575,13 @@ def create_app(
                 nprocs=req.nprocs,
                 log_callback=progress_cb,
             )
-            bounds = _raster_bounds_wgs84(dem_path)
             return {
                 "dem_path": dem_path,
                 "out_dir": str(out_dir),
-                "bounds_wgs84": bounds,
+                "bounds_wgs84": result.preview_bounds_wgs84,
+                "a_geomorphon_path": str(out_dir / "a_geomorphon.tif"),
                 "b_tpi_path": str(out_dir / "b_tpi.tif"),
+                "c_curvature_path": str(out_dir / "c_curvature.tif"),
                 "compare_png_url": ctx.output_url(result.compare_png_path),
                 "panel_hillshade_url": ctx.output_url(out_dir / "panel_hillshade.webp"),
                 "panel_a_geomorphon_url": ctx.output_url(out_dir / "panel_a_geomorphon.webp"),
@@ -523,6 +621,113 @@ def create_app(
             }
 
         job = ctx.submit("ravine-spine", params, run)
+        return asdict(job)
+
+    @app.post("/api/jobs/{kml_job_id}/snap-kml")
+    def snap_kml(kml_job_id: str, req: KmlSnapRequest) -> dict[str, Any]:
+        kml_job = ctx.job_or_404(kml_job_id)
+        if kml_job.status != "succeeded" or not kml_job.result:
+            raise HTTPException(status_code=400, detail="KML import job has not succeeded")
+        kml_path = Path(str(kml_job.result["kml_path"]))
+
+        dem_path: Path | None = None
+        raster_path: Path
+        snap_mode = "min" if req.target == "dem" else "max"
+        high_threshold = req.high_threshold
+        if req.target == "dem":
+            if not req.dem_job_id:
+                raise HTTPException(
+                    status_code=400, detail="dem_job_id is required for DEM snapping"
+                )
+            dem_job = ctx.job_or_404(req.dem_job_id)
+            if dem_job.status != "succeeded" or not dem_job.result:
+                raise HTTPException(status_code=400, detail="DEM job has not succeeded")
+            dem_path = Path(str(dem_job.result["dem_path"]))
+            raster_path = dem_path
+        else:
+            if not req.compare_job_id:
+                raise HTTPException(
+                    status_code=400, detail="compare_job_id is required for score-raster snapping"
+                )
+            compare_job = ctx.job_or_404(req.compare_job_id)
+            if compare_job.status != "succeeded" or not compare_job.result:
+                raise HTTPException(status_code=400, detail="ravine-compare job has not succeeded")
+            dem_path = Path(str(compare_job.result["dem_path"]))
+            raster_path = _compare_raster_path(compare_job, req.target)
+            if high_threshold is None:
+                high_threshold = _compare_display_high(compare_job, req.target)
+        if not raster_path.exists():
+            raise HTTPException(
+                status_code=400, detail=f"snap raster does not exist: {raster_path}"
+            )
+
+        params = {"kml_job_id": kml_job_id, **req.model_dump()}
+
+        def run(progress_cb) -> dict[str, Any]:
+            out_dir = ctx.output_root / "jobs" / f"kml-snap-{uuid.uuid4().hex[:8]}"
+            kml_name = Path(str(kml_job.result.get("name") or kml_path.name)).stem
+            name = f"{kml_name}-{req.target}-snapped.kml"
+            progress_cb(
+                f"kml-snap → {out_dir} "
+                f"(target={req.target}, radius={req.search_radius_m:g}m, "
+                f"high_threshold={high_threshold})"
+            )
+            result = snap_kml_to_raster(
+                kml_path,
+                raster_path,
+                out_dir,
+                snap_mode=snap_mode,
+                search_radius_m=req.search_radius_m,
+                sample_step_m=req.sample_step_m,
+                high_threshold=high_threshold,
+                output_name=_safe_kml_name(name),
+            )
+            snapped_gdf = gpd.read_file(result.snapped_gpkg_path)
+            geom_type = snapped_gdf.geometry.geom_type
+            line_gdf = snapped_gdf[geom_type.isin(["LineString", "MultiLineString"])].reset_index(
+                drop=True
+            )
+            point_gdf = snapped_gdf[geom_type.isin(["Point", "MultiPoint"])].reset_index(drop=True)
+            category = line_gdf["category"] if "category" in line_gdf.columns else None
+            descent = (
+                line_gdf[category == "descent"].reset_index(drop=True)
+                if category is not None
+                else line_gdf.iloc[0:0]
+            )
+            approach = (
+                line_gdf[category == "approach"].reset_index(drop=True)
+                if category is not None
+                else line_gdf.iloc[0:0]
+            )
+            unclassified = (
+                line_gdf[~category.isin(["descent", "approach"])].reset_index(drop=True)
+                if category is not None
+                else line_gdf
+            )
+            bounds = (
+                _raster_bounds_wgs84(dem_path)
+                if dem_path
+                else _raster_bounds_wgs84(raster_path)
+            )
+            return {
+                **asdict(result),
+                "name": Path(result.snapped_kml_path).name,
+                "kml_path": result.snapped_kml_path,
+                "kml_url": ctx.output_url(result.snapped_kml_path),
+                "bounds_wgs84": bounds,
+                "descent_geojson": _gdf_to_geojson(descent),
+                "approach_geojson": _gdf_to_geojson(approach),
+                "unclassified_geojson": _gdf_to_geojson(unclassified),
+                "points_geojson": _gdf_to_geojson(point_gdf),
+                "source": {
+                    "kind": "kml-snap",
+                    "input_kml_job_id": kml_job_id,
+                    "target": req.target,
+                    "raster_path": str(raster_path),
+                },
+            }
+
+        job = ctx.submit("kml-snap", params, run)
         return asdict(job)
 
     if ctx.frontend_dist and ctx.frontend_dist.exists():

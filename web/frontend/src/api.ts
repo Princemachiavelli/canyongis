@@ -39,10 +39,11 @@ export async function listJobs(): Promise<Job[]> {
   return data.jobs;
 }
 
-export async function deleteFailedJob(jobId: string): Promise<void> {
-  await request<{ deleted: boolean; job_id: string }>(`/api/jobs/${jobId}`, {
-    method: "DELETE"
-  });
+export async function deleteJobRecord(jobId: string): Promise<void> {
+  await request<{ deleted: boolean; job_id: string; deleted_outputs?: string[] }>(
+    `/api/jobs/${jobId}`,
+    { method: "DELETE" }
+  );
 }
 
 export async function buildDem(name: string, bounds: Bounds, bufferM: number): Promise<Job> {
@@ -65,6 +66,25 @@ export async function importRopewikiKml(source: string): Promise<Job> {
   return request<Job>("/api/jobs/import-kml-ropewiki", {
     method: "POST",
     body: JSON.stringify({ source })
+  });
+}
+
+export type KmlSnapTarget = "dem" | "tpi" | "geomorphon" | "curvature";
+
+export async function snapKml(
+  kmlJobId: string,
+  payload: {
+    target: KmlSnapTarget;
+    dem_job_id?: string;
+    compare_job_id?: string;
+    search_radius_m?: number;
+    sample_step_m?: number;
+    high_threshold?: number;
+  }
+): Promise<Job> {
+  return request<Job>(`/api/jobs/${kmlJobId}/snap-kml`, {
+    method: "POST",
+    body: JSON.stringify(payload)
   });
 }
 

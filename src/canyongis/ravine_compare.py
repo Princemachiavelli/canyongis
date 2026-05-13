@@ -22,6 +22,8 @@ import numpy as np
 import rasterio
 from PIL import Image, ImageDraw, ImageFont
 from rasterio.features import rasterize
+from rasterio.transform import array_bounds
+from rasterio.warp import Resampling, calculate_default_transform, reproject
 from scipy import ndimage as ndi
 
 from .geomorphons import export_geomorphons
@@ -39,6 +41,7 @@ class RavineCompareResult:
     curvature_path: str
     hillshade_path: str
     compare_png_path: str
+    preview_bounds_wgs84: tuple[float, float, float, float]
 
 
 _RAMP = np.array(
@@ -320,7 +323,7 @@ def _label_panel(panel: Image.Image, title: str) -> Image.Image:
     return out
 
 
-OVERLAY_DOWNSAMPLE_FACTOR = 2
+OVERLAY_DOWNSAMPLE_FACTOR = 1
 
 
 def _downsample(image: Image.Image, max_px: int) -> Image.Image:
@@ -339,6 +342,38 @@ def _downsample_by_factor(image: Image.Image, factor: float) -> Image.Image:
         max(1, round(image.size[1] / factor)),
     )
     return image.resize(new_size, Image.LANCZOS)
+
+
+def _warp_rgb_image_to_wgs84(
+    image: Image.Image,
+    *,
+    src_transform,
+    src_crs,
+) -> tuple[Image.Image, tuple[float, float, float, float]]:
+    """Warp a projected raster-grid preview to EPSG:4326 for Leaflet ImageOverlay."""
+    arr = np.asarray(image.convert("RGB"))
+    height, width = arr.shape[:2]
+    src_bounds = array_bounds(height, width, src_transform)
+    dst_transform, dst_width, dst_height = calculate_default_transform(
+        src_crs,
+        "EPSG:4326",
+        width,
+        height,
+        *src_bounds,
+    )
+    dst = np.zeros((dst_height, dst_width, 3), dtype=np.uint8)
+    for band in range(3):
+        reproject(
+            source=arr[:, :, band],
+            destination=dst[:, :, band],
+            src_transform=src_transform,
+            src_crs=src_crs,
+            dst_transform=dst_transform,
+            dst_crs="EPSG:4326",
+            resampling=Resampling.bilinear,
+        )
+    west, south, east, north = array_bounds(dst_height, dst_width, dst_transform)
+    return Image.fromarray(dst, mode="RGB"), (west, south, east, north)
 
 
 def _grid_2x2(panels: list[Image.Image]) -> Image.Image:
@@ -506,22 +541,29 @@ def export_ravine_compare(
         for img in (hs_panel, a_panel, b_panel, c_panel):
             _overlay_kml_mask(img, kml_mask, opacity=kml_opacity, width_px=kml_width_px)
 
+    hs_overlay, preview_bounds_wgs84 = _warp_rgb_image_to_wgs84(
+        hs_panel, src_transform=transform, src_crs=crs
+    )
+    a_overlay, _ = _warp_rgb_image_to_wgs84(a_panel, src_transform=transform, src_crs=crs)
+    b_overlay, _ = _warp_rgb_image_to_wgs84(b_panel, src_transform=transform, src_crs=crs)
+    c_overlay, _ = _warp_rgb_image_to_wgs84(c_panel, src_transform=transform, src_crs=crs)
+
     a_label = "A. geomorphon (hollow|valley count)"
     scales_str = ",".join(f"{round(s)}" if s == int(s) else f"{s:g}" for s in tpi_scales_m)
     b_label = f"B. multi-scale TPI [{tpi_combine}, {scales_str}m]"
     c_label = "C. plan curvature"
     hs_label = "hillshade" + (" + KML" if kml_mask is not None and kml_mask.any() else "")
 
-    _downsample_by_factor(hs_panel, OVERLAY_DOWNSAMPLE_FACTOR).save(
+    _downsample_by_factor(hs_overlay, OVERLAY_DOWNSAMPLE_FACTOR).save(
         out_dir / "panel_hillshade.webp", quality=85, method=4
     )
-    _downsample_by_factor(a_panel, OVERLAY_DOWNSAMPLE_FACTOR).save(
+    _downsample_by_factor(a_overlay, OVERLAY_DOWNSAMPLE_FACTOR).save(
         out_dir / "panel_a_geomorphon.webp", quality=85, method=4
     )
-    _downsample_by_factor(b_panel, OVERLAY_DOWNSAMPLE_FACTOR).save(
+    _downsample_by_factor(b_overlay, OVERLAY_DOWNSAMPLE_FACTOR).save(
         out_dir / "panel_b_tpi.webp", quality=85, method=4
     )
-    _downsample_by_factor(c_panel, OVERLAY_DOWNSAMPLE_FACTOR).save(
+    _downsample_by_factor(c_overlay, OVERLAY_DOWNSAMPLE_FACTOR).save(
         out_dir / "panel_c_curvature.webp", quality=85, method=4
     )
 
@@ -542,6 +584,7 @@ def export_ravine_compare(
         "shape": list(elev.shape),
         "kml_path": str(kml_path) if kml_path else None,
         "display_pct": list(display_pct),
+        "preview_bounds_wgs84": list(preview_bounds_wgs84),
         "alpha_gamma": alpha_gamma,
         "a_geomorphon": {**a_meta, "display_lo": a_lo, "display_hi": a_hi},
         "b_tpi": {**b_meta, "display_lo": b_lo, "display_hi": b_hi},
@@ -565,6 +608,7 @@ def export_ravine_compare(
         curvature_path=str(cur_tif),
         hillshade_path=str(hs_tif),
         compare_png_path=str(compare_path),
+        preview_bounds_wgs84=preview_bounds_wgs84,
     )
 
 

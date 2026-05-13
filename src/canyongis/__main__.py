@@ -13,6 +13,7 @@ from .geomorphon_preview import geomorphon_previews_cli
 from .geomorphons import geomorphons_cli
 from .ingest import ingest_ropewiki_cli
 from .io import log
+from .kml_snap import kml_snap_cli
 from .mapping import render_folium_map
 from .ml.cli import predict_cli, train_cli
 from .ml.config import MLConfig
@@ -89,6 +90,11 @@ def cli(argv: list[str] | None = None) -> None:
         help="Build drop-to-lower-ground rasters and route-overlay preview PNGs.",
     )
     sub.add_parser(
+        "kml-snap",
+        add_help=False,
+        help="Snap KML features to nearby DEM lows or ravine-score highs.",
+    )
+    sub.add_parser(
         "drainage-previews",
         add_help=False,
         help="Compute flow accumulation and render drainage-network previews.",
@@ -142,6 +148,9 @@ def cli(argv: list[str] | None = None) -> None:
     if args.command == "drop-previews":
         drop_previews_cli(extra)
         return
+    if args.command == "kml-snap":
+        kml_snap_cli(extra)
+        return
     if args.command == "drainage-previews":
         drainage_previews_cli(extra)
         return
@@ -163,6 +172,7 @@ def cli(argv: list[str] | None = None) -> None:
             "   or: canyongis geomorphons ...\n"
             "   or: canyongis geomorphon-previews ...\n"
             "   or: canyongis drop-previews ...\n"
+            "   or: canyongis kml-snap ...\n"
             "   or: canyongis drainage-previews ...\n"
             "   or: canyongis ravine-spine ...\n"
             "   or: canyongis web ..."

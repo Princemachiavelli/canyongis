@@ -26,6 +26,7 @@ type AppState = {
   overlay?: Overlay;
   footprints: Record<string, Footprint>;
   visibleKmls: Record<string, boolean>;
+  kmlLabels: Record<string, boolean>;
   panRequest?: PanRequest;
   setBounds: (bounds?: Bounds) => void;
   setActiveDemJob: (job?: Job) => void;
@@ -34,12 +35,14 @@ type AppState = {
   toggleFootprint: (footprint: Footprint) => void;
   clearFootprints: () => void;
   toggleKml: (jobId: string) => void;
+  toggleKmlLabels: (jobId: string) => void;
   requestPan: (bounds: Bounds) => void;
 };
 
 export const useAppStore = create<AppState>((set) => ({
   footprints: {},
   visibleKmls: {},
+  kmlLabels: {},
   setBounds: (bounds) => set({ bounds }),
   setActiveDemJob: (activeDemJob) => set({ activeDemJob }),
   setActiveCompareJob: (activeCompareJob) => set({ activeCompareJob }),
@@ -60,6 +63,13 @@ export const useAppStore = create<AppState>((set) => ({
       visibleKmls: {
         ...state.visibleKmls,
         [jobId]: !state.visibleKmls[jobId]
+      }
+    })),
+  toggleKmlLabels: (jobId) =>
+    set((state) => ({
+      kmlLabels: {
+        ...state.kmlLabels,
+        [jobId]: !state.kmlLabels[jobId]
       }
     })),
   requestPan: (bounds) => set({ panRequest: { bounds, nonce: Date.now() } })

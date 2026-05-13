@@ -1,17 +1,19 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, ExternalLink, Eye, Layers, LocateFixed, Map, Play, RefreshCw, Square, Trash2, Upload } from "lucide-react";
+import { Activity, ExternalLink, Eye, Layers, LocateFixed, Map, Play, RefreshCw, Square, Tags, Trash2, Upload } from "lucide-react";
 import {
   buildDem,
-  deleteFailedJob,
+  deleteJobRecord,
   importRopewikiKml,
   listJobs,
   runDrainage,
   runRavineCompare,
   runRavineSpine,
+  snapKml,
   uploadKmlFile,
   type Bounds,
-  type Job
+  type Job,
+  type KmlSnapTarget
 } from "./api";
 import { MapView } from "./MapView";
 import { useAppStore } from "./state";
@@ -302,14 +304,29 @@ function AreaCard({ area, onDeleteJob }: { area: Area; onDeleteJob?: (job: Job) 
   );
 }
 
-function KmlImportRow({ job, onDelete }: { job: Job; onDelete?: (job: Job) => void }) {
+function KmlImportRow({
+  job,
+  activeDemJob,
+  activeCompareJob,
+  onSnap,
+  onDelete
+}: {
+  job: Job;
+  activeDemJob?: Job;
+  activeCompareJob?: Job;
+  onSnap?: (job: Job, target: KmlSnapTarget) => void;
+  onDelete?: (job: Job) => void;
+}) {
   const bounds = jobBoundsWgs84(job);
   const setBounds = useAppStore((s) => s.setBounds);
   const requestPan = useAppStore((s) => s.requestPan);
   const toggleKml = useAppStore((s) => s.toggleKml);
+  const toggleKmlLabels = useAppStore((s) => s.toggleKmlLabels);
   const visible = useAppStore((s) => Boolean(s.visibleKmls[job.id]));
+  const labelsVisible = useAppStore((s) => Boolean(s.kmlLabels[job.id]));
   const name = (job.result?.name as string | undefined) ?? (job.params.name as string | undefined) ?? job.id;
   const kmlUrl = job.result?.kml_url as string | undefined;
+  const canDelete = Boolean(onDelete) && job.status !== "queued" && job.status !== "running";
 
   return (
     <div className={`kmlImport ${job.status}`}>
@@ -328,11 +345,35 @@ function KmlImportRow({ job, onDelete }: { job: Job; onDelete?: (job: Job) => vo
               <Eye size={12} />
               {visible ? "Hide" : "Show"}
             </button>
+            <button
+              className={labelsVisible ? "toggled" : ""}
+              disabled={!visible}
+              onClick={() => toggleKmlLabels(job.id)}
+            >
+              <Tags size={12} />
+              Labels
+            </button>
             <button onClick={() => setBounds(bounds)}>Use bounds for AOI</button>
             <button onClick={() => requestPan(bounds)}>
               <LocateFixed size={12} />
               Pan to
             </button>
+            {onSnap && job.kind === "kml-import" && (
+              <>
+                <button disabled={!activeDemJob} onClick={() => onSnap(job, "dem")}>
+                  Snap DEM
+                </button>
+                <button disabled={!activeCompareJob} onClick={() => onSnap(job, "tpi")}>
+                  Snap TPI
+                </button>
+                <button disabled={!activeCompareJob} onClick={() => onSnap(job, "geomorphon")}>
+                  Snap Geom
+                </button>
+                <button disabled={!activeCompareJob} onClick={() => onSnap(job, "curvature")}>
+                  Snap Curv
+                </button>
+              </>
+            )}
           </>
         )}
         {kmlUrl && (
@@ -340,6 +381,12 @@ function KmlImportRow({ job, onDelete }: { job: Job; onDelete?: (job: Job) => vo
             <ExternalLink size={12} />
             KML
           </a>
+        )}
+        {canDelete && (
+          <button className="danger miniButton" onClick={() => onDelete?.(job)}>
+            <Trash2 size={12} />
+            Delete
+          </button>
         )}
       </div>
       <ProgressTail job={job} onDelete={onDelete} />
@@ -361,6 +408,8 @@ export function App() {
   const [bufferM, setBufferM] = useState(200);
   const [kmlFile, setKmlFile] = useState<File | undefined>();
   const [ropewikiSource, setRopewikiSource] = useState("");
+  const [snapRadiusM, setSnapRadiusM] = useState(30);
+  const [snapStepM, setSnapStepM] = useState(10);
 
   const jobsQuery = useQuery({
     queryKey: ["jobs"],
@@ -370,7 +419,10 @@ export function App() {
 
   const jobs = jobsQuery.data ?? [];
   const areas = useMemo(() => groupAreas(jobs), [jobs]);
-  const kmlImports = useMemo(() => jobs.filter((j) => j.kind === "kml-import"), [jobs]);
+  const kmlImports = useMemo(
+    () => jobs.filter((j) => j.kind === "kml-import" || j.kind === "kml-snap"),
+    [jobs]
+  );
 
   const invalidate = () => queryClient.invalidateQueries({ queryKey: ["jobs"] });
   const buildMutation = useMutation({
@@ -422,8 +474,29 @@ export function App() {
       invalidate();
     }
   });
+  const snapKmlMutation = useMutation({
+    mutationFn: ({ job, target }: { job: Job; target: KmlSnapTarget }) => {
+      if (target === "dem") {
+        if (!activeDemJob) throw new Error("Select a completed DEM job first");
+        return snapKml(job.id, {
+          target,
+          dem_job_id: activeDemJob.id,
+          search_radius_m: snapRadiusM,
+          sample_step_m: snapStepM
+        });
+      }
+      if (!activeCompareJob) throw new Error("Select a completed TPI job first");
+      return snapKml(job.id, {
+        target,
+        compare_job_id: activeCompareJob.id,
+        search_radius_m: snapRadiusM,
+        sample_step_m: snapStepM
+      });
+    },
+    onSuccess: invalidate
+  });
   const deleteJobMutation = useMutation({
-    mutationFn: (job: Job) => deleteFailedJob(job.id),
+    mutationFn: (job: Job) => deleteJobRecord(job.id),
     onSuccess: invalidate
   });
   const deleteJob = (job: Job) => deleteJobMutation.mutate(job);
@@ -436,6 +509,7 @@ export function App() {
       spineMutation.error ??
       uploadKmlMutation.error ??
       ropewikiKmlMutation.error ??
+      snapKmlMutation.error ??
       deleteJobMutation.error ??
       jobsQuery.error
     );
@@ -446,6 +520,7 @@ export function App() {
     spineMutation.error,
     uploadKmlMutation.error,
     ropewikiKmlMutation.error,
+    snapKmlMutation.error,
     deleteJobMutation.error,
     jobsQuery.error
   ]);
@@ -511,6 +586,26 @@ export function App() {
             <button disabled={!ropewikiSource.trim() || ropewikiKmlMutation.isPending} onClick={() => ropewikiKmlMutation.mutate()}>
               Import Ropewiki KML
             </button>
+            <label>
+              Snap radius meters
+              <input
+                type="number"
+                min={1}
+                step={5}
+                value={snapRadiusM}
+                onChange={(event) => setSnapRadiusM(Number(event.target.value))}
+              />
+            </label>
+            <label>
+              Snap sample step meters
+              <input
+                type="number"
+                min={1}
+                step={1}
+                value={snapStepM}
+                onChange={(event) => setSnapStepM(Number(event.target.value))}
+              />
+            </label>
           </div>
 
           <div className="toolGroup">
@@ -565,11 +660,18 @@ export function App() {
           <div className="areas">
             <div className="jobsHeader">
               <Map size={16} />
-              <h2>KML imports</h2>
+              <h2>KML layers</h2>
             </div>
             {kmlImports.length === 0 && <div className="empty">No KMLs imported yet.</div>}
             {kmlImports.map((job) => (
-              <KmlImportRow key={job.id} job={job} onDelete={deleteJob} />
+              <KmlImportRow
+                key={job.id}
+                job={job}
+                activeDemJob={activeDemJob}
+                activeCompareJob={activeCompareJob}
+                onSnap={(sourceJob, target) => snapKmlMutation.mutate({ job: sourceJob, target })}
+                onDelete={deleteJob}
+              />
             ))}
           </div>
 

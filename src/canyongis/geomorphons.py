@@ -54,8 +54,15 @@ if nprocs:
     # r.geomorphon only gained `nprocs` in GRASS 8.5; older releases (e.g. 8.4.x)
     # reject the parameter. Probe the module interface and only pass it if supported.
     iface = gs.read_command("r.geomorphon", "--interface-description")
-    if 'name="nprocs"' in iface:
+    if 'name="nprocs"' in iface or "<name>nprocs</name>" in iface:
         kwargs["nprocs"] = int(nprocs)
+        print(f"r.geomorphon supports nprocs; using nprocs={int(nprocs)}", flush=True)
+    else:
+        print(
+            f"r.geomorphon in this GRASS install does not expose nprocs; "
+            f"requested nprocs={int(nprocs)} will be ignored",
+            flush=True,
+        )
 for name in outputs:
     kwargs[name] = name
 
@@ -151,7 +158,8 @@ def export_geomorphons(
         ]
         emit(
             f"running GRASS r.geomorphon (search={search_m}m, skip={skip_m}m, "
-            f"flat={flat_deg}deg, nprocs={nprocs})"
+            f"flat={flat_deg}deg; requested nprocs={nprocs}, "
+            "module support will be probed)"
         )
         env = os.environ.copy()
         if quiet:
