@@ -9,15 +9,18 @@ import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
+from getpass import getuser
 from pathlib import Path
 from threading import Lock
 from typing import Annotated, Any, Literal
 
 import geopandas as gpd
+import psycopg
 import rasterio
 from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
+from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field, ValidationError
 from rasterio.warp import transform_bounds
 
@@ -55,24 +58,185 @@ class Job:
 
 
 @dataclass
+class PostgresConfig:
+    host: str = "localhost"
+    port: int = 5433
+    dbname: str = "postgres"
+    user: str | None = None
+    password: str | None = None
+    dsn: str | None = None
+
+    def connect_kwargs(self) -> dict[str, Any]:
+        if self.dsn:
+            return {"conninfo": self.dsn}
+        kwargs: dict[str, Any] = {
+            "host": self.host,
+            "port": self.port,
+            "dbname": self.dbname,
+        }
+        if self.user:
+            kwargs["user"] = self.user
+        if self.password:
+            kwargs["password"] = self.password
+        return kwargs
+
+
+@dataclass
 class JobStore:
-    root: Path
+    output_root: Path
+    pg: PostgresConfig
     jobs: dict[str, Job] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        self.root.mkdir(parents=True, exist_ok=True)
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        if self.path.exists():
-            rows = json.loads(self.path.read_text())
-            self.jobs = {row["id"]: Job(**row) for row in rows}
+        self.output_root.mkdir(parents=True, exist_ok=True)
+        self.conn = psycopg.connect(**self.pg.connect_kwargs())
+        self.conn.autocommit = True
+        self._ensure_schema()
+        self._migrate_jobs_json()
+        self.reload()
 
     @property
     def path(self) -> Path:
-        return self.root / "jobs.json"
+        return self.output_root / "jobs.json"
+
+    def _ensure_schema(self) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS canyongis_jobs (
+                    id text PRIMARY KEY,
+                    output_root text NOT NULL,
+                    kind text NOT NULL,
+                    status text NOT NULL,
+                    created_at text NOT NULL,
+                    updated_at text NOT NULL,
+                    params jsonb NOT NULL DEFAULT '{}'::jsonb,
+                    result jsonb,
+                    error text,
+                    progress jsonb NOT NULL DEFAULT '[]'::jsonb
+                )
+                """
+            )
+            cur.execute(
+                "ALTER TABLE canyongis_jobs ADD COLUMN IF NOT EXISTS output_root text NOT NULL DEFAULT ''"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS canyongis_jobs_created_at_idx "
+                "ON canyongis_jobs (created_at)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS canyongis_jobs_output_root_idx "
+                "ON canyongis_jobs (output_root)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS canyongis_jobs_kind_idx ON canyongis_jobs (kind)"
+            )
+            cur.execute(
+                "CREATE INDEX IF NOT EXISTS canyongis_jobs_status_idx ON canyongis_jobs (status)"
+            )
+
+    def _migrate_jobs_json(self) -> None:
+        if not self.path.exists():
+            return
+        rows = json.loads(self.path.read_text())
+        with self.conn.cursor() as cur:
+            for row in rows:
+                job = Job(**row)
+                cur.execute(
+                    """
+                    INSERT INTO canyongis_jobs
+                        (id, output_root, kind, status, created_at, updated_at, params, result, error, progress)
+                    VALUES
+                        (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    ON CONFLICT (id) DO UPDATE SET
+                        output_root = EXCLUDED.output_root
+                    WHERE canyongis_jobs.output_root = ''
+                    """,
+                    (
+                        job.id,
+                        str(self.output_root.resolve()),
+                        job.kind,
+                        job.status,
+                        job.created_at,
+                        job.updated_at,
+                        Jsonb(job.params),
+                        Jsonb(job.result) if job.result is not None else None,
+                        job.error,
+                        Jsonb(job.progress),
+                    ),
+                )
+
+    def reload(self) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT id, kind, status, created_at, updated_at, params, result, error, progress
+                FROM canyongis_jobs
+                WHERE output_root = %s
+                ORDER BY created_at
+                """,
+                (str(self.output_root.resolve()),),
+            )
+            self.jobs = {
+                row[0]: Job(
+                    id=row[0],
+                    kind=row[1],
+                    status=row[2],
+                    created_at=row[3],
+                    updated_at=row[4],
+                    params=row[5] or {},
+                    result=row[6],
+                    error=row[7],
+                    progress=row[8] or [],
+                )
+                for row in cur.fetchall()
+            }
+
+    def upsert(self, job: Job) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO canyongis_jobs
+                    (id, output_root, kind, status, created_at, updated_at, params, result, error, progress)
+                VALUES
+                    (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                ON CONFLICT (id) DO UPDATE SET
+                    output_root = EXCLUDED.output_root,
+                    kind = EXCLUDED.kind,
+                    status = EXCLUDED.status,
+                    created_at = EXCLUDED.created_at,
+                    updated_at = EXCLUDED.updated_at,
+                    params = EXCLUDED.params,
+                    result = EXCLUDED.result,
+                    error = EXCLUDED.error,
+                    progress = EXCLUDED.progress
+                """,
+                (
+                    job.id,
+                    str(self.output_root.resolve()),
+                    job.kind,
+                    job.status,
+                    job.created_at,
+                    job.updated_at,
+                    Jsonb(job.params),
+                    Jsonb(job.result) if job.result is not None else None,
+                    job.error,
+                    Jsonb(job.progress),
+                ),
+            )
+        self.jobs[job.id] = job
+
+    def delete(self, job_id: str) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM canyongis_jobs WHERE id = %s AND output_root = %s",
+                (job_id, str(self.output_root.resolve())),
+            )
+        self.jobs.pop(job_id, None)
 
     def save(self) -> None:
-        rows = [asdict(job) for job in sorted(self.jobs.values(), key=lambda item: item.created_at)]
-        self.path.write_text(json.dumps(rows, indent=2) + "\n")
+        for job in self.jobs.values():
+            self.upsert(job)
 
 
 class Bounds(BaseModel):
@@ -129,11 +293,16 @@ class TrackProfileRequest(BaseModel):
 
 
 class WebContext:
-    def __init__(self, output_root: Path, frontend_dist: Path | None = None) -> None:
+    def __init__(
+        self,
+        output_root: Path,
+        frontend_dist: Path | None = None,
+        postgres: PostgresConfig | None = None,
+    ) -> None:
         self.output_root = output_root
         self.output_root.mkdir(parents=True, exist_ok=True)
         self.dem_cache = self.output_root / "dem-cache"
-        self.store = JobStore(self.output_root)
+        self.store = JobStore(self.output_root, postgres or PostgresConfig())
         self.lock = Lock()
         self.futures: dict[str, Future] = {}
         self.executor = ThreadPoolExecutor(max_workers=int(os.environ.get("CANYONGIS_WEB_WORKERS", "4")))
@@ -170,8 +339,7 @@ class WebContext:
             params=params,
         )
         with self.lock:
-            self.store.jobs[job.id] = job
-            self.store.save()
+            self.store.upsert(job)
         future = self.executor.submit(self._run, job.id, fn, include_job_id)
         with self.lock:
             self.futures[job.id] = future
@@ -222,7 +390,7 @@ class WebContext:
                 job.result = result
             if error is not None:
                 job.error = error
-            self.store.save()
+            self.store.upsert(job)
 
     def is_canceled(self, job_id: str) -> bool:
         with self.lock:
@@ -242,7 +410,7 @@ class WebContext:
             job.status = "canceled"
             job.updated_at = self.now()
             job.error = "Job canceled by user."
-            self.store.save()
+            self.store.upsert(job)
             return job
 
     def append_progress(self, job_id: str, line: str) -> None:
@@ -254,7 +422,7 @@ class WebContext:
             if len(job.progress) > PROGRESS_CAP:
                 job.progress = job.progress[-PROGRESS_CAP:]
             job.updated_at = self.now()
-            self.store.save()
+            self.store.upsert(job)
 
     def job_or_404(self, job_id: str) -> Job:
         with self.lock:
@@ -572,12 +740,14 @@ def create_app(
     *,
     output_root: str | Path = "runs/web",
     frontend_dist: str | Path | None = None,
+    postgres: PostgresConfig | None = None,
 ) -> FastAPI:
     if frontend_dist is None:
         frontend_dist = os.environ.get("CANYONGIS_FRONTEND_DIST", "web/frontend/dist")
     ctx = WebContext(
         Path(output_root),
         Path(frontend_dist) if frontend_dist is not None else None,
+        postgres,
     )
     app = FastAPI(title="canyongis web", version="0.1.0")
     app.state.ctx = ctx
@@ -633,6 +803,7 @@ def create_app(
     @app.get("/api/jobs")
     def list_jobs() -> dict[str, Any]:
         with ctx.lock:
+            ctx.store.reload()
             jobs = [_job_response(ctx, job) for job in ctx.store.jobs.values()]
         return {"jobs": sorted(jobs, key=lambda row: row["created_at"], reverse=True)}
 
@@ -653,8 +824,7 @@ def create_app(
             if job.status in {"queued", "running"}:
                 raise HTTPException(status_code=400, detail="cancel running jobs before deleting them")
             deleted_outputs = _delete_job_outputs(ctx, job)
-            del ctx.store.jobs[job_id]
-            ctx.store.save()
+            ctx.store.delete(job_id)
         return {"deleted": True, "job_id": job_id, "deleted_outputs": deleted_outputs}
 
     @app.delete("/api/jobs/{job_id}/kml-layer/{layer_key}")
@@ -682,7 +852,7 @@ def create_app(
                 "spines_kml_url" if layer_key == "spines_layer" else "rappel_candidates_kml_url",
             ):
                 job.result.pop(key, None)
-            ctx.store.save()
+            ctx.store.upsert(job)
         return {
             "deleted": True,
             "job_id": job_id,
@@ -1052,6 +1222,37 @@ def cli(argv: list[str] | None = None) -> None:
     p.add_argument("--port", type=int, default=8765, help="Bind port (default: 8765).")
     p.add_argument("--output-root", default="runs/web", help="Job/output root (default: runs/web).")
     p.add_argument(
+        "--pg-host",
+        default=os.environ.get("CANYONGIS_PG_HOST", "localhost"),
+        help="PostgreSQL host (default: localhost).",
+    )
+    p.add_argument(
+        "--pg-port",
+        type=int,
+        default=int(os.environ.get("CANYONGIS_PG_PORT", "5433")),
+        help="PostgreSQL port (default: 5433).",
+    )
+    p.add_argument(
+        "--pg-db",
+        default=os.environ.get("CANYONGIS_PG_DB", "postgres"),
+        help="PostgreSQL database (default: postgres).",
+    )
+    p.add_argument(
+        "--pg-user",
+        default=os.environ.get("CANYONGIS_PG_USER", os.environ.get("PGUSER", getuser())),
+        help="PostgreSQL user (default: current user).",
+    )
+    p.add_argument(
+        "--pg-password",
+        default=os.environ.get("CANYONGIS_PG_PASSWORD", os.environ.get("PGPASSWORD")),
+        help="PostgreSQL password (default: CANYONGIS_PG_PASSWORD or PGPASSWORD).",
+    )
+    p.add_argument(
+        "--pg-dsn",
+        default=os.environ.get("CANYONGIS_PG_DSN"),
+        help="Full PostgreSQL connection string; overrides --pg-host/--pg-port/--pg-db/--pg-user.",
+    )
+    p.add_argument(
         "--frontend-dist",
         default=os.environ.get("CANYONGIS_FRONTEND_DIST", "web/frontend/dist"),
         help="Built frontend directory to serve if present.",
@@ -1060,7 +1261,19 @@ def cli(argv: list[str] | None = None) -> None:
 
     import uvicorn
 
-    app = create_app(output_root=args.output_root, frontend_dist=args.frontend_dist)
+    postgres = PostgresConfig(
+        host=args.pg_host,
+        port=args.pg_port,
+        dbname=args.pg_db,
+        user=args.pg_user,
+        password=args.pg_password,
+        dsn=args.pg_dsn,
+    )
+    app = create_app(
+        output_root=args.output_root,
+        frontend_dist=args.frontend_dist,
+        postgres=postgres,
+    )
     uvicorn.run(app, host=args.host, port=args.port)
 
 

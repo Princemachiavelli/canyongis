@@ -60,6 +60,7 @@
 
           pysheds = python.pkgs.callPackage ./nix/pysheds.nix { };
           rvt-py = python.pkgs.callPackage ./nix/rvt-py.nix { };
+          postgresqlWithPostGIS = pkgs.postgresql_15.withPackages (p: [ p.postgis ]);
 
           canyongis-web-frontend = pkgs.callPackage ./web/frontend { };
 
@@ -69,6 +70,7 @@
             webFrontend = canyongis-web-frontend;
             gdal = pkgs.gdal;
             pmtiles = pkgs.pmtiles;
+            psycopg = python.pkgs.psycopg;
             torch = python.pkgs.torch;
             segmentation_models_pytorch = python.pkgs.segmentation_models_pytorch;
           };
@@ -99,18 +101,30 @@
               pkgs.gdal
               pkgs.pmtiles
               pkgs.nodejs
+              postgresqlWithPostGIS
               python.pkgs.pytest
             ];
             shellHook = ''
               # Make the in-tree source importable without a `pip install -e .`
               # (the dev shell only provides deps, not the canyongis package itself).
               export PYTHONPATH="$PWD/src''${PYTHONPATH:+:$PYTHONPATH}"
+              export PGDATA="$PWD/.pg"
+              export PGHOST="$PGDATA"
+              export PGPORT="5433"
+              if [ ! -d "$PGDATA" ]; then
+                initdb -D "$PGDATA" --no-instructions --auth=trust
+              fi
+              if ! pg_ctl -D "$PGDATA" status >/dev/null 2>&1; then
+                pg_ctl -D "$PGDATA" -o "-p $PGPORT -k $PGHOST" -l "$PGDATA/postgres.log" start >/dev/null
+              fi
               echo "canyongis dev shell"
               echo "  Run:           python -m canyongis <dem.tif> <outdir>"
               echo "  Validate:      python -m canyongis.validate --kml <kml> --out-dir <dir>"
               echo "  Web:           python -m canyongis web"
               echo "  Format:        nix fmt"
               echo "  Reproject DEM: gdalwarp -t_srs EPSG:32612 in.tif utm.tif"
+              echo "  PostgreSQL:    psql -h $PGHOST -p $PGPORT -d postgres"
+              echo "  PostGIS:       CREATE EXTENSION IF NOT EXISTS postgis;"
             '';
           };
 

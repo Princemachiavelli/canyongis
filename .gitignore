@@ -37,3 +37,6 @@ out*
 *.tif
 *.xml
 tmp
+
+# PostgreSQL
+.pg/

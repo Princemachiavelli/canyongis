@@ -31,6 +31,7 @@ dependencies = [
   "pyogrio",
   "folium",
   "fastapi",
+  "psycopg",
   "python-multipart",
   "Pillow",
   "pandas",

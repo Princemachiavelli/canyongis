@@ -16,6 +16,7 @@
   pyogrio,
   pyproj,
   pysheds,
+  psycopg,
   pmtiles,
   rasterio,
   rvt-py,
@@ -58,6 +59,7 @@ buildPythonPackage {
     pyogrio
     pyproj
     pysheds
+    psycopg
     rasterio
     rvt-py
     scipy
