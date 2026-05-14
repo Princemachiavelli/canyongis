@@ -42,6 +42,10 @@ type AppState = {
   panRequest?: PanRequest;
   activeProjectId?: string;
   authenticatedUser?: User;
+  osmOpacity: number;
+  esriOpacity: number;
+  hillshadeOpacity: number;
+  overlayOpacity: number;
   setBounds: (bounds?: Bounds) => void;
   setActiveDemJob: (job?: Job) => void;
   setActiveCompareJob: (job?: Job) => void;
@@ -55,6 +59,10 @@ type AppState = {
   requestPan: (bounds: Bounds) => void;
   setActiveProjectId: (id?: string) => void;
   setAuthenticatedUser: (user?: User) => void;
+  setOsmOpacity: (value: number) => void;
+  setEsriOpacity: (value: number) => void;
+  setHillshadeOpacity: (value: number) => void;
+  setOverlayOpacity: (value: number) => void;
 };
 
 const storedProjectId =
@@ -67,6 +75,14 @@ export const useAppStore = create<AppState>((set) => ({
   visibleKmls: {},
   kmlLabels: {},
   activeProjectId: storedProjectId,
+  osmOpacity: 1,
+  esriOpacity: 0.35,
+  hillshadeOpacity: 0.72,
+  overlayOpacity: 0.72,
+  setOsmOpacity: (osmOpacity) => set({ osmOpacity }),
+  setEsriOpacity: (esriOpacity) => set({ esriOpacity }),
+  setHillshadeOpacity: (hillshadeOpacity) => set({ hillshadeOpacity }),
+  setOverlayOpacity: (overlayOpacity) => set({ overlayOpacity }),
   setBounds: (bounds) => set({ bounds }),
   setActiveDemJob: (activeDemJob) => set({ activeDemJob }),
   setActiveCompareJob: (activeCompareJob) => set({ activeCompareJob }),

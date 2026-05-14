@@ -11,7 +11,7 @@ from rasterio.merge import merge
 from rasterio.vrt import WarpedVRT
 from rasterio.warp import transform_bounds
 
-from .ingest import _download_file, _item_download_url, query_tnm_products
+from .ingest import _download_file, _item_download_url, _purge_part_files, query_tnm_products
 from .io import log
 
 
@@ -55,6 +55,9 @@ def _download_tnm_products(
 ) -> list[Path]:
     products = query_tnm_products(bounds_wgs84)
     cache_dir.mkdir(parents=True, exist_ok=True)
+    purged = _purge_part_files(cache_dir)
+    if purged:
+        log(f"purged {purged} stale .part file(s) in {cache_dir}")
     paths: list[Path] = []
     for idx, item in enumerate(products[:max_products]):
         url = _item_download_url(item)

@@ -940,3 +940,35 @@ button.miniButton {
 .multiplyBlend {
     mix-blend-mode: multiply;
 }
+
+.opacityRow {
+    display: grid;
+    gap: 2px;
+    font-size: 11px;
+    color: #46535b;
+}
+
+.opacityRow input[type="range"] {
+    width: 100%;
+    min-height: 18px;
+    padding: 0;
+    margin: 0;
+    background: transparent;
+    border: none;
+}
+
+.opacityRow input[type="range"]:disabled {
+    opacity: 0.45;
+    cursor: not-allowed;
+}
+
+.opacityLabel {
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.opacityValue {
+    font-variant-numeric: tabular-nums;
+    color: #65737c;
+}

@@ -14,7 +14,13 @@ from rasterio.merge import merge
 from rasterio.warp import transform_bounds
 from shapely.geometry import LineString, MultiLineString, box
 
-from ..ingest import _download_file, _extract_bounds, _item_download_url, query_tnm_products
+from ..ingest import (
+    _download_file,
+    _extract_bounds,
+    _item_download_url,
+    _purge_part_files,
+    query_tnm_products,
+)
 from ..io import log
 from ..validate import parse_kml
 
@@ -280,6 +286,9 @@ def _download_tnm_dems_for_kml(
     if not candidates:
         raise ValueError(f"TNM returned no downloadable 1m DEM products for {kml_path}")
 
+    purged = _purge_part_files(dem_dir)
+    if purged:
+        log(f"purged {purged} stale .part file(s) in {dem_dir}")
     downloaded: list[Path] = []
     for idx, item in enumerate(candidates):
         url = _item_download_url(item)

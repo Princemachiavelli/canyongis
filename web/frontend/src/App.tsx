@@ -10,6 +10,7 @@ import {
   Map as MapIcon,
   Play,
   RefreshCw,
+  SlidersHorizontal,
   Square,
   Tags,
   Trash2,
@@ -1088,6 +1089,67 @@ function UserMenu({
   );
 }
 
+function OpacitySlider({
+  label,
+  value,
+  onChange,
+  disabled,
+}: {
+  label: string;
+  value: number;
+  onChange: (value: number) => void;
+  disabled?: boolean;
+}) {
+  return (
+    <label className="opacityRow">
+      <span className="opacityLabel">
+        {label}
+        <span className="opacityValue">{Math.round(value * 100)}%</span>
+      </span>
+      <input
+        type="range"
+        min={0}
+        max={1}
+        step={0.01}
+        value={value}
+        disabled={disabled}
+        onChange={(event) => onChange(Number(event.target.value))}
+      />
+    </label>
+  );
+}
+
+function OpacitySliders() {
+  const osmOpacity = useAppStore((s) => s.osmOpacity);
+  const esriOpacity = useAppStore((s) => s.esriOpacity);
+  const hillshadeOpacity = useAppStore((s) => s.hillshadeOpacity);
+  const overlayOpacity = useAppStore((s) => s.overlayOpacity);
+  const setOsmOpacity = useAppStore((s) => s.setOsmOpacity);
+  const setEsriOpacity = useAppStore((s) => s.setEsriOpacity);
+  const setHillshadeOpacity = useAppStore((s) => s.setHillshadeOpacity);
+  const setOverlayOpacity = useAppStore((s) => s.setOverlayOpacity);
+  const hasHillshade = Boolean(useAppStore((s) => s.activeHillshade));
+  const hasOverlay = Boolean(useAppStore((s) => s.overlay));
+  return (
+    <>
+      <OpacitySlider label="OpenStreetMap" value={osmOpacity} onChange={setOsmOpacity} />
+      <OpacitySlider label="Esri imagery" value={esriOpacity} onChange={setEsriOpacity} />
+      <OpacitySlider
+        label="Hillshade"
+        value={hillshadeOpacity}
+        onChange={setHillshadeOpacity}
+        disabled={!hasHillshade}
+      />
+      <OpacitySlider
+        label="Feature overlay"
+        value={overlayOpacity}
+        onChange={setOverlayOpacity}
+        disabled={!hasOverlay}
+      />
+    </>
+  );
+}
+
 export function App() {
   const queryClient = useQueryClient();
   const bounds = useAppStore((state) => state.bounds);
@@ -1112,7 +1174,7 @@ export function App() {
   const [snapRadiusM, setSnapRadiusM] = useState(30);
   const [snapStepM, setSnapStepM] = useState(10);
   const [openMapTool, setOpenMapTool] = useState<
-    "aoi" | "kml" | "ravine" | undefined
+    "aoi" | "kml" | "ravine" | "opacity" | undefined
   >();
   const [ropewikiSource, setRopewikiSource] = useState("");
 
@@ -1736,6 +1798,30 @@ export function App() {
                   >
                     Ravine Spine
                   </button>
+                </div>
+              )}
+            </div>
+
+            <div className="mapToolGroup">
+              <button
+                className={`mapToolIcon ${openMapTool === "opacity" ? "toggled" : ""}`}
+                title="Layer opacity"
+                aria-label="Layer opacity"
+                onClick={() =>
+                  setOpenMapTool(
+                    openMapTool === "opacity" ? undefined : "opacity",
+                  )
+                }
+              >
+                <SlidersHorizontal size={14} />
+              </button>
+              {openMapTool === "opacity" && (
+                <div className="mapToolPopover">
+                  <div className="mapToolHead">
+                    <SlidersHorizontal size={14} />
+                    <span>Layer opacity</span>
+                  </div>
+                  <OpacitySliders />
                 </div>
               )}
             </div>

@@ -104,6 +104,8 @@ function MapControls() {
 function HillshadeBaseLayer() {
   const map = useMap();
   const hillshade = useAppStore((state) => state.activeHillshade);
+  const hillshadeOpacity = useAppStore((state) => state.hillshadeOpacity);
+  const layerRef = useRef<L.Layer | undefined>();
 
   useEffect(() => {
     if (!hillshade) return;
@@ -119,19 +121,38 @@ function HillshadeBaseLayer() {
         const el = layer.getContainer();
         if (el) {
           el.style.mixBlendMode = "multiply";
-          el.style.opacity = "0.72";
+          el.style.opacity = String(useAppStore.getState().hillshadeOpacity);
         }
       });
       layer.addTo(map);
-      return () => layer.removeFrom(map);
+      layerRef.current = layer;
+      return () => {
+        layerRef.current = undefined;
+        layer.removeFrom(map);
+      };
     }
     const layer = L.imageOverlay(hillshade.url, leafletBounds(hillshade.bounds), {
-      opacity: 0.72,
+      opacity: useAppStore.getState().hillshadeOpacity,
     });
     layer.addTo(map);
-    return () => layer.removeFrom(map);
+    layerRef.current = layer;
+    return () => {
+      layerRef.current = undefined;
+      layer.removeFrom(map);
+    };
   }, [map, hillshade?.id, hillshade?.url, hillshade?.tileArchiveUrl,
       hillshade?.tileMinZoom, hillshade?.tileMaxZoom, hillshade?.bounds]);
+
+  useEffect(() => {
+    const layer = layerRef.current;
+    if (!layer) return;
+    if (hillshade?.tileArchiveUrl) {
+      const el = (layer as L.GridLayer).getContainer?.();
+      if (el) el.style.opacity = String(hillshadeOpacity);
+    } else if ("setOpacity" in layer) {
+      (layer as L.ImageOverlay).setOpacity(hillshadeOpacity);
+    }
+  }, [hillshadeOpacity, hillshade?.tileArchiveUrl]);
 
   return null;
 }
@@ -139,17 +160,20 @@ function HillshadeBaseLayer() {
 function PmtilesOverlay({ multiply }: { multiply?: boolean }) {
   const map = useMap();
   const overlay = useAppStore((state) => state.overlay);
+  const overlayOpacity = useAppStore((state) => state.overlayOpacity);
+  const layerRef = useRef<L.GridLayer | undefined>();
 
   useEffect(() => {
     if (!overlay?.tileArchiveUrl) return;
     const source = new PMTiles(overlay.tileArchiveUrl);
     const layer = leafletRasterLayer(source, {
-      opacity: 0.72,
+      opacity: useAppStore.getState().overlayOpacity,
       minZoom: overlay.tileMinZoom,
       maxNativeZoom: overlay.tileMaxZoom,
       maxZoom: 22
     });
     layer.addTo(map);
+    layerRef.current = layer;
     if (multiply) {
       layer.on("add", () => {
         const el = layer.getContainer();
@@ -157,9 +181,15 @@ function PmtilesOverlay({ multiply }: { multiply?: boolean }) {
       });
     }
     return () => {
+      layerRef.current = undefined;
       layer.removeFrom(map);
     };
-  }, [map, overlay?.id, overlay?.tileArchiveUrl, overlay?.tileMinZoom, overlay?.tileMaxZoom]);
+  }, [map, overlay?.id, overlay?.tileArchiveUrl, overlay?.tileMinZoom, overlay?.tileMaxZoom, multiply]);
+
+  useEffect(() => {
+    const layer = layerRef.current;
+    if (layer) layer.setOpacity(overlayOpacity);
+  }, [overlayOpacity]);
 
   return null;
 }
@@ -388,19 +418,23 @@ export function MapView({ kmlImports = [], profileJob }: { kmlImports?: Job[]; p
   const footprints = useAppStore((state) => state.footprints);
   const visibleKmls = useAppStore((state) => state.visibleKmls);
   const kmlLabels = useAppStore((state) => state.kmlLabels);
+  const osmOpacity = useAppStore((state) => state.osmOpacity);
+  const esriOpacity = useAppStore((state) => state.esriOpacity);
+  const overlayOpacity = useAppStore((state) => state.overlayOpacity);
 
   return (
     <MapContainer center={[37.3, -112.9]} zoom={10} maxZoom={22} className="map">
       <TileLayer
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        opacity={osmOpacity}
         maxNativeZoom={19}
         maxZoom={22}
       />
       <TileLayer
         attribution="Tiles &copy; Esri"
         url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
-        opacity={0.35}
+        opacity={esriOpacity}
         maxNativeZoom={19}
         maxZoom={22}
       />
@@ -420,7 +454,7 @@ export function MapView({ kmlImports = [], profileJob }: { kmlImports?: Job[]; p
         overlay && <ImageOverlay
           url={overlay.url}
           bounds={leafletBounds(overlay.bounds)}
-          opacity={0.72}
+          opacity={overlayOpacity}
           className={hillshade ? "multiplyBlend" : undefined}
         />
       )}

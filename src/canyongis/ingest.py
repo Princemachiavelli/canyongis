@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import tempfile
 import urllib.parse
@@ -51,11 +52,45 @@ def _http_get_json(url: str, params: dict[str, Any], timeout: float = 60.0) -> d
         return json.load(resp)
 
 
+def _purge_part_files(directory: Path) -> int:
+    """Remove any stale ``.part`` sidecars under ``directory``.
+
+    Called by batch downloaders before fetching, so leaked partials from
+    earlier SIGKILL/server-restart events don't accumulate. Returns the
+    number of files removed.
+    """
+    if not directory.exists():
+        return 0
+    removed = 0
+    for stale in directory.rglob("*.part"):
+        try:
+            stale.unlink()
+            removed += 1
+        except OSError:
+            pass
+    return removed
+
+
 def _download_file(url: str, path: Path, timeout: float = 300.0) -> None:
+    """Download ``url`` to ``path`` atomically via a ``.part`` sidecar.
+
+    The bytes stream first to ``path.part``; only on a clean close is it renamed
+    to ``path``. Any pre-existing ``.part`` from a prior killed run is treated
+    as garbage and removed before starting. If the download is interrupted
+    (exception or SIGKILL), the final ``path`` is never created, so the
+    caller's ``path.exists()`` cache check will re-trigger the download.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
+    part = path.with_name(path.name + ".part")
+    part.unlink(missing_ok=True)
     req = urllib.request.Request(url, headers={"User-Agent": "canyongis/0.1"})
-    with urllib.request.urlopen(req, timeout=timeout) as resp, path.open("wb") as dst:
-        shutil.copyfileobj(resp, dst)
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp, part.open("wb") as dst:
+            shutil.copyfileobj(resp, dst)
+        os.replace(part, path)
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
 
 
 def parse_ropewiki_ref(value: str) -> RopewikiPageRef:
