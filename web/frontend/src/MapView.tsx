@@ -390,15 +390,19 @@ export function MapView({ kmlImports = [], profileJob }: { kmlImports?: Job[]; p
   const kmlLabels = useAppStore((state) => state.kmlLabels);
 
   return (
-    <MapContainer center={[37.3, -112.9]} zoom={10} className="map">
+    <MapContainer center={[37.3, -112.9]} zoom={10} maxZoom={22} className="map">
       <TileLayer
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
+        maxNativeZoom={19}
+        maxZoom={22}
       />
       <TileLayer
         attribution="Tiles &copy; Esri"
         url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
         opacity={0.35}
+        maxNativeZoom={19}
+        maxZoom={22}
       />
       <MapControls />
       <PanController />
