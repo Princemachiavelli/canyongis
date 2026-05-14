@@ -13,9 +13,8 @@ from .hydrology import compute_flow_accum
 from .io import log, read_dem, write_raster
 from .preview_tiles import TileArchive, write_pmtiles_preview, write_wgs84_webp_preview
 from .ravine_compare import (
-    _blend_over_hillshade,
+    _colorize_score,
     _percentile_stretch,
-    compute_hillshade,
 )
 
 
@@ -46,13 +45,13 @@ def _write_mask(path: Path, mask: np.ndarray, transform, crs) -> None:
 
 
 def _stream_network_preview(
-    hillshade: np.ndarray,
     flow_accum: np.ndarray,
     thresholds: tuple[int, ...],
     *,
     line_width_px: int = 1,
 ) -> Image.Image:
-    rgb = np.repeat(hillshade[..., None], 3, axis=2).astype(np.uint8)
+    height, width = flow_accum.shape
+    rgba = np.zeros((height, width, 4), dtype=np.uint8)
     colors = np.asarray(
         [
             (0, 255, 255),
@@ -72,8 +71,8 @@ def _stream_network_preview(
         mask = np.isfinite(flow_accum) & (flow_accum >= threshold)
         if line_width_px > 1 and ndi is not None:
             mask = ndi.binary_dilation(mask, iterations=max(0, line_width_px // 2))
-        rgb[mask] = colors[min(idx, len(colors) - 1)]
-    return Image.fromarray(rgb, mode="RGB")
+        rgba[mask] = (*colors[min(idx, len(colors) - 1)], 255)
+    return Image.fromarray(rgba, mode="RGBA")
 
 
 def export_drainage_previews(
@@ -114,11 +113,14 @@ def export_drainage_previews(
     with rasterio.open(flow_path, "w", **flow_profile) as dst:
         dst.write(np.where(np.isfinite(flow_accum), flow_accum, nodata).astype(np.float32), 1)
 
-    hillshade = compute_hillshade(elev, pixel_size)
     valid_mask = np.isfinite(elev)
     flow_log = np.log1p(np.clip(flow_accum, 0.0, None)).astype(np.float32)
     flow01, lo, hi = _percentile_stretch(flow_log, 1.0, preview_hi_pct)
-    flow_preview = _blend_over_hillshade(hillshade, flow01, alpha_gamma=0.65)
+    flow_rgb = _colorize_score(flow01)
+    flow_alpha = np.power(np.clip(flow01, 0.0, 1.0), 0.65)
+    flow_alpha = (flow_alpha * 255).astype(np.uint8)
+    flow_rgba = np.concatenate([flow_rgb, flow_alpha[..., None]], axis=2)
+    flow_preview = Image.fromarray(flow_rgba, mode="RGBA")
     flow_preview_path = out_dir / "flow_accum_log_preview.webp"
     write_wgs84_webp_preview(
         flow_preview, valid_mask, transform, crs, flow_preview_path, quality=85
@@ -134,7 +136,6 @@ def export_drainage_previews(
         _write_mask(out_dir / f"stream_mask_t{threshold}.tif", mask, transform, crs)
 
     stream_preview = _stream_network_preview(
-        hillshade,
         flow_accum,
         thresholds,
         line_width_px=line_width_px,

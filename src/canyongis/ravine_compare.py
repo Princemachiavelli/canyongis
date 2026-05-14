@@ -290,17 +290,18 @@ def _colorize_score(score01: np.ndarray) -> np.ndarray:
     return np.clip(rgb, 0, 255).astype(np.uint8)
 
 
-def _blend_over_hillshade(
-    hillshade_u8: np.ndarray,
-    score01: np.ndarray,
+def _render_rgba_panel(
+    score: np.ndarray,
     *,
+    display_pct: tuple[float, float] = (2.0, 98.0),
     alpha_gamma: float = 0.7,
-) -> Image.Image:
-    backdrop = np.repeat(hillshade_u8[..., None], 3, axis=2).astype(np.float32)
-    rgb = _colorize_score(score01).astype(np.float32)
-    alpha = np.power(np.clip(score01, 0.0, 1.0), alpha_gamma)[..., None]
-    blended = backdrop * (1.0 - alpha) + rgb * alpha
-    return Image.fromarray(np.clip(blended, 0, 255).astype(np.uint8), mode="RGB")
+) -> tuple[Image.Image, float, float]:
+    score01, lo, hi = _percentile_stretch(score, *display_pct)
+    rgb = _colorize_score(score01)
+    alpha = np.power(np.clip(score01, 0.0, 1.0), alpha_gamma)
+    alpha = (alpha * 255).astype(np.uint8)
+    rgba = np.concatenate([rgb, alpha[..., None]], axis=2)
+    return Image.fromarray(rgba, mode="RGBA"), lo, hi
 
 
 def _overlay_kml_mask(
@@ -372,8 +373,10 @@ def _warp_rgb_image_to_wgs84(
     src_crs,
 ) -> tuple[Image.Image, tuple[float, float, float, float]]:
     """Warp a projected raster-grid preview to EPSG:4326 for Leaflet ImageOverlay."""
-    arr = np.asarray(image.convert("RGB"))
+    is_rgba = image.mode == "RGBA"
+    arr = np.asarray(image.convert("RGBA") if is_rgba else image.convert("RGB"))
     height, width = arr.shape[:2]
+    bands = arr.shape[2]
     src_bounds = array_bounds(height, width, src_transform)
     dst_transform, dst_width, dst_height = calculate_default_transform(
         src_crs,
@@ -382,8 +385,8 @@ def _warp_rgb_image_to_wgs84(
         height,
         *src_bounds,
     )
-    dst = np.zeros((dst_height, dst_width, 3), dtype=np.uint8)
-    for band in range(3):
+    dst = np.zeros((dst_height, dst_width, bands), dtype=np.uint8)
+    for band in range(bands):
         reproject(
             source=arr[:, :, band],
             destination=dst[:, :, band],
@@ -391,10 +394,11 @@ def _warp_rgb_image_to_wgs84(
             src_crs=src_crs,
             dst_transform=dst_transform,
             dst_crs="EPSG:4326",
-            resampling=Resampling.bilinear,
+            resampling=Resampling.nearest if band == 3 else Resampling.bilinear,
         )
     west, south, east, north = array_bounds(dst_height, dst_width, dst_transform)
-    return Image.fromarray(dst, mode="RGB"), (west, south, east, north)
+    mode = "RGBA" if is_rgba else "RGB"
+    return Image.fromarray(dst, mode=mode), (west, south, east, north)
 
 
 def _grid_2x2(panels: list[Image.Image]) -> Image.Image:
@@ -547,25 +551,27 @@ def export_ravine_compare(
         emit(f"rasterizing KML overlay: {kml_path}")
         kml_mask = _rasterize_kml(Path(kml_path), transform, crs, elev.shape)
 
-    a01, a_lo, a_hi = _percentile_stretch(a_score, *display_pct)
-    b01, b_lo, b_hi = _percentile_stretch(b_score, *display_pct)
-    c01, c_lo, c_hi = _percentile_stretch(c_score, *display_pct)
-
     hs_panel = Image.fromarray(np.repeat(hillshade[..., None], 3, axis=2), mode="RGB")
-    a_panel = _blend_over_hillshade(hillshade, a01, alpha_gamma=alpha_gamma)
-    b_panel = _blend_over_hillshade(hillshade, b01, alpha_gamma=alpha_gamma)
-    c_panel = _blend_over_hillshade(hillshade, c01, alpha_gamma=alpha_gamma)
+    a_rgba, a_lo, a_hi = _render_rgba_panel(
+        a_score, display_pct=display_pct, alpha_gamma=alpha_gamma
+    )
+    b_rgba, b_lo, b_hi = _render_rgba_panel(
+        b_score, display_pct=display_pct, alpha_gamma=alpha_gamma
+    )
+    c_rgba, c_lo, c_hi = _render_rgba_panel(
+        c_score, display_pct=display_pct, alpha_gamma=alpha_gamma
+    )
 
     if kml_mask is not None and kml_mask.any():
-        for img in (hs_panel, a_panel, b_panel, c_panel):
+        for img in (hs_panel, a_rgba, b_rgba, c_rgba):
             _overlay_kml_mask(img, kml_mask, opacity=kml_opacity, width_px=kml_width_px)
 
     hs_overlay, preview_bounds_wgs84 = _warp_rgb_image_to_wgs84(
         hs_panel, src_transform=transform, src_crs=crs
     )
-    a_overlay, _ = _warp_rgb_image_to_wgs84(a_panel, src_transform=transform, src_crs=crs)
-    b_overlay, _ = _warp_rgb_image_to_wgs84(b_panel, src_transform=transform, src_crs=crs)
-    c_overlay, _ = _warp_rgb_image_to_wgs84(c_panel, src_transform=transform, src_crs=crs)
+    a_overlay, _ = _warp_rgb_image_to_wgs84(a_rgba, src_transform=transform, src_crs=crs)
+    b_overlay, _ = _warp_rgb_image_to_wgs84(b_rgba, src_transform=transform, src_crs=crs)
+    c_overlay, _ = _warp_rgb_image_to_wgs84(c_rgba, src_transform=transform, src_crs=crs)
 
     a_label = "A. geomorphon (hollow|valley count)"
     scales_str = ",".join(f"{round(s)}" if s == int(s) else f"{s:g}" for s in tpi_scales_m)
@@ -588,9 +594,9 @@ def export_ravine_compare(
 
     panels_small = [
         _label_panel(_downsample(hs_panel, display_max_px // 2), hs_label),
-        _label_panel(_downsample(a_panel, display_max_px // 2), a_label),
-        _label_panel(_downsample(b_panel, display_max_px // 2), b_label),
-        _label_panel(_downsample(c_panel, display_max_px // 2), c_label),
+        _label_panel(_downsample(a_rgba, display_max_px // 2), a_label),
+        _label_panel(_downsample(b_rgba, display_max_px // 2), b_label),
+        _label_panel(_downsample(c_rgba, display_max_px // 2), c_label),
     ]
     compare = _grid_2x2(panels_small)
     compare_path = out_dir / "compare.png"
@@ -686,18 +692,6 @@ def _save_panel_previews(
     return bounds, archive
 
 
-def _render_score_panel(
-    score: np.ndarray,
-    hillshade: np.ndarray,
-    *,
-    display_pct: tuple[float, float] = (2.0, 98.0),
-    alpha_gamma: float = 0.7,
-) -> tuple[Image.Image, float, float]:
-    score01, lo, hi = _percentile_stretch(score, *display_pct)
-    panel = _blend_over_hillshade(hillshade, score01, alpha_gamma=alpha_gamma)
-    return panel, lo, hi
-
-
 def export_hillshade_preview(
     dem_path: str | Path,
     out_dir: str | Path,
@@ -769,8 +763,7 @@ def export_geomorphon_ravine_preview(
     out_dir.mkdir(parents=True, exist_ok=True)
     emit = _make_emit(log_callback)
     emit(f"geomorphon-ravine: {dem_path} → {out_dir} (scales={scales_m}m)")
-    elev, transform, crs, pixel_size, profile = _open_dem(dem_path)
-    hillshade = compute_hillshade(elev, pixel_size)
+    elev, transform, crs, _pixel_size, profile = _open_dem(dem_path)
     work_root = (
         out_dir / "_geomorphon_work"
         if keep_work
@@ -785,9 +778,7 @@ def export_geomorphon_ravine_preview(
             shutil.rmtree(work_root, ignore_errors=True)
     tif_path = out_dir / "a_geomorphon.tif"
     _write_score_geotiff(tif_path, score, profile)
-    panel, lo, hi = _render_score_panel(
-        score, hillshade, display_pct=display_pct, alpha_gamma=alpha_gamma
-    )
+    panel, lo, hi = _render_rgba_panel(score, display_pct=display_pct, alpha_gamma=alpha_gamma)
     panel_path = out_dir / "panel_a_geomorphon.webp"
     bounds, tile_archive = _save_panel_previews(
         panel, np.isfinite(elev), transform, crs, panel_path
@@ -835,15 +826,12 @@ def export_tpi_ravine_preview(
     emit = _make_emit(log_callback)
     emit(f"tpi-ravine: {dem_path} → {out_dir} (scales={scales_m}m, combine={combine})")
     elev, transform, crs, pixel_size, profile = _open_dem(dem_path)
-    hillshade = compute_hillshade(elev, pixel_size)
     score, tpi_meta = compute_b_tpi(
         elev, pixel_size, scales_m, combine=combine, smooth_m=smooth_m, norm_pct=norm_pct
     )
     tif_path = out_dir / "b_tpi.tif"
     _write_score_geotiff(tif_path, score, profile)
-    panel, lo, hi = _render_score_panel(
-        score, hillshade, display_pct=display_pct, alpha_gamma=alpha_gamma
-    )
+    panel, lo, hi = _render_rgba_panel(score, display_pct=display_pct, alpha_gamma=alpha_gamma)
     panel_path = out_dir / "panel_b_tpi.webp"
     bounds, tile_archive = _save_panel_previews(
         panel, np.isfinite(elev), transform, crs, panel_path
@@ -891,13 +879,10 @@ def export_curvature_preview(
     emit = _make_emit(log_callback)
     emit(f"curvature: {dem_path} → {out_dir} (smooth={smooth_m}m)")
     elev, transform, crs, pixel_size, profile = _open_dem(dem_path)
-    hillshade = compute_hillshade(elev, pixel_size)
     score, cur_meta = compute_c_plan_curvature(elev, pixel_size, smooth_m)
     tif_path = out_dir / "c_curvature.tif"
     _write_score_geotiff(tif_path, score, profile)
-    panel, lo, hi = _render_score_panel(
-        score, hillshade, display_pct=display_pct, alpha_gamma=alpha_gamma
-    )
+    panel, lo, hi = _render_rgba_panel(score, display_pct=display_pct, alpha_gamma=alpha_gamma)
     panel_path = out_dir / "panel_c_curvature.webp"
     bounds, tile_archive = _save_panel_previews(
         panel, np.isfinite(elev), transform, crs, panel_path

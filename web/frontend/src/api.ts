@@ -233,6 +233,19 @@ export async function runDemJob(
   });
 }
 
+export async function trimJobRuns(
+  demJobId: string,
+  jobKey: string,
+): Promise<{
+  deleted: number;
+  deleted_jobs: string[];
+  deleted_outputs: string[];
+}> {
+  return request(`/api/jobs/${demJobId}/trim-runs/${jobKey}`, {
+    method: "POST",
+  });
+}
+
 export async function runRavineSpine(
   jobId: string,
   parentKmlJobId?: string,

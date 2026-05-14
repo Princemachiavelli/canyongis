@@ -33,6 +33,7 @@ type AppState = {
   bounds?: Bounds;
   activeDemJob?: Job;
   activeCompareJob?: Job;
+  activeHillshade?: Overlay;
   overlay?: Overlay;
   footprints: Record<string, Footprint>;
   visibleKmls: Record<string, boolean>;
@@ -44,6 +45,7 @@ type AppState = {
   setBounds: (bounds?: Bounds) => void;
   setActiveDemJob: (job?: Job) => void;
   setActiveCompareJob: (job?: Job) => void;
+  setActiveHillshade: (overlay?: Overlay) => void;
   setOverlay: (overlay?: Overlay) => void;
   toggleFootprint: (footprint: Footprint) => void;
   clearFootprints: () => void;
@@ -68,6 +70,7 @@ export const useAppStore = create<AppState>((set) => ({
   setBounds: (bounds) => set({ bounds }),
   setActiveDemJob: (activeDemJob) => set({ activeDemJob }),
   setActiveCompareJob: (activeCompareJob) => set({ activeCompareJob }),
+  setActiveHillshade: (activeHillshade) => set({ activeHillshade }),
   setOverlay: (overlay) => set({ overlay }),
   toggleFootprint: (footprint) =>
     set((state) => {

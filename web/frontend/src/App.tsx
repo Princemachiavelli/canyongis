@@ -27,6 +27,7 @@ import {
   runRavineSpine,
   runTrackProfile,
   snapKml,
+  trimJobRuns,
   uploadKmlFile,
   type Bounds,
   type Job,
@@ -419,20 +420,24 @@ function DerivedRow({
 }) {
   const setActiveDemJob = useAppStore((s) => s.setActiveDemJob);
   const setActiveCompareJob = useAppStore((s) => s.setActiveCompareJob);
+  const setActiveHillshade = useAppStore((s) => s.setActiveHillshade);
   const setOverlay = useAppStore((s) => s.setOverlay);
   const overlay = useAppStore((s) => s.overlay);
+  const activeHillshade = useAppStore((s) => s.activeHillshade);
   const activeCompareId = useAppStore((s) => s.activeCompareJob?.id);
   const previews = spec ? previewsFor(job, spec) : [];
   const bounds =
     jobBoundsWgs84(job) ?? (demJob ? jobBoundsWgs84(demJob) : undefined);
   const canBeTpi = isTpiProducer(job);
   const isActiveTpi = canBeTpi && activeCompareId === job.id;
+  const isHillshade = spec?.key === "hillshade";
+  const activeHillshadeId = activeHillshade?.id;
   const useAsTpi = () => {
     if (demJob) setActiveDemJob(demJob);
     setActiveCompareJob(job);
   };
   return (
-    <div className={`derivedRow ${job.status} ${isActiveTpi ? "active" : ""}`}>
+    <div className={`derivedRow ${job.status} ${isActiveTpi ? "active" : ""} ${activeHillshadeId === job.id ? "active" : ""}`}>
       <div className="derivedRowHead">
         <code>{job.id}</code>
         <StatusBadge status={job.status} />
@@ -447,8 +452,30 @@ function DerivedRow({
             {isActiveTpi ? "Active TPI" : "Use as TPI"}
           </button>
         )}
+        {isHillshade && job.status === "succeeded" && bounds && (
+          <button
+            className={activeHillshadeId === job.id ? "toggled" : ""}
+            onClick={() =>
+              setActiveHillshade(
+                activeHillshadeId === job.id ? undefined : {
+                  id: job.id,
+                  name: "Hillshade",
+                  url: "",
+                  bounds,
+                  tileArchiveUrl: previews[0]?.tileArchiveUrl,
+                  tileMinZoom: previews[0]?.tileMinZoom,
+                  tileMaxZoom: previews[0]?.tileMaxZoom,
+                }
+              )
+            }
+          >
+            <Eye size={12} />
+            {activeHillshadeId === job.id ? "Hillshade base" : "Use as base"}
+          </button>
+        )}
         {bounds &&
           job.status === "succeeded" &&
+          !isHillshade &&
           previews.map((preview) => {
             const overlayId = `${job.id}:${preview.key}`;
             const isActive = overlay?.id === overlayId;
@@ -489,6 +516,7 @@ function JobSpecSection({
   onRunJob,
   onDeleteJob,
   onCancelJob,
+  onTrimRuns,
   isPending,
 }: {
   area: Area;
@@ -498,6 +526,7 @@ function JobSpecSection({
   onRunJob: (demJob: Job, spec: JobSpec) => void;
   onDeleteJob?: (job: Job) => void;
   onCancelJob?: (job: Job) => void;
+  onTrimRuns?: (demJobId: string, jobKey: string) => void;
   isPending: boolean;
 }) {
   const setOverlay = useAppStore((s) => s.setOverlay);
@@ -530,6 +559,19 @@ function JobSpecSection({
           <Play size={12} />
           {unavailable ? "Unavailable" : runButtonLabel}
         </button>
+        {hasRuns && onTrimRuns && (
+          <button
+            className="danger miniButton"
+            title="Delete all but the most recent run"
+            onClick={(e) => {
+              e.preventDefault();
+              onTrimRuns(area.demJob.id, spec.key);
+            }}
+          >
+            <Trash2 size={12} />
+            Delete old runs
+          </button>
+        )}
       </summary>
       <div className="derivedList">
         {!hasRuns && (
@@ -575,6 +617,7 @@ function AreaCard({
   pendingKey,
   onDeleteJob,
   onCancelJob,
+  onTrimRuns,
 }: {
   area: Area;
   specs: JobSpec[];
@@ -582,6 +625,7 @@ function AreaCard({
   pendingKey?: string;
   onDeleteJob?: (job: Job) => void;
   onCancelJob?: (job: Job) => void;
+  onTrimRuns?: (demJobId: string, jobKey: string) => void;
 }) {
   const setActiveDemJob = useAppStore((s) => s.setActiveDemJob);
   const toggleFootprint = useAppStore((s) => s.toggleFootprint);
@@ -649,6 +693,7 @@ function AreaCard({
               onRunJob={onRunJob}
               onDeleteJob={onDeleteJob}
               onCancelJob={onCancelJob}
+              onTrimRuns={onTrimRuns}
               isPending={pendingKey === key}
             />
           );
@@ -1050,8 +1095,10 @@ export function App() {
   const activeCompareJob = useAppStore((state) => state.activeCompareJob);
   const selectedKmlTrack = useAppStore((state) => state.selectedKmlTrack);
   const overlay = useAppStore((state) => state.overlay);
+  const activeHillshade = useAppStore((state) => state.activeHillshade);
   const setBounds = useAppStore((state) => state.setBounds);
   const setActiveDemJob = useAppStore((state) => state.setActiveDemJob);
+  const setActiveHillshade = useAppStore((state) => state.setActiveHillshade);
   const setOverlay = useAppStore((state) => state.setOverlay);
   const clearFootprints = useAppStore((state) => state.clearFootprints);
   const footprintCount = useAppStore(
@@ -1232,6 +1279,18 @@ export function App() {
     onSuccess: invalidate,
   });
   const cancelRunningJob = (job: Job) => cancelJobMutation.mutate(job);
+  const trimRunsMutation = useMutation({
+    mutationFn: ({
+      demJobId,
+      jobKey,
+    }: {
+      demJobId: string;
+      jobKey: string;
+    }) => trimJobRuns(demJobId, jobKey),
+    onSuccess: invalidate,
+  });
+  const trimOldRuns = (demJobId: string, jobKey: string) =>
+    trimRunsMutation.mutate({ demJobId, jobKey });
 
   const promptNumber = (
     label: string,
@@ -1381,6 +1440,15 @@ export function App() {
               <strong>{activeCompareJob?.id ?? "none"}</strong>
             </div>
             <div>
+              <span>Hillshade base</span>
+              <strong>{activeHillshade?.id ?? "off"}</strong>
+            </div>
+            {activeHillshade && (
+              <button onClick={() => setActiveHillshade(undefined)}>
+                Clear hillshade
+              </button>
+            )}
+            <div>
               <span>Overlay</span>
               <strong>{overlay?.name ?? "none"}</strong>
             </div>
@@ -1428,6 +1496,7 @@ export function App() {
                       pendingKey={pendingRunKey}
                       onDeleteJob={deleteJob}
                       onCancelJob={cancelRunningJob}
+                      onTrimRuns={trimOldRuns}
                     />
                     {kmls.length === 0 && (
                       <div className="empty">

@@ -101,7 +101,42 @@ function MapControls() {
   return null;
 }
 
-function PmtilesOverlay() {
+function HillshadeBaseLayer() {
+  const map = useMap();
+  const hillshade = useAppStore((state) => state.activeHillshade);
+
+  useEffect(() => {
+    if (!hillshade) return;
+    if (hillshade.tileArchiveUrl) {
+      const source = new PMTiles(hillshade.tileArchiveUrl);
+      const layer = leafletRasterLayer(source, {
+        opacity: 1,
+        minZoom: hillshade.tileMinZoom,
+        maxNativeZoom: hillshade.tileMaxZoom,
+        maxZoom: 22,
+      });
+      layer.on("add", () => {
+        const el = layer.getContainer();
+        if (el) {
+          el.style.mixBlendMode = "multiply";
+          el.style.opacity = "0.72";
+        }
+      });
+      layer.addTo(map);
+      return () => layer.removeFrom(map);
+    }
+    const layer = L.imageOverlay(hillshade.url, leafletBounds(hillshade.bounds), {
+      opacity: 0.72,
+    });
+    layer.addTo(map);
+    return () => layer.removeFrom(map);
+  }, [map, hillshade?.id, hillshade?.url, hillshade?.tileArchiveUrl,
+      hillshade?.tileMinZoom, hillshade?.tileMaxZoom, hillshade?.bounds]);
+
+  return null;
+}
+
+function PmtilesOverlay({ multiply }: { multiply?: boolean }) {
   const map = useMap();
   const overlay = useAppStore((state) => state.overlay);
 
@@ -115,6 +150,12 @@ function PmtilesOverlay() {
       maxZoom: 22
     });
     layer.addTo(map);
+    if (multiply) {
+      layer.on("add", () => {
+        const el = layer.getContainer();
+        if (el) el.style.mixBlendMode = "multiply";
+      });
+    }
     return () => {
       layer.removeFrom(map);
     };
@@ -343,6 +384,7 @@ function ProfileRappelsLayer({ job }: { job: Job }) {
 export function MapView({ kmlImports = [], profileJob }: { kmlImports?: Job[]; profileJob?: Job }) {
   const bounds = useAppStore((state) => state.bounds);
   const overlay = useAppStore((state) => state.overlay);
+  const hillshade = useAppStore((state) => state.activeHillshade);
   const footprints = useAppStore((state) => state.footprints);
   const visibleKmls = useAppStore((state) => state.visibleKmls);
   const kmlLabels = useAppStore((state) => state.kmlLabels);
@@ -360,6 +402,7 @@ export function MapView({ kmlImports = [], profileJob }: { kmlImports?: Job[]; p
       />
       <MapControls />
       <PanController />
+      <HillshadeBaseLayer />
       {Object.values(footprints).map((fp) => (
         <Rectangle
           key={fp.id}
@@ -368,9 +411,14 @@ export function MapView({ kmlImports = [], profileJob }: { kmlImports?: Job[]; p
         />
       ))}
       {overlay?.tileArchiveUrl ? (
-        <PmtilesOverlay />
+        <PmtilesOverlay multiply={!!hillshade} />
       ) : (
-        overlay && <ImageOverlay url={overlay.url} bounds={leafletBounds(overlay.bounds)} opacity={0.72} />
+        overlay && <ImageOverlay
+          url={overlay.url}
+          bounds={leafletBounds(overlay.bounds)}
+          opacity={0.72}
+          className={hillshade ? "multiplyBlend" : undefined}
+        />
       )}
       {kmlImports
         .filter((job) => job.status === "succeeded" && visibleKmls[job.id])

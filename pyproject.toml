@@ -31,6 +31,7 @@ dependencies = [
   "pyogrio",
   "folium",
   "fastapi",
+  "fastmcp",
   "psycopg",
   "alembic",
   "bcrypt",
@@ -71,6 +72,8 @@ canyongis-ravine-compare = "canyongis.ravine_compare:ravine_compare_cli"
 canyongis-ravine-spine = "canyongis.ravine_spine:ravine_spine_cli"
 canyongis-web = "canyongis.web.server:cli"
 canyongis-web-migrate-previews = "canyongis.web.migrate_previews:cli"
+canyongis-mcp-server = "canyongis.web.mcp_server:cli"
+canyongis-server = "canyongis.web.launcher:cli"
 
 [tool.setuptools.packages.find]
 where = ["src"]

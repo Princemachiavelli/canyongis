@@ -15,7 +15,6 @@ from pathlib import Path
 
 import numpy as np
 import rvt.blend
-import rvt.blend_func
 import rvt.vis
 from PIL import Image
 
@@ -23,10 +22,9 @@ from .ravine_compare import (
     PreviewArtifacts,
     _make_emit,
     _open_dem,
-    _render_score_panel,
+    _render_rgba_panel,
     _save_panel_previews,
     _write_score_geotiff,
-    compute_hillshade,
 )
 
 RVT_VIS_KEYS: tuple[str, ...] = (
@@ -40,7 +38,6 @@ RVT_VIS_KEYS: tuple[str, ...] = (
     "msrm",
     "mstp",
     "slrm",
-    "vat",
 )
 
 RVT_VIS_LABELS: dict[str, str] = {
@@ -54,7 +51,6 @@ RVT_VIS_LABELS: dict[str, str] = {
     "msrm": "Multi-scale relief (MSRM)",
     "mstp": "Enhanced multi-scale topographic position (e4MSTP)",
     "slrm": "Simple local relief (SLRM)",
-    "vat": "VAT (combined)",
 }
 
 
@@ -88,7 +84,6 @@ def export_rvt_previews(
     emit(f"rvt: {dem_path} → {out_dir} ({len(requested)} vis: {','.join(requested)})")
 
     elev, transform, crs, pixel_size, profile = _open_dem(dem_path)
-    hillshade = compute_hillshade(elev, pixel_size)
     valid_mask = np.isfinite(elev)
     filled = np.where(np.isfinite(elev), elev, float(np.nanmedian(elev))).astype(np.float32)
 
@@ -98,8 +93,8 @@ def export_rvt_previews(
         tif_path = out_dir / f"rvt_{key}.tif"
         _write_score_geotiff(tif_path, score, profile)
         display = -score if invert_for_display else score
-        panel, lo, hi = _render_score_panel(
-            display, hillshade, display_pct=display_pct, alpha_gamma=alpha_gamma
+        panel, lo, hi = _render_rgba_panel(
+            display, display_pct=display_pct, alpha_gamma=alpha_gamma
         )
         panel_path = out_dir / f"panel_rvt_{key}.webp"
         bounds, tile_archive = _save_panel_previews(panel, valid_mask, transform, crs, panel_path)
@@ -203,10 +198,6 @@ def export_rvt_previews(
         score = rvt.vis.slrm(dem=filled, radius_cell=20)
         write_score("slrm", np.asarray(score, dtype=np.float32))
 
-    def _vat() -> None:
-        rgb = rvt.blend_func.vat(dem=filled, resolution=pixel_size)
-        write_rgb("vat", np.asarray(rgb))
-
     attempt("slope", _slope)
     if {"svf", "asvf", "opns_pos"} & set(requested):
         attempt("svf-family", _svf_family)
@@ -216,6 +207,5 @@ def export_rvt_previews(
     attempt("msrm", _msrm)
     attempt("mstp", _mstp)
     attempt("slrm", _slrm)
-    attempt("vat", _vat)
 
     return artifacts

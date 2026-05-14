@@ -36,7 +36,7 @@ from ..kml_snap import snap_kml_to_raster
 from ..ravine_spine import export_ravine_spines
 from ..track_profile import _rappels_geojson, analyze_track_profile
 from ..validate import parse_kml
-from .assets import extract_asset_candidates, new_asset_id
+from .assets import _is_path_key, extract_asset_candidates, new_asset_id
 from .auth import (
     AuthManager,
     User,
@@ -603,6 +603,7 @@ def _build_kml_import_result(
         "name": name,
         "kml_path": str(kml_path),
         "kml_url": ctx.output_url(kml_path),
+        "out_dir": str(kml_path.parent),
         "bounds_wgs84": [west, south, east, north],
         "descent_geojson": _gdf_to_geojson(features.descent_lines),
         "approach_geojson": _gdf_to_geojson(features.approach_lines),
@@ -779,74 +780,78 @@ def _path_is_within(path: Path, root: Path) -> bool:
     return True
 
 
-def _delete_kml_job_outputs(ctx: WebContext, job: Job) -> list[str]:
-    if not job.result:
+def _collect_output_paths(result: dict[str, Any] | None, *, output_root: Path) -> list[str]:
+    """Return file paths the job actually produced — anything under ``out_dir``.
+
+    Every job result has an ``out_dir`` key identifying the directory the job
+    wrote to.  Input references (e.g. ``dem_path`` pointing to an upstream
+    build-dem result) fall outside that directory and are excluded automatically.
+    """
+    if not result:
         return []
-    root = ctx.output_root.resolve()
-    deleted: list[str] = []
-    paths = []
-    for key in ("kml_path", "snapped_kml_path", "snapped_gpkg_path"):
-        value = job.result.get(key)
-        if isinstance(value, str) and value:
-            paths.append(Path(value))
+    root = output_root.resolve()
+    out_dir_val = result.get("out_dir")
+    if not isinstance(out_dir_val, str) or not out_dir_val:
+        return []
+    out_dir = Path(out_dir_val).resolve()
+    try:
+        out_dir.relative_to(root)
+    except ValueError:
+        return []
 
-    dirs = []
-    for path in paths:
-        if not _path_is_within(path, root):
+    seen: set[str] = set()
+    paths: list[str] = []
+    for key, value in result.items():
+        if not isinstance(value, str) or not value:
             continue
-        path = path.resolve()
-        parent = path.parent
-        is_import_dir = parent.parent == root / "kml" and parent.name == job.id
-        is_snap_dir = parent.parent == root / "jobs" and parent.name.startswith("kml-snap-")
-        if is_import_dir or is_snap_dir:
-            dirs.append(parent)
-        elif path.exists() and path.is_file():
-            path.unlink()
-            deleted.append(str(path))
-
-    for directory in sorted(set(dirs), key=lambda item: len(item.parts), reverse=True):
-        if directory.exists() and directory.is_dir() and _path_is_within(directory, root):
-            shutil.rmtree(directory)
-            deleted.append(str(directory))
-    return deleted
+        if not (_is_path_key(key) or key == "out_dir"):
+            continue
+        path = Path(value)
+        try:
+            resolved = path.resolve()
+        except OSError:
+            continue
+        try:
+            resolved.relative_to(out_dir)
+        except ValueError:
+            continue
+        key_str = str(resolved)
+        if key_str not in seen:
+            seen.add(key_str)
+            paths.append(key_str)
+    return paths
 
 
 def _delete_job_outputs(ctx: WebContext, job: Job) -> list[str]:
+    """Delete files and directories this job produced during execution."""
     if not job.result:
         return []
     root = ctx.output_root.resolve()
     deleted: list[str] = []
-    candidates: list[Path] = []
-    for key, value in job.result.items():
-        if not isinstance(value, str) or not value:
-            continue
-        if key.endswith("_path") or key in {"out_dir", "kml_path", "dem_path"}:
-            candidates.append(Path(value))
 
-    if job.kind in {"kml-import", "kml-snap"}:
-        deleted.extend(_delete_kml_job_outputs(ctx, job))
+    # Files the job wrote (all under out_dir).
+    for path_str in _collect_output_paths(job.result, output_root=root):
+        p = Path(path_str)
+        if not _path_is_within(p, root):
+            continue
+        if p.is_dir():
+            shutil.rmtree(p)
+            deleted.append(path_str)
+        elif p.exists():
+            p.unlink()
+            deleted.append(path_str)
 
-    dirs: set[Path] = set()
-    for path in candidates:
-        if not _path_is_within(path, root):
-            continue
-        resolved = path.resolve()
-        if not resolved.exists():
-            continue
-        if resolved.is_dir():
-            dirs.add(resolved)
-            continue
-        parent = resolved.parent
-        if parent.parent == root / "jobs" or parent.parent == root / "areas":
-            dirs.add(parent)
-        elif resolved.exists() and resolved.is_file():
-            resolved.unlink()
-            deleted.append(str(resolved))
+    # The output directory itself.
+    out_dir_val = job.result.get("out_dir")
+    if isinstance(out_dir_val, str) and out_dir_val:
+        out_dir = Path(out_dir_val).resolve()
+        if out_dir.exists() and out_dir.is_dir() and _path_is_within(out_dir, root):
+            try:
+                shutil.rmtree(out_dir)
+                deleted.append(str(out_dir))
+            except OSError:
+                pass
 
-    for directory in sorted(dirs, key=lambda item: len(item.parts), reverse=True):
-        if directory.exists() and directory.is_dir() and _path_is_within(directory, root):
-            shutil.rmtree(directory)
-            deleted.append(str(directory))
     return sorted(set(deleted))
 
 
@@ -1279,6 +1284,43 @@ def create_app(
 
         job = ctx.submit("ravine-spine", params, run, user=user, project_id=project_id)
         return asdict(job)
+
+    @app.post("/api/jobs/{dem_job_id}/trim-runs/{job_key}")
+    def trim_job_runs(
+        dem_job_id: str,
+        job_key: str,
+        user: User = CurrentUserDep,
+        project_id: str = ActiveProjectDep,
+    ) -> dict[str, Any]:
+        with ctx.lock:
+            ctx.store.reload()
+            candidates = [
+                j
+                for j in ctx.store.jobs.values()
+                if j.project_id == project_id
+                and j.kind == job_key
+                and (
+                    j.params.get("dem_job_id") == dem_job_id
+                    or (j.result and j.result.get("dem_job_id") == dem_job_id)
+                )
+            ]
+            candidates.sort(key=lambda j: j.created_at, reverse=True)
+            if len(candidates) <= 1:
+                return {"deleted": 0, "message": "nothing to trim"}
+            to_delete = candidates[1:]
+            deleted_outputs: list[str] = []
+            deleted_ids: list[str] = []
+            for job in to_delete:
+                if job.status in {"queued", "running"}:
+                    continue
+                deleted_outputs.extend(_delete_job_outputs(ctx, job))
+                ctx.store.delete(job.id)
+                deleted_ids.append(job.id)
+            return {
+                "deleted": len(deleted_ids),
+                "deleted_jobs": deleted_ids,
+                "deleted_outputs": deleted_outputs,
+            }
 
     @app.post("/api/jobs/{kml_job_id}/snap-kml")
     def snap_kml(

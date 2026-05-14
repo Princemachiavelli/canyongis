@@ -5,6 +5,7 @@
   alembic,
   bcrypt,
   fastapi,
+  fastmcp,
   gdal,
   grass,
   setuptools,
@@ -54,6 +55,7 @@ buildPythonPackage {
     alembic
     bcrypt
     fastapi
+    fastmcp
     folium
     geojson
     geopandas

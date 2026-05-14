@@ -932,5 +932,11 @@ button.miniButton {
 
 .leaflet-tooltip.kmlLabel::before,
 .leaflet-tooltip.kmlHoverLabel::before {
-    display: none;
+    content: "";
+    position: absolute;
+    border: 10px solid transparent;
+}
+
+.multiplyBlend {
+    mix-blend-mode: multiply;
 }
