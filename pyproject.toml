@@ -32,6 +32,9 @@ dependencies = [
   "folium",
   "fastapi",
   "psycopg",
+  "alembic",
+  "bcrypt",
+  "itsdangerous",
   "python-multipart",
   "Pillow",
   "pandas",
@@ -71,6 +74,9 @@ canyongis-web-migrate-previews = "canyongis.web.migrate_previews:cli"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+"canyongis.web.alembic" = ["script.py.mako"]
 
 [tool.ruff]
 line-length = 100

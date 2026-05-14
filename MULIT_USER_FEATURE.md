@@ -193,12 +193,12 @@ operational complexity and is not needed for static rendered tiles.
 ## Migration order
 
 1. Add project IDs and asset records while still using local filesystem storage.
-2. Move `jobs.json` into database tables.
+2. Move `jobs.json` into database tables. (Done?)
 3. Add authentication and project membership checks.
 4. Move long-running jobs into a worker process.
 5. Add PostGIS geometry columns and indexes for bounds and KML/asset extents.
-6. Add storage quotas, garbage collection, and audit views.
-7. Add sharing/public-link behavior if needed.
+6. IGNORE: Add storage quotas, garbage collection, and audit views.
+7. Add sharing/public-link behavior
 
 ## Compatibility notes
 

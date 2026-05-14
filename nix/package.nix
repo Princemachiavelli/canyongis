@@ -2,6 +2,8 @@
   lib,
   buildPythonPackage,
   albumentations,
+  alembic,
+  bcrypt,
   fastapi,
   gdal,
   grass,
@@ -9,6 +11,7 @@
   folium,
   geojson,
   geopandas,
+  itsdangerous,
   numpy,
   pandas,
   pillow,
@@ -48,10 +51,13 @@ buildPythonPackage {
 
   dependencies = [
     albumentations
+    alembic
+    bcrypt
     fastapi
     folium
     geojson
     geopandas
+    itsdangerous
     numpy
     pandas
     pillow

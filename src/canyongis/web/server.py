@@ -17,7 +17,7 @@ from typing import Annotated, Any, Literal
 import geopandas as gpd
 import psycopg
 import rasterio
-from fastapi import Body, FastAPI, File, Form, HTTPException, UploadFile
+from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from psycopg.types.json import Jsonb
@@ -36,9 +36,20 @@ from ..kml_snap import snap_kml_to_raster
 from ..ravine_spine import export_ravine_spines
 from ..track_profile import _rappels_geojson, analyze_track_profile
 from ..validate import parse_kml
+from .assets import extract_asset_candidates, new_asset_id
+from .auth import (
+    AuthManager,
+    User,
+    build_auth_manager,
+    clear_session_cookie,
+    get_current_user,
+    set_session_cookie,
+)
+from .db import PostgresConfig, apply_migrations
 from .dem_jobs import get_spec, list_specs
 
 JobStatus = Literal["queued", "running", "succeeded", "failed", "canceled"]
+DEFAULT_PROJECT_NAME = "Personal"
 
 
 PROGRESS_CAP = 200
@@ -52,33 +63,15 @@ class Job:
     created_at: str
     updated_at: str
     params: dict[str, Any]
+    project_id: str | None = None
+    created_by_user_id: str | None = None
     result: dict[str, Any] | None = None
     error: str | None = None
     progress: list[str] = field(default_factory=list)
-
-
-@dataclass
-class PostgresConfig:
-    host: str = "localhost"
-    port: int = 5433
-    dbname: str = "postgres"
-    user: str | None = None
-    password: str | None = None
-    dsn: str | None = None
-
-    def connect_kwargs(self) -> dict[str, Any]:
-        if self.dsn:
-            return {"conninfo": self.dsn}
-        kwargs: dict[str, Any] = {
-            "host": self.host,
-            "port": self.port,
-            "dbname": self.dbname,
-        }
-        if self.user:
-            kwargs["user"] = self.user
-        if self.password:
-            kwargs["password"] = self.password
-        return kwargs
+    started_at: str | None = None
+    finished_at: str | None = None
+    canceled_at: str | None = None
+    canceled_by_user_id: str | None = None
 
 
 @dataclass
@@ -91,49 +84,12 @@ class JobStore:
         self.output_root.mkdir(parents=True, exist_ok=True)
         self.conn = psycopg.connect(**self.pg.connect_kwargs())
         self.conn.autocommit = True
-        self._ensure_schema()
         self._migrate_jobs_json()
         self.reload()
 
     @property
     def path(self) -> Path:
         return self.output_root / "jobs.json"
-
-    def _ensure_schema(self) -> None:
-        with self.conn.cursor() as cur:
-            cur.execute(
-                """
-                CREATE TABLE IF NOT EXISTS canyongis_jobs (
-                    id text PRIMARY KEY,
-                    output_root text NOT NULL,
-                    kind text NOT NULL,
-                    status text NOT NULL,
-                    created_at text NOT NULL,
-                    updated_at text NOT NULL,
-                    params jsonb NOT NULL DEFAULT '{}'::jsonb,
-                    result jsonb,
-                    error text,
-                    progress jsonb NOT NULL DEFAULT '[]'::jsonb
-                )
-                """
-            )
-            cur.execute(
-                "ALTER TABLE canyongis_jobs ADD COLUMN IF NOT EXISTS output_root text NOT NULL DEFAULT ''"
-            )
-            cur.execute(
-                "CREATE INDEX IF NOT EXISTS canyongis_jobs_created_at_idx "
-                "ON canyongis_jobs (created_at)"
-            )
-            cur.execute(
-                "CREATE INDEX IF NOT EXISTS canyongis_jobs_output_root_idx "
-                "ON canyongis_jobs (output_root)"
-            )
-            cur.execute(
-                "CREATE INDEX IF NOT EXISTS canyongis_jobs_kind_idx ON canyongis_jobs (kind)"
-            )
-            cur.execute(
-                "CREATE INDEX IF NOT EXISTS canyongis_jobs_status_idx ON canyongis_jobs (status)"
-            )
 
     def _migrate_jobs_json(self) -> None:
         if not self.path.exists():
@@ -145,7 +101,8 @@ class JobStore:
                 cur.execute(
                     """
                     INSERT INTO canyongis_jobs
-                        (id, output_root, kind, status, created_at, updated_at, params, result, error, progress)
+                        (id, output_root, kind, status, created_at, updated_at,
+                         params, result, error, progress)
                     VALUES
                         (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                     ON CONFLICT (id) DO UPDATE SET
@@ -170,7 +127,9 @@ class JobStore:
         with self.conn.cursor() as cur:
             cur.execute(
                 """
-                SELECT id, kind, status, created_at, updated_at, params, result, error, progress
+                SELECT id, kind, status, created_at, updated_at, params, result, error,
+                       progress, project_id, created_by_user_id,
+                       started_at, finished_at, canceled_at, canceled_by_user_id
                 FROM canyongis_jobs
                 WHERE output_root = %s
                 ORDER BY created_at
@@ -188,6 +147,12 @@ class JobStore:
                     result=row[6],
                     error=row[7],
                     progress=row[8] or [],
+                    project_id=row[9],
+                    created_by_user_id=row[10],
+                    started_at=row[11],
+                    finished_at=row[12],
+                    canceled_at=row[13],
+                    canceled_by_user_id=row[14],
                 )
                 for row in cur.fetchall()
             }
@@ -197,9 +162,13 @@ class JobStore:
             cur.execute(
                 """
                 INSERT INTO canyongis_jobs
-                    (id, output_root, kind, status, created_at, updated_at, params, result, error, progress)
+                    (id, output_root, kind, status, created_at, updated_at,
+                     params, result, error, progress,
+                     project_id, created_by_user_id,
+                     started_at, finished_at, canceled_at, canceled_by_user_id)
                 VALUES
-                    (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                     %s, %s, %s, %s, %s, %s)
                 ON CONFLICT (id) DO UPDATE SET
                     output_root = EXCLUDED.output_root,
                     kind = EXCLUDED.kind,
@@ -209,7 +178,13 @@ class JobStore:
                     params = EXCLUDED.params,
                     result = EXCLUDED.result,
                     error = EXCLUDED.error,
-                    progress = EXCLUDED.progress
+                    progress = EXCLUDED.progress,
+                    project_id = EXCLUDED.project_id,
+                    created_by_user_id = EXCLUDED.created_by_user_id,
+                    started_at = EXCLUDED.started_at,
+                    finished_at = EXCLUDED.finished_at,
+                    canceled_at = EXCLUDED.canceled_at,
+                    canceled_by_user_id = EXCLUDED.canceled_by_user_id
                 """,
                 (
                     job.id,
@@ -222,6 +197,12 @@ class JobStore:
                     Jsonb(job.result) if job.result is not None else None,
                     job.error,
                     Jsonb(job.progress),
+                    job.project_id,
+                    job.created_by_user_id,
+                    job.started_at,
+                    job.finished_at,
+                    job.canceled_at,
+                    job.canceled_by_user_id,
                 ),
             )
         self.jobs[job.id] = job
@@ -237,6 +218,83 @@ class JobStore:
     def save(self) -> None:
         for job in self.jobs.values():
             self.upsert(job)
+
+    def register_assets(
+        self, job: Job, *, project_id: str, created_by_user_id: str | None
+    ) -> list[str]:
+        """Insert asset rows for files newly produced by ``job``. Returns new asset ids."""
+        candidates = extract_asset_candidates(job.result, output_root=self.output_root)
+        if not candidates:
+            return []
+        new_ids: list[str] = []
+        with self.conn.cursor() as cur:
+            for cand in candidates:
+                cur.execute(
+                    "SELECT 1 FROM canyongis_assets WHERE project_id = %s AND path = %s LIMIT 1",
+                    (project_id, cand.path),
+                )
+                if cur.fetchone() is not None:
+                    continue
+                asset_id = new_asset_id()
+                try:
+                    size_bytes = Path(cand.path).stat().st_size
+                except OSError:
+                    size_bytes = None
+                bounds = cand.metadata.get("bounds_wgs84")
+                cur.execute(
+                    """
+                    INSERT INTO canyongis_assets
+                        (id, project_id, job_id, created_by_user_id, kind, path, url,
+                         bounds_wgs84, format, media_type, size_bytes, metadata, created_at)
+                    VALUES
+                        (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                    """,
+                    (
+                        asset_id,
+                        project_id,
+                        job.id,
+                        created_by_user_id,
+                        cand.kind,
+                        cand.path,
+                        cand.url,
+                        Jsonb(bounds) if bounds is not None else None,
+                        cand.format,
+                        cand.media_type,
+                        size_bytes,
+                        Jsonb(cand.metadata),
+                        job.finished_at or job.updated_at,
+                    ),
+                )
+                new_ids.append(asset_id)
+        return new_ids
+
+    def ensure_personal_project(self, user: User) -> str:
+        """Return the project_id of ``user``'s Personal project, creating if absent."""
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT p.id FROM canyongis_projects p
+                JOIN canyongis_project_memberships m ON m.project_id = p.id
+                WHERE m.user_id = %s AND p.name = %s
+                ORDER BY p.created_at LIMIT 1
+                """,
+                (user.id, DEFAULT_PROJECT_NAME),
+            )
+            row = cur.fetchone()
+            if row is not None:
+                return row[0]
+            project_id = uuid.uuid4().hex[:16]
+            cur.execute(
+                "INSERT INTO canyongis_projects (id, name, created_by_user_id) "
+                "VALUES (%s, %s, %s)",
+                (project_id, DEFAULT_PROJECT_NAME, user.id),
+            )
+            cur.execute(
+                "INSERT INTO canyongis_project_memberships (project_id, user_id, role) "
+                "VALUES (%s, %s, 'owner')",
+                (project_id, user.id),
+            )
+        return project_id
 
 
 class Bounds(BaseModel):
@@ -302,7 +360,10 @@ class WebContext:
         self.output_root = output_root
         self.output_root.mkdir(parents=True, exist_ok=True)
         self.dem_cache = self.output_root / "dem-cache"
-        self.store = JobStore(self.output_root, postgres or PostgresConfig())
+        self.pg = postgres or PostgresConfig()
+        apply_migrations(self.pg)
+        self.store = JobStore(self.output_root, self.pg)
+        self.auth = build_auth_manager(self.pg, self.output_root)
         self.lock = Lock()
         self.futures: dict[str, Future] = {}
         self.executor = ThreadPoolExecutor(max_workers=int(os.environ.get("CANYONGIS_WEB_WORKERS", "4")))
@@ -327,9 +388,18 @@ class WebContext:
     def now(self) -> str:
         return datetime.now(UTC).isoformat()
 
-    def submit(self, kind: str, params: dict[str, Any], fn, *, include_job_id: bool = False) -> Job:
+    def submit(
+        self,
+        kind: str,
+        params: dict[str, Any],
+        fn,
+        *,
+        user: User,
+        include_job_id: bool = False,
+    ) -> Job:
         """Submit a job. fn is called as fn(progress_cb) on a worker thread.
         progress_cb appends a line to the job's progress log."""
+        project_id = self.store.ensure_personal_project(user)
         job = Job(
             id=uuid.uuid4().hex[:12],
             kind=kind,
@@ -337,6 +407,8 @@ class WebContext:
             created_at=self.now(),
             updated_at=self.now(),
             params=params,
+            project_id=project_id,
+            created_by_user_id=user.id,
         )
         with self.lock:
             self.store.upsert(job)
@@ -348,7 +420,7 @@ class WebContext:
     def _run(self, job_id: str, fn, include_job_id: bool) -> None:
         if self.is_canceled(job_id):
             return
-        self._update(job_id, status="running")
+        self._update(job_id, status="running", started_at=self.now())
 
         def progress_cb(line: str) -> None:
             if self.is_canceled(job_id):
@@ -359,18 +431,42 @@ class WebContext:
             result = fn(progress_cb, job_id) if include_job_id else fn(progress_cb)
         except Exception as exc:  # pragma: no cover - exercised by real jobs
             if self.is_canceled(job_id):
-                self._update(job_id, status="canceled", error="Job canceled.")
+                self._update(
+                    job_id, status="canceled", error="Job canceled.", finished_at=self.now()
+                )
             else:
-                self._update(job_id, status="failed", error=f"{exc}\n{traceback.format_exc()}")
+                self._update(
+                    job_id,
+                    status="failed",
+                    error=f"{exc}\n{traceback.format_exc()}",
+                    finished_at=self.now(),
+                )
             with self.lock:
                 self.futures.pop(job_id, None)
             return
         if self.is_canceled(job_id):
-            self._update(job_id, status="canceled", error="Job canceled.")
+            self._update(
+                job_id, status="canceled", error="Job canceled.", finished_at=self.now()
+            )
         else:
-            self._update(job_id, status="succeeded", result=result)
+            self._update(job_id, status="succeeded", result=result, finished_at=self.now())
+            self._register_assets(job_id)
         with self.lock:
             self.futures.pop(job_id, None)
+
+    def _register_assets(self, job_id: str) -> None:
+        with self.lock:
+            job = self.store.jobs.get(job_id)
+            if job is None or job.project_id is None:
+                return
+            try:
+                self.store.register_assets(
+                    job,
+                    project_id=job.project_id,
+                    created_by_user_id=job.created_by_user_id,
+                )
+            except Exception:  # noqa: BLE001 — asset registration failures must not fail the job
+                traceback.print_exc()
 
     def _update(
         self,
@@ -379,6 +475,10 @@ class WebContext:
         status: JobStatus,
         result: dict[str, Any] | None = None,
         error: str | None = None,
+        started_at: str | None = None,
+        finished_at: str | None = None,
+        canceled_at: str | None = None,
+        canceled_by_user_id: str | None = None,
     ) -> None:
         with self.lock:
             job = self.store.jobs[job_id]
@@ -390,6 +490,14 @@ class WebContext:
                 job.result = result
             if error is not None:
                 job.error = error
+            if started_at is not None:
+                job.started_at = started_at
+            if finished_at is not None:
+                job.finished_at = finished_at
+            if canceled_at is not None:
+                job.canceled_at = canceled_at
+            if canceled_by_user_id is not None:
+                job.canceled_by_user_id = canceled_by_user_id
             self.store.upsert(job)
 
     def is_canceled(self, job_id: str) -> bool:
@@ -397,7 +505,7 @@ class WebContext:
             job = self.store.jobs.get(job_id)
             return job is None or job.status == "canceled"
 
-    def cancel_job(self, job_id: str) -> Job:
+    def cancel_job(self, job_id: str, *, user: User | None = None) -> Job:
         with self.lock:
             job = self.store.jobs.get(job_id)
             if job is None:
@@ -407,8 +515,13 @@ class WebContext:
             future = self.futures.get(job_id)
             if future is not None:
                 future.cancel()
+            now = self.now()
             job.status = "canceled"
-            job.updated_at = self.now()
+            job.updated_at = now
+            job.canceled_at = now
+            job.finished_at = now
+            if user is not None:
+                job.canceled_by_user_id = user.id
             job.error = "Job canceled by user."
             self.store.upsert(job)
             return job
@@ -736,6 +849,18 @@ def _delete_job_outputs(ctx: WebContext, job: Job) -> list[str]:
     return sorted(set(deleted))
 
 
+def _current_user(request: Request) -> User:
+    return get_current_user(request, request.app.state.auth)
+
+
+CurrentUserDep = Depends(_current_user)
+
+
+class LoginRequest(BaseModel):
+    username: str = Field(..., min_length=1)
+    password: str = Field(..., min_length=1)
+
+
 def create_app(
     *,
     output_root: str | Path = "runs/web",
@@ -751,6 +876,7 @@ def create_app(
     )
     app = FastAPI(title="canyongis web", version="0.1.0")
     app.state.ctx = ctx
+    app.state.auth = ctx.auth
     app.add_middleware(
         CORSMiddleware,
         allow_origins=["*"],
@@ -764,8 +890,36 @@ def create_app(
     def health() -> dict[str, str]:
         return {"status": "ok"}
 
+    @app.get("/api/auth/me")
+    def auth_me(request: Request) -> dict[str, Any]:
+        auth: AuthManager = request.app.state.auth
+        if auth.single_user:
+            user = auth.local_user()
+        else:
+            token = request.cookies.get("canyongis_session")
+            user_id = auth.load_session(token)
+            user = auth.get_user_by_id(user_id) if user_id else None
+        return {
+            "authenticated": user is not None,
+            "single_user": auth.single_user,
+            "user": {"id": user.id, "username": user.username} if user else None,
+        }
+
+    @app.post("/api/auth/login")
+    def auth_login(req: LoginRequest, response: Response) -> dict[str, Any]:
+        user = ctx.auth.authenticate(req.username, req.password)
+        if user is None:
+            raise HTTPException(status_code=401, detail="invalid username or password")
+        set_session_cookie(response, ctx.auth.sign_session(user.id))
+        return {"user": {"id": user.id, "username": user.username}}
+
+    @app.post("/api/auth/logout")
+    def auth_logout(response: Response) -> dict[str, bool]:
+        clear_session_cookie(response)
+        return {"ok": True}
+
     @app.get("/api/tools")
-    def tools() -> dict[str, Any]:
+    def tools(user: User = CurrentUserDep) -> dict[str, Any]:
         builtins = [
             {"id": "build-dem", "label": "Build DEM mosaic"},
             {"id": "ravine-spine", "label": "Ravine spine from TPI"},
@@ -776,7 +930,7 @@ def create_app(
         return {"tools": [*builtins, *registered]}
 
     @app.get("/api/job-specs")
-    def job_specs() -> dict[str, Any]:
+    def job_specs(user: User = CurrentUserDep) -> dict[str, Any]:
         out: list[dict[str, Any]] = []
         for spec in list_specs():
             try:
@@ -801,22 +955,27 @@ def create_app(
         return {"specs": out}
 
     @app.get("/api/jobs")
-    def list_jobs() -> dict[str, Any]:
+    def list_jobs(user: User = CurrentUserDep) -> dict[str, Any]:
+        project_id = ctx.store.ensure_personal_project(user)
         with ctx.lock:
             ctx.store.reload()
-            jobs = [_job_response(ctx, job) for job in ctx.store.jobs.values()]
+            jobs = [
+                _job_response(ctx, job)
+                for job in ctx.store.jobs.values()
+                if job.project_id == project_id
+            ]
         return {"jobs": sorted(jobs, key=lambda row: row["created_at"], reverse=True)}
 
     @app.get("/api/jobs/{job_id}")
-    def get_job(job_id: str) -> dict[str, Any]:
+    def get_job(job_id: str, user: User = CurrentUserDep) -> dict[str, Any]:
         return _job_response(ctx, ctx.job_or_404(job_id))
 
     @app.post("/api/jobs/{job_id}/cancel")
-    def cancel_job(job_id: str) -> dict[str, Any]:
-        return _job_response(ctx, ctx.cancel_job(job_id))
+    def cancel_job(job_id: str, user: User = CurrentUserDep) -> dict[str, Any]:
+        return _job_response(ctx, ctx.cancel_job(job_id, user=user))
 
     @app.delete("/api/jobs/{job_id}")
-    def delete_job(job_id: str) -> dict[str, Any]:
+    def delete_job(job_id: str, user: User = CurrentUserDep) -> dict[str, Any]:
         with ctx.lock:
             job = ctx.store.jobs.get(job_id)
             if job is None:
@@ -828,7 +987,9 @@ def create_app(
         return {"deleted": True, "job_id": job_id, "deleted_outputs": deleted_outputs}
 
     @app.delete("/api/jobs/{job_id}/kml-layer/{layer_key}")
-    def delete_generated_kml_layer(job_id: str, layer_key: str) -> dict[str, Any]:
+    def delete_generated_kml_layer(
+        job_id: str, layer_key: str, user: User = CurrentUserDep
+    ) -> dict[str, Any]:
         with ctx.lock:
             job = ctx.store.jobs.get(job_id)
             if job is None:
@@ -864,6 +1025,7 @@ def create_app(
     async def import_kml_file(
         file: UploadFile = File(...),  # noqa: B008
         container_dem_job_id: str | None = Form(default=None),
+        user: User = CurrentUserDep,
     ) -> dict[str, Any]:
         original_name = file.filename or "uploaded.kml"
         if not original_name.lower().endswith(".kml"):
@@ -901,11 +1063,13 @@ def create_app(
                 raise
             return result
 
-        job = ctx.submit("kml-import", params, run, include_job_id=True)
+        job = ctx.submit("kml-import", params, run, user=user, include_job_id=True)
         return asdict(job)
 
     @app.post("/api/jobs/import-kml-ropewiki")
-    def import_kml_ropewiki(req: RopewikiImportRequest) -> dict[str, Any]:
+    def import_kml_ropewiki(
+        req: RopewikiImportRequest, user: User = CurrentUserDep
+    ) -> dict[str, Any]:
         source = req.source.strip()
         if not source:
             raise HTTPException(status_code=400, detail="source is required")
@@ -951,11 +1115,11 @@ def create_app(
                 raise
             return result
 
-        job = ctx.submit("kml-import", params, run, include_job_id=True)
+        job = ctx.submit("kml-import", params, run, user=user, include_job_id=True)
         return asdict(job)
 
     @app.post("/api/jobs/build-dem")
-    def build_dem(req: BuildDemRequest) -> dict[str, Any]:
+    def build_dem(req: BuildDemRequest, user: User = CurrentUserDep) -> dict[str, Any]:
         name = _safe_name(req.name)
         params = req.model_dump()
 
@@ -976,7 +1140,7 @@ def create_app(
                 "bounds_wgs84": result.bounds_wgs84,
             }
 
-        job = ctx.submit("build-dem", params, run)
+        job = ctx.submit("build-dem", params, run, user=user)
         return asdict(job)
 
     @app.post("/api/jobs/{dem_job_id}/run/{job_key}")
@@ -984,6 +1148,7 @@ def create_app(
         dem_job_id: str,
         job_key: str,
         body: Annotated[dict[str, Any] | None, Body()] = None,
+        user: User = CurrentUserDep,
     ) -> dict[str, Any]:
         spec = get_spec(job_key)
         if spec is None:
@@ -1017,11 +1182,13 @@ def create_app(
             result.setdefault("job_key", spec.key)
             return result
 
-        job = ctx.submit(spec.key, params, run)
+        job = ctx.submit(spec.key, params, run, user=user)
         return asdict(job)
 
     @app.post("/api/jobs/{tpi_job_id}/ravine-spine")
-    def ravine_spine(tpi_job_id: str, req: RavineSpineRequest) -> dict[str, Any]:
+    def ravine_spine(
+        tpi_job_id: str, req: RavineSpineRequest, user: User = CurrentUserDep
+    ) -> dict[str, Any]:
         tpi_job = ctx.job_or_404(tpi_job_id)
         if tpi_job.status != "succeeded" or not tpi_job.result:
             raise HTTPException(status_code=400, detail="upstream TPI job has not succeeded")
@@ -1057,11 +1224,13 @@ def create_app(
                 **_ravine_spine_layers(ctx, asdict(result)),
             }
 
-        job = ctx.submit("ravine-spine", params, run)
+        job = ctx.submit("ravine-spine", params, run, user=user)
         return asdict(job)
 
     @app.post("/api/jobs/{kml_job_id}/snap-kml")
-    def snap_kml(kml_job_id: str, req: KmlSnapRequest) -> dict[str, Any]:
+    def snap_kml(
+        kml_job_id: str, req: KmlSnapRequest, user: User = CurrentUserDep
+    ) -> dict[str, Any]:
         kml_job = ctx.job_or_404(kml_job_id)
         if kml_job.status != "succeeded" or not kml_job.result:
             raise HTTPException(status_code=400, detail="KML import job has not succeeded")
@@ -1164,11 +1333,13 @@ def create_app(
                 },
             }
 
-        job = ctx.submit("kml-snap", params, run)
+        job = ctx.submit("kml-snap", params, run, user=user)
         return asdict(job)
 
     @app.post("/api/jobs/{kml_job_id}/track-profile")
-    def track_profile(kml_job_id: str, req: TrackProfileRequest) -> dict[str, Any]:
+    def track_profile(
+        kml_job_id: str, req: TrackProfileRequest, user: User = CurrentUserDep
+    ) -> dict[str, Any]:
         kml_job = ctx.job_or_404(kml_job_id)
         if kml_job.status != "succeeded" or not kml_job.result:
             raise HTTPException(status_code=400, detail="KML job has not succeeded")
@@ -1204,7 +1375,7 @@ def create_app(
             }
             return payload
 
-        job = ctx.submit("track-profile", params, run)
+        job = ctx.submit("track-profile", params, run, user=user)
         return asdict(job)
 
     if ctx.frontend_dist and ctx.frontend_dist.exists():
