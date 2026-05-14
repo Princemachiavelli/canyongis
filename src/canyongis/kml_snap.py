@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import html
+import itertools
 import json
 import math
 from dataclasses import asdict, dataclass
@@ -57,7 +58,7 @@ def _line_parts(geom) -> list[LineString]:
 def _densify_line(line: LineString, step_m: float) -> LineString:
     if line.length == 0 or step_m <= 0:
         return line
-    count = max(2, int(math.ceil(line.length / step_m)) + 1)
+    count = max(2, math.ceil(line.length / step_m) + 1)
     distances = np.linspace(0.0, line.length, count)
     return LineString([line.interpolate(float(distance)).coords[0] for distance in distances])
 
@@ -244,10 +245,10 @@ def _route_between_high_cells(
     threshold = high_threshold if high_threshold is not None else fallback_hi
     scale = max(abs(threshold), 1e-6)
 
-    for start_xy, end_xy in zip(coords[:-1], coords[1:]):
+    for start_xy, end_xy in itertools.pairwise(coords):
         sr, sc = src.index(*start_xy)
         er, ec = src.index(*end_xy)
-        pad = max(radius_px, int(math.ceil(math.hypot(er - sr, ec - sc))) // 2 + 2)
+        pad = max(radius_px, math.ceil(math.hypot(er - sr, ec - sc)) // 2 + 2)
         r0 = max(0, min(sr, er) - pad)
         r1 = min(values.shape[0], max(sr, er) + pad + 1)
         c0 = max(0, min(sc, ec) - pad)
@@ -545,7 +546,7 @@ def snap_kml_to_raster(
         if src.nodata is not None:
             values[values == src.nodata] = np.nan
         pixel_m = max(abs(src.transform.a), abs(src.transform.e))
-        radius_px = max(1, int(math.ceil(search_radius_m / pixel_m)))
+        radius_px = max(1, math.ceil(search_radius_m / pixel_m))
         projected = rows.to_crs(src.crs)
         snapped_rows = []
         all_shifts: list[float] = []

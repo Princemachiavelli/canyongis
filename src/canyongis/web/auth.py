@@ -48,6 +48,8 @@ def verify_password(password: str, password_hash: str) -> bool:
 
 
 def _load_or_create_secret(output_root: Path) -> str:
+    import contextlib
+
     env_secret = os.environ.get("CANYONGIS_SESSION_SECRET")
     if env_secret:
         return env_secret
@@ -57,10 +59,8 @@ def _load_or_create_secret(output_root: Path) -> str:
         return secret_path.read_text().strip()
     secret = secrets.token_urlsafe(48)
     secret_path.write_text(secret)
-    try:
+    with contextlib.suppress(OSError):
         os.chmod(secret_path, 0o600)
-    except OSError:
-        pass
     return secret
 
 

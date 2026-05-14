@@ -79,7 +79,7 @@ def _single_line(geom) -> LineString:
 def _sample_distances(length_m: float, step_m: float) -> np.ndarray:
     if length_m <= 0:
         return np.asarray([0.0], dtype=np.float64)
-    count = max(2, int(math.ceil(length_m / step_m)) + 1)
+    count = max(2, math.ceil(length_m / step_m) + 1)
     values = np.linspace(0.0, length_m, count, dtype=np.float64)
     values[-1] = length_m
     return values
@@ -108,8 +108,8 @@ def _orient_downhill(
     finite = [(idx, elev) for idx, elev in enumerate(elevations) if math.isfinite(elev)]
     if len(finite) < 2:
         return line, distances, points, elevations
-    first_idx, first_elev = finite[0]
-    last_idx, last_elev = finite[-1]
+    _first_idx, first_elev = finite[0]
+    _last_idx, last_elev = finite[-1]
     if last_elev <= first_elev:
         return line, distances, points, elevations
 
