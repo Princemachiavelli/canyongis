@@ -1,3 +1,15 @@
+export type User = { id: string; username: string };
+export type AuthMe = {
+  authenticated: boolean;
+  single_user: boolean;
+  user: User | null;
+};
+export type Project = {
+  id: string;
+  name: string;
+  role: "owner" | "editor" | "viewer";
+};
+
 export type Bounds = {
   west: number;
   south: number;
@@ -5,7 +17,12 @@ export type Bounds = {
   north: number;
 };
 
-export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "canceled";
+export type JobStatus =
+  | "queued"
+  | "running"
+  | "succeeded"
+  | "failed"
+  | "canceled";
 
 export type Job = {
   id: string;
@@ -24,9 +41,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   if (!(init?.body instanceof FormData) && !headers.has("content-type")) {
     headers.set("content-type", "application/json");
   }
+  // Inject active project header from localStorage
+  try {
+    const projectId = localStorage.getItem("activeProjectId");
+    if (projectId) {
+      headers.set("X-Project-Id", projectId);
+    }
+  } catch {
+    // localStorage may not be available
+  }
   const res = await fetch(path, {
     ...init,
-    headers
+    headers,
   });
   if (!res.ok) {
     const text = await res.text();
@@ -37,12 +63,37 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       if (text) throw new Error(text);
     }
-    if (Array.isArray(detail)) throw new Error(detail.map((item) => JSON.stringify(item)).join("\n"));
-    if (detail && typeof detail === "object") throw new Error(JSON.stringify(detail, null, 2));
+    if (Array.isArray(detail))
+      throw new Error(detail.map((item) => JSON.stringify(item)).join("\n"));
+    if (detail && typeof detail === "object")
+      throw new Error(JSON.stringify(detail, null, 2));
     if (detail) throw new Error(String(detail));
     throw new Error(`${res.status} ${res.statusText}`);
   }
   return (await res.json()) as T;
+}
+
+export async function getAuthMe(): Promise<AuthMe> {
+  return request("/api/auth/me");
+}
+
+export async function login(
+  username: string,
+  password: string,
+): Promise<{ user: User }> {
+  return request<{ user: User }>("/api/auth/login", {
+    method: "POST",
+    body: JSON.stringify({ username, password }),
+  });
+}
+
+export async function logout(): Promise<void> {
+  await request("/api/auth/logout", { method: "POST" });
+}
+
+export async function listProjects(): Promise<Project[]> {
+  const data = await request<{ projects: Project[] }>("/api/projects");
+  return data.projects;
 }
 
 export async function listJobs(): Promise<Job[]> {
@@ -51,44 +102,60 @@ export async function listJobs(): Promise<Job[]> {
 }
 
 export async function deleteJobRecord(jobId: string): Promise<void> {
-  await request<{ deleted: boolean; job_id: string; deleted_outputs?: string[] }>(
-    `/api/jobs/${jobId}`,
-    { method: "DELETE" }
-  );
+  await request<{
+    deleted: boolean;
+    job_id: string;
+    deleted_outputs?: string[];
+  }>(`/api/jobs/${jobId}`, { method: "DELETE" });
 }
 
 export async function cancelJob(jobId: string): Promise<Job> {
   return request<Job>(`/api/jobs/${jobId}/cancel`, { method: "POST" });
 }
 
-export async function deleteGeneratedKmlLayer(jobId: string, layerKey: string): Promise<void> {
-  await request<{ deleted: boolean; job_id: string; layer_key: string; deleted_outputs?: string[] }>(
-    `/api/jobs/${jobId}/kml-layer/${layerKey}`,
-    { method: "DELETE" }
-  );
+export async function deleteGeneratedKmlLayer(
+  jobId: string,
+  layerKey: string,
+): Promise<void> {
+  await request<{
+    deleted: boolean;
+    job_id: string;
+    layer_key: string;
+    deleted_outputs?: string[];
+  }>(`/api/jobs/${jobId}/kml-layer/${layerKey}`, { method: "DELETE" });
 }
 
-export async function buildDem(name: string, bounds: Bounds, bufferM: number): Promise<Job> {
+export async function buildDem(
+  name: string,
+  bounds: Bounds,
+  bufferM: number,
+): Promise<Job> {
   return request<Job>("/api/jobs/build-dem", {
     method: "POST",
-    body: JSON.stringify({ name, bounds, buffer_m: bufferM })
+    body: JSON.stringify({ name, bounds, buffer_m: bufferM }),
   });
 }
 
-export async function uploadKmlFile(file: File, containerDemJobId?: string): Promise<Job> {
+export async function uploadKmlFile(
+  file: File,
+  containerDemJobId?: string,
+): Promise<Job> {
   const body = new FormData();
   body.append("file", file);
   if (containerDemJobId) body.append("container_dem_job_id", containerDemJobId);
   return request<Job>("/api/jobs/import-kml-file", {
     method: "POST",
-    body
+    body,
   });
 }
 
-export async function importRopewikiKml(source: string, containerDemJobId?: string): Promise<Job> {
+export async function importRopewikiKml(
+  source: string,
+  containerDemJobId?: string,
+): Promise<Job> {
   return request<Job>("/api/jobs/import-kml-ropewiki", {
     method: "POST",
-    body: JSON.stringify({ source, container_dem_job_id: containerDemJobId })
+    body: JSON.stringify({ source, container_dem_job_id: containerDemJobId }),
   });
 }
 
@@ -103,11 +170,11 @@ export async function snapKml(
     search_radius_m?: number;
     sample_step_m?: number;
     high_threshold?: number;
-  }
+  },
 ): Promise<Job> {
   return request<Job>(`/api/jobs/${kmlJobId}/snap-kml`, {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 }
 
@@ -123,10 +190,13 @@ export type TrackProfilePayload = {
   min_rappel_slope?: number;
 };
 
-export async function runTrackProfile(kmlJobId: string, payload: TrackProfilePayload): Promise<Job> {
+export async function runTrackProfile(
+  kmlJobId: string,
+  payload: TrackProfilePayload,
+): Promise<Job> {
   return request<Job>(`/api/jobs/${kmlJobId}/track-profile`, {
     method: "POST",
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
 }
 
@@ -155,15 +225,18 @@ export async function listJobSpecs(): Promise<JobSpec[]> {
 export async function runDemJob(
   demJobId: string,
   jobKey: string,
-  body: Record<string, unknown> = {}
+  body: Record<string, unknown> = {},
 ): Promise<Job> {
   return request<Job>(`/api/jobs/${demJobId}/run/${jobKey}`, {
     method: "POST",
-    body: JSON.stringify(body)
+    body: JSON.stringify(body),
   });
 }
 
-export async function runRavineSpine(jobId: string, parentKmlJobId?: string): Promise<Job> {
+export async function runRavineSpine(
+  jobId: string,
+  parentKmlJobId?: string,
+): Promise<Job> {
   return request<Job>(`/api/jobs/${jobId}/ravine-spine`, {
     method: "POST",
     body: JSON.stringify({
@@ -171,7 +244,7 @@ export async function runRavineSpine(jobId: string, parentKmlJobId?: string): Pr
       hysteresis_ratio: 0.75,
       branch_keep_ratio: 0.2,
       max_path_slope: 0.3,
-      parent_kml_job_id: parentKmlJobId
-    })
+      parent_kml_job_id: parentKmlJobId,
+    }),
   });
 }

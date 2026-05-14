@@ -37,19 +37,13 @@ def upgrade() -> None:
         """
     )
     op.execute(
-        "CREATE INDEX IF NOT EXISTS canyongis_jobs_created_at_idx "
-        "ON canyongis_jobs (created_at)"
+        "CREATE INDEX IF NOT EXISTS canyongis_jobs_created_at_idx ON canyongis_jobs (created_at)"
     )
     op.execute(
-        "CREATE INDEX IF NOT EXISTS canyongis_jobs_output_root_idx "
-        "ON canyongis_jobs (output_root)"
+        "CREATE INDEX IF NOT EXISTS canyongis_jobs_output_root_idx ON canyongis_jobs (output_root)"
     )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS canyongis_jobs_kind_idx ON canyongis_jobs (kind)"
-    )
-    op.execute(
-        "CREATE INDEX IF NOT EXISTS canyongis_jobs_status_idx ON canyongis_jobs (status)"
-    )
+    op.execute("CREATE INDEX IF NOT EXISTS canyongis_jobs_kind_idx ON canyongis_jobs (kind)")
+    op.execute("CREATE INDEX IF NOT EXISTS canyongis_jobs_status_idx ON canyongis_jobs (status)")
 
 
 def downgrade() -> None:

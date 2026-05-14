@@ -16,9 +16,7 @@ def test_sqlalchemy_url_no_user() -> None:
 
 
 def test_sqlalchemy_url_escapes_user_password() -> None:
-    pg = PostgresConfig(
-        host="db", port=5432, dbname="d", user="al ice", password="pa@ss"
-    )
+    pg = PostgresConfig(host="db", port=5432, dbname="d", user="al ice", password="pa@ss")
     url = pg.sqlalchemy_url()
     assert "al%20ice" in url
     assert "pa%40ss" in url

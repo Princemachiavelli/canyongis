@@ -1,5 +1,5 @@
 import { create } from "zustand";
-import type { Bounds, Job } from "./api";
+import type { Bounds, Job, User } from "./api";
 
 export type Overlay = {
   id: string;
@@ -39,6 +39,8 @@ type AppState = {
   kmlLabels: Record<string, boolean>;
   selectedKmlTrack?: SelectedKmlTrack;
   panRequest?: PanRequest;
+  activeProjectId?: string;
+  authenticatedUser?: User;
   setBounds: (bounds?: Bounds) => void;
   setActiveDemJob: (job?: Job) => void;
   setActiveCompareJob: (job?: Job) => void;
@@ -49,12 +51,20 @@ type AppState = {
   toggleKmlLabels: (jobId: string) => void;
   setSelectedKmlTrack: (track?: SelectedKmlTrack) => void;
   requestPan: (bounds: Bounds) => void;
+  setActiveProjectId: (id?: string) => void;
+  setAuthenticatedUser: (user?: User) => void;
 };
+
+const storedProjectId =
+  typeof localStorage !== "undefined"
+    ? localStorage.getItem("activeProjectId") || undefined
+    : undefined;
 
 export const useAppStore = create<AppState>((set) => ({
   footprints: {},
   visibleKmls: {},
   kmlLabels: {},
+  activeProjectId: storedProjectId,
   setBounds: (bounds) => set({ bounds }),
   setActiveDemJob: (activeDemJob) => set({ activeDemJob }),
   setActiveCompareJob: (activeCompareJob) => set({ activeCompareJob }),
@@ -74,16 +84,25 @@ export const useAppStore = create<AppState>((set) => ({
     set((state) => ({
       visibleKmls: {
         ...state.visibleKmls,
-        [jobId]: !state.visibleKmls[jobId]
-      }
+        [jobId]: !state.visibleKmls[jobId],
+      },
     })),
   toggleKmlLabels: (jobId) =>
     set((state) => ({
       kmlLabels: {
         ...state.kmlLabels,
-        [jobId]: !state.kmlLabels[jobId]
-      }
+        [jobId]: !state.kmlLabels[jobId],
+      },
     })),
   setSelectedKmlTrack: (selectedKmlTrack) => set({ selectedKmlTrack }),
-  requestPan: (bounds) => set({ panRequest: { bounds, nonce: Date.now() } })
+  requestPan: (bounds) => set({ panRequest: { bounds, nonce: Date.now() } }),
+  setActiveProjectId: (id) => {
+    if (id) {
+      localStorage.setItem("activeProjectId", id);
+    } else {
+      localStorage.removeItem("activeProjectId");
+    }
+    set({ activeProjectId: id });
+  },
+  setAuthenticatedUser: (user) => set({ authenticatedUser: user }),
 }));

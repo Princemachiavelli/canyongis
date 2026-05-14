@@ -285,8 +285,7 @@ class JobStore:
                 return row[0]
             project_id = uuid.uuid4().hex[:16]
             cur.execute(
-                "INSERT INTO canyongis_projects (id, name, created_by_user_id) "
-                "VALUES (%s, %s, %s)",
+                "INSERT INTO canyongis_projects (id, name, created_by_user_id) VALUES (%s, %s, %s)",
                 (project_id, DEFAULT_PROJECT_NAME, user.id),
             )
             cur.execute(
@@ -366,7 +365,9 @@ class WebContext:
         self.auth = build_auth_manager(self.pg, self.output_root)
         self.lock = Lock()
         self.futures: dict[str, Future] = {}
-        self.executor = ThreadPoolExecutor(max_workers=int(os.environ.get("CANYONGIS_WEB_WORKERS", "4")))
+        self.executor = ThreadPoolExecutor(
+            max_workers=int(os.environ.get("CANYONGIS_WEB_WORKERS", "4"))
+        )
         self.frontend_dist = frontend_dist
         self._recover_incomplete_jobs()
 
@@ -395,11 +396,11 @@ class WebContext:
         fn,
         *,
         user: User,
+        project_id: str,
         include_job_id: bool = False,
     ) -> Job:
         """Submit a job. fn is called as fn(progress_cb) on a worker thread.
         progress_cb appends a line to the job's progress log."""
-        project_id = self.store.ensure_personal_project(user)
         job = Job(
             id=uuid.uuid4().hex[:12],
             kind=kind,
@@ -445,9 +446,7 @@ class WebContext:
                 self.futures.pop(job_id, None)
             return
         if self.is_canceled(job_id):
-            self._update(
-                job_id, status="canceled", error="Job canceled.", finished_at=self.now()
-            )
+            self._update(job_id, status="canceled", error="Job canceled.", finished_at=self.now())
         else:
             self._update(job_id, status="succeeded", result=result, finished_at=self.now())
             self._register_assets(job_id)
@@ -465,7 +464,7 @@ class WebContext:
                     project_id=job.project_id,
                     created_by_user_id=job.created_by_user_id,
                 )
-            except Exception:  # noqa: BLE001 — asset registration failures must not fail the job
+            except Exception:
                 traceback.print_exc()
 
     def _update(
@@ -633,7 +632,9 @@ def _bounds_contains(
     return iw >= ow - epsilon and is_ >= os - epsilon and ie <= oe + epsilon and in_ <= on + epsilon
 
 
-def _validate_kml_container(ctx: WebContext, container_dem_job_id: str | None, bounds: list[float]) -> None:
+def _validate_kml_container(
+    ctx: WebContext, container_dem_job_id: str | None, bounds: list[float]
+) -> None:
     if not container_dem_job_id:
         return
     dem_job = ctx.job_or_404(container_dem_job_id)
@@ -856,6 +857,28 @@ def _current_user(request: Request) -> User:
 CurrentUserDep = Depends(_current_user)
 
 
+def _active_project_id(request: Request, user: User = CurrentUserDep) -> str:
+    """Return the project_id from X-Project-Id header, or the user's Personal project."""
+    ctx: WebContext = request.app.state.ctx
+    project_id = request.headers.get("X-Project-Id")
+    if project_id:
+        with ctx.store.conn.cursor() as cur:
+            cur.execute(
+                "SELECT 1 FROM canyongis_project_memberships WHERE project_id = %s AND user_id = %s",
+                (project_id, user.id),
+            )
+            if cur.fetchone() is None:
+                raise HTTPException(
+                    status_code=403,
+                    detail=f"User is not a member of project {project_id}",
+                )
+        return project_id
+    return ctx.store.ensure_personal_project(user)
+
+
+ActiveProjectDep = Depends(_active_project_id)
+
+
 class LoginRequest(BaseModel):
     username: str = Field(..., min_length=1)
     password: str = Field(..., min_length=1)
@@ -918,6 +941,22 @@ def create_app(
         clear_session_cookie(response)
         return {"ok": True}
 
+    @app.get("/api/projects")
+    def list_projects(user: User = CurrentUserDep) -> dict[str, Any]:
+        with ctx.store.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT p.id, p.name, m.role
+                FROM canyongis_projects p
+                JOIN canyongis_project_memberships m ON m.project_id = p.id
+                WHERE m.user_id = %s
+                ORDER BY p.created_at
+                """,
+                (user.id,),
+            )
+            projects = [{"id": row[0], "name": row[1], "role": row[2]} for row in cur.fetchall()]
+        return {"projects": projects}
+
     @app.get("/api/tools")
     def tools(user: User = CurrentUserDep) -> dict[str, Any]:
         builtins = [
@@ -955,8 +994,7 @@ def create_app(
         return {"specs": out}
 
     @app.get("/api/jobs")
-    def list_jobs(user: User = CurrentUserDep) -> dict[str, Any]:
-        project_id = ctx.store.ensure_personal_project(user)
+    def list_jobs(project_id: str = ActiveProjectDep) -> dict[str, Any]:
         with ctx.lock:
             ctx.store.reload()
             jobs = [
@@ -981,7 +1019,9 @@ def create_app(
             if job is None:
                 raise HTTPException(status_code=404, detail=f"job not found: {job_id}")
             if job.status in {"queued", "running"}:
-                raise HTTPException(status_code=400, detail="cancel running jobs before deleting them")
+                raise HTTPException(
+                    status_code=400, detail="cancel running jobs before deleting them"
+                )
             deleted_outputs = _delete_job_outputs(ctx, job)
             ctx.store.delete(job_id)
         return {"deleted": True, "job_id": job_id, "deleted_outputs": deleted_outputs}
@@ -1005,7 +1045,9 @@ def create_app(
             deleted_outputs: list[str] = []
             if path.exists():
                 if not _path_is_within(path, root):
-                    raise HTTPException(status_code=400, detail="refusing to delete outside output root")
+                    raise HTTPException(
+                        status_code=400, detail="refusing to delete outside output root"
+                    )
                 path.unlink()
                 deleted_outputs.append(str(path))
             for key in (
@@ -1026,6 +1068,7 @@ def create_app(
         file: UploadFile = File(...),  # noqa: B008
         container_dem_job_id: str | None = Form(default=None),
         user: User = CurrentUserDep,
+        project_id: str = ActiveProjectDep,
     ) -> dict[str, Any]:
         original_name = file.filename or "uploaded.kml"
         if not original_name.lower().endswith(".kml"):
@@ -1063,12 +1106,14 @@ def create_app(
                 raise
             return result
 
-        job = ctx.submit("kml-import", params, run, user=user, include_job_id=True)
+        job = ctx.submit(
+            "kml-import", params, run, user=user, project_id=project_id, include_job_id=True
+        )
         return asdict(job)
 
     @app.post("/api/jobs/import-kml-ropewiki")
     def import_kml_ropewiki(
-        req: RopewikiImportRequest, user: User = CurrentUserDep
+        req: RopewikiImportRequest, user: User = CurrentUserDep, project_id: str = ActiveProjectDep
     ) -> dict[str, Any]:
         source = req.source.strip()
         if not source:
@@ -1115,11 +1160,15 @@ def create_app(
                 raise
             return result
 
-        job = ctx.submit("kml-import", params, run, user=user, include_job_id=True)
+        job = ctx.submit(
+            "kml-import", params, run, user=user, project_id=project_id, include_job_id=True
+        )
         return asdict(job)
 
     @app.post("/api/jobs/build-dem")
-    def build_dem(req: BuildDemRequest, user: User = CurrentUserDep) -> dict[str, Any]:
+    def build_dem(
+        req: BuildDemRequest, user: User = CurrentUserDep, project_id: str = ActiveProjectDep
+    ) -> dict[str, Any]:
         name = _safe_name(req.name)
         params = req.model_dump()
 
@@ -1140,7 +1189,7 @@ def create_app(
                 "bounds_wgs84": result.bounds_wgs84,
             }
 
-        job = ctx.submit("build-dem", params, run, user=user)
+        job = ctx.submit("build-dem", params, run, user=user, project_id=project_id)
         return asdict(job)
 
     @app.post("/api/jobs/{dem_job_id}/run/{job_key}")
@@ -1149,6 +1198,7 @@ def create_app(
         job_key: str,
         body: Annotated[dict[str, Any] | None, Body()] = None,
         user: User = CurrentUserDep,
+        project_id: str = ActiveProjectDep,
     ) -> dict[str, Any]:
         spec = get_spec(job_key)
         if spec is None:
@@ -1182,12 +1232,15 @@ def create_app(
             result.setdefault("job_key", spec.key)
             return result
 
-        job = ctx.submit(spec.key, params, run, user=user)
+        job = ctx.submit(spec.key, params, run, user=user, project_id=project_id)
         return asdict(job)
 
     @app.post("/api/jobs/{tpi_job_id}/ravine-spine")
     def ravine_spine(
-        tpi_job_id: str, req: RavineSpineRequest, user: User = CurrentUserDep
+        tpi_job_id: str,
+        req: RavineSpineRequest,
+        user: User = CurrentUserDep,
+        project_id: str = ActiveProjectDep,
     ) -> dict[str, Any]:
         tpi_job = ctx.job_or_404(tpi_job_id)
         if tpi_job.status != "succeeded" or not tpi_job.result:
@@ -1224,12 +1277,15 @@ def create_app(
                 **_ravine_spine_layers(ctx, asdict(result)),
             }
 
-        job = ctx.submit("ravine-spine", params, run, user=user)
+        job = ctx.submit("ravine-spine", params, run, user=user, project_id=project_id)
         return asdict(job)
 
     @app.post("/api/jobs/{kml_job_id}/snap-kml")
     def snap_kml(
-        kml_job_id: str, req: KmlSnapRequest, user: User = CurrentUserDep
+        kml_job_id: str,
+        req: KmlSnapRequest,
+        user: User = CurrentUserDep,
+        project_id: str = ActiveProjectDep,
     ) -> dict[str, Any]:
         kml_job = ctx.job_or_404(kml_job_id)
         if kml_job.status != "succeeded" or not kml_job.result:
@@ -1311,9 +1367,7 @@ def create_app(
                 else line_gdf
             )
             bounds = (
-                _raster_bounds_wgs84(dem_path)
-                if dem_path
-                else _raster_bounds_wgs84(raster_path)
+                _raster_bounds_wgs84(dem_path) if dem_path else _raster_bounds_wgs84(raster_path)
             )
             return {
                 **asdict(result),
@@ -1333,12 +1387,15 @@ def create_app(
                 },
             }
 
-        job = ctx.submit("kml-snap", params, run, user=user)
+        job = ctx.submit("kml-snap", params, run, user=user, project_id=project_id)
         return asdict(job)
 
     @app.post("/api/jobs/{kml_job_id}/track-profile")
     def track_profile(
-        kml_job_id: str, req: TrackProfileRequest, user: User = CurrentUserDep
+        kml_job_id: str,
+        req: TrackProfileRequest,
+        user: User = CurrentUserDep,
+        project_id: str = ActiveProjectDep,
     ) -> dict[str, Any]:
         kml_job = ctx.job_or_404(kml_job_id)
         if kml_job.status != "succeeded" or not kml_job.result:
@@ -1375,7 +1432,7 @@ def create_app(
             }
             return payload
 
-        job = ctx.submit("track-profile", params, run, user=user)
+        job = ctx.submit("track-profile", params, run, user=user, project_id=project_id)
         return asdict(job)
 
     if ctx.frontend_dist and ctx.frontend_dist.exists():

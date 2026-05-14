@@ -209,7 +209,10 @@ def write_pmtiles_preview(
         _run(["gdaladdo", "-r", "average", str(mbtiles_path), *overview_levels])
     _run(["pmtiles", "convert", str(mbtiles_path), str(out_path)])
     metadata_path = out_path.with_suffix(".pmtiles.json")
-    metadata_path.write_text(json.dumps(asdict(TileArchive(str(out_path), bounds_wgs84, min_zoom, max_zoom)), indent=2) + "\n")
+    metadata_path.write_text(
+        json.dumps(asdict(TileArchive(str(out_path), bounds_wgs84, min_zoom, max_zoom)), indent=2)
+        + "\n"
+    )
     if not keep_intermediates:
         shutil.rmtree(work_dir, ignore_errors=True)
     return TileArchive(str(out_path), bounds_wgs84, min_zoom, max_zoom)

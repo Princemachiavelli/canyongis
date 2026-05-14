@@ -1,6 +1,20 @@
 import { useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Activity, ExternalLink, Eye, Layers, LineChart, LocateFixed, Map as MapIcon, Play, RefreshCw, Square, Tags, Trash2, Upload } from "lucide-react";
+import {
+  Activity,
+  ExternalLink,
+  Eye,
+  Layers,
+  LineChart,
+  LocateFixed,
+  Map as MapIcon,
+  Play,
+  RefreshCw,
+  Square,
+  Tags,
+  Trash2,
+  Upload,
+} from "lucide-react";
 import {
   buildDem,
   cancelJob,
@@ -19,7 +33,10 @@ import {
   type JobSpec,
   type JobSpecVisualization,
   type KmlSnapTarget,
-  type TrackCategory
+  type TrackCategory,
+  type Project,
+  logout,
+  listProjects,
 } from "./api";
 import { MapView } from "./MapView";
 import { useAppStore } from "./state";
@@ -53,9 +70,10 @@ function previewsFor(job: Job, spec: JobSpec): PreviewLink[] {
         key: vis.key,
         label: vis.label,
         url,
-        tileArchiveUrl: typeof tileArchiveUrl === "string" ? tileArchiveUrl : undefined,
+        tileArchiveUrl:
+          typeof tileArchiveUrl === "string" ? tileArchiveUrl : undefined,
         tileMinZoom: typeof tileMinZoom === "number" ? tileMinZoom : undefined,
-        tileMaxZoom: typeof tileMaxZoom === "number" ? tileMaxZoom : undefined
+        tileMaxZoom: typeof tileMaxZoom === "number" ? tileMaxZoom : undefined,
       });
     }
   }
@@ -76,7 +94,9 @@ function tpiJobIdFromSpine(job: Job): string | undefined {
 }
 
 function groupAreas(jobs: Job[], specs: JobSpec[]): Area[] {
-  const dems = jobs.filter((j) => j.kind === "build-dem" && j.status === "succeeded");
+  const dems = jobs.filter(
+    (j) => j.kind === "build-dem" && j.status === "succeeded",
+  );
   const specKeys = new Set(specs.map((s) => s.key));
   const areas: Area[] = [];
   for (const dem of dems) {
@@ -107,15 +127,23 @@ function groupAreas(jobs: Job[], specs: JobSpec[]): Area[] {
 function ravineSpineLayerJobs(jobs: Job[]): Job[] {
   const layers: Job[] = [];
   for (const job of jobs) {
-    if (job.kind !== "ravine-spine" || job.status !== "succeeded" || !job.result) continue;
+    if (
+      job.kind !== "ravine-spine" ||
+      job.status !== "succeeded" ||
+      !job.result
+    )
+      continue;
     const fallbackBounds = job.result.bounds_wgs84;
-    const parentKmlJobId = job.params.parent_kml_job_id ?? job.result.parent_kml_job_id;
+    const parentKmlJobId =
+      job.params.parent_kml_job_id ?? job.result.parent_kml_job_id;
     const tpiJobId = tpiJobIdFromSpine(job);
-    const compareJob = tpiJobId ? jobs.find((candidate) => candidate.id === tpiJobId) : undefined;
+    const compareJob = tpiJobId
+      ? jobs.find((candidate) => candidate.id === tpiJobId)
+      : undefined;
     const containerDemJobId = compareJob?.params.dem_job_id;
     for (const [key, label] of [
       ["spines_layer", "Ravine spines"],
-      ["rappel_candidates_layer", "Rappel candidates"]
+      ["rappel_candidates_layer", "Rappel candidates"],
     ] as const) {
       const layer = job.result[key];
       if (!layer || typeof layer !== "object") continue;
@@ -130,7 +158,7 @@ function ravineSpineLayerJobs(jobs: Job[]): Job[] {
           source_job_id: job.id,
           layer: key,
           parent_kml_job_id: parentKmlJobId,
-          container_dem_job_id: containerDemJobId
+          container_dem_job_id: containerDemJobId,
         },
         result: {
           ...result,
@@ -138,8 +166,13 @@ function ravineSpineLayerJobs(jobs: Job[]): Job[] {
           bounds_wgs84: result.bounds_wgs84 ?? fallbackBounds,
           parent_kml_job_id: parentKmlJobId,
           container_dem_job_id: containerDemJobId,
-          source: { kind: "ravine-spine", job_id: job.id, layer: key, parent_kml_job_id: parentKmlJobId }
-        }
+          source: {
+            kind: "ravine-spine",
+            job_id: job.id,
+            layer: key,
+            parent_kml_job_id: parentKmlJobId,
+          },
+        },
       });
     }
   }
@@ -176,7 +209,11 @@ function parentKmlJobId(job: Job): string | undefined {
   return typeof resultId === "string" && resultId ? resultId : undefined;
 }
 
-function groupKmlContainers(areas: Area[], kmlJobs: Job[], generatedKmlJobs: Job[]): KmlContainerGroups {
+function groupKmlContainers(
+  areas: Area[],
+  kmlJobs: Job[],
+  generatedKmlJobs: Job[],
+): KmlContainerGroups {
   const byArea = new Map<string, Job[]>();
   const generatedByArea = new Map<string, Job[]>();
   const loose: Job[] = [];
@@ -190,7 +227,9 @@ function groupKmlContainers(areas: Area[], kmlJobs: Job[], generatedKmlJobs: Job
       continue;
     }
     const bounds = jobBoundsWgs84(job);
-    const containingArea = bounds ? areas.find((area) => boundsContains(area.bounds, bounds)) : undefined;
+    const containingArea = bounds
+      ? areas.find((area) => boundsContains(area.bounds, bounds))
+      : undefined;
     if (containingArea) {
       byArea.get(containingArea.demJob.id)?.push(job);
     } else {
@@ -204,7 +243,9 @@ function groupKmlContainers(areas: Area[], kmlJobs: Job[], generatedKmlJobs: Job
       continue;
     }
     const bounds = jobBoundsWgs84(job);
-    const containingArea = bounds ? areas.find((area) => boundsContains(area.bounds, bounds)) : undefined;
+    const containingArea = bounds
+      ? areas.find((area) => boundsContains(area.bounds, bounds))
+      : undefined;
     if (containingArea) {
       generatedByArea.get(containingArea.demJob.id)?.push(job);
     } else {
@@ -215,14 +256,18 @@ function groupKmlContainers(areas: Area[], kmlJobs: Job[], generatedKmlJobs: Job
     groups: areas.map((area) => ({
       area,
       kmls: byArea.get(area.demJob.id) ?? [],
-      generated: generatedByArea.get(area.demJob.id) ?? []
+      generated: generatedByArea.get(area.demJob.id) ?? [],
     })),
     loose,
-    looseGenerated
+    looseGenerated,
   };
 }
 
-function childLayersFor(parent: Job, generated: Job[], siblingKmls: Job[]): Job[] {
+function childLayersFor(
+  parent: Job,
+  generated: Job[],
+  siblingKmls: Job[],
+): Job[] {
   return generated.filter((layer) => {
     const explicitParent = parentKmlJobId(layer);
     if (explicitParent) return explicitParent === parent.id;
@@ -230,7 +275,10 @@ function childLayersFor(parent: Job, generated: Job[], siblingKmls: Job[]): Job[
   });
 }
 
-function unparentedGeneratedLayers(generated: Job[], siblingKmls: Job[]): Job[] {
+function unparentedGeneratedLayers(
+  generated: Job[],
+  siblingKmls: Job[],
+): Job[] {
   return generated.filter((layer) => {
     if (parentKmlJobId(layer)) return false;
     return siblingKmls.length !== 1;
@@ -273,11 +321,15 @@ function useAoiName(bounds: Bounds) {
       const res = await fetch(url, { headers: { "Accept-Language": "en" } });
       if (!res.ok) throw new Error(`nominatim ${res.status}`);
       const data = (await res.json()) as { display_name?: string };
-      return String(data.display_name ?? "").split(",")[0].trim() || undefined;
+      return (
+        String(data.display_name ?? "")
+          .split(",")[0]
+          .trim() || undefined
+      );
     },
     staleTime: Infinity,
     gcTime: Infinity,
-    retry: 1
+    retry: 1,
   });
 }
 
@@ -288,20 +340,23 @@ function StatusBadge({ status }: { status: Job["status"] }) {
 function ProgressTail({
   job,
   onDelete,
-  onCancel
+  onCancel,
 }: {
   job: Job;
   onDelete?: (job: Job) => void;
   onCancel?: (job: Job) => void;
 }) {
-  if (!["running", "queued", "failed", "canceled"].includes(job.status)) return null;
+  if (!["running", "queued", "failed", "canceled"].includes(job.status))
+    return null;
   const tailCount = job.status === "failed" ? 20 : 4;
   const tail = (job.progress ?? []).slice(-tailCount);
   if (tail.length === 0 && !job.error) return null;
   if (job.status === "failed" || job.status === "canceled") {
     return (
       <details className="jobLogDetails">
-        <summary>{job.status === "failed" ? "Error log" : "Canceled job"}</summary>
+        <summary>
+          {job.status === "failed" ? "Error log" : "Canceled job"}
+        </summary>
         {job.status === "failed" && onDelete && (
           <button className="danger miniButton" onClick={() => onDelete(job)}>
             <Trash2 size={12} />
@@ -343,7 +398,10 @@ function ProgressTail({
 }
 
 function isTpiProducer(job: Job): boolean {
-  return typeof (job.result as Record<string, unknown> | undefined)?.b_tpi_path === "string";
+  return (
+    typeof (job.result as Record<string, unknown> | undefined)?.b_tpi_path ===
+    "string"
+  );
 }
 
 function DerivedRow({
@@ -351,7 +409,7 @@ function DerivedRow({
   spec,
   demJob,
   onDelete,
-  onCancel
+  onCancel,
 }: {
   job: Job;
   spec?: JobSpec;
@@ -365,7 +423,8 @@ function DerivedRow({
   const overlay = useAppStore((s) => s.overlay);
   const activeCompareId = useAppStore((s) => s.activeCompareJob?.id);
   const previews = spec ? previewsFor(job, spec) : [];
-  const bounds = jobBoundsWgs84(job) ?? (demJob ? jobBoundsWgs84(demJob) : undefined);
+  const bounds =
+    jobBoundsWgs84(job) ?? (demJob ? jobBoundsWgs84(demJob) : undefined);
   const canBeTpi = isTpiProducer(job);
   const isActiveTpi = canBeTpi && activeCompareId === job.id;
   const useAsTpi = () => {
@@ -380,7 +439,11 @@ function DerivedRow({
       </div>
       <div className="derivedRowActions">
         {canBeTpi && job.status === "succeeded" && (
-          <button className={isActiveTpi ? "toggled" : ""} disabled={isActiveTpi} onClick={useAsTpi}>
+          <button
+            className={isActiveTpi ? "toggled" : ""}
+            disabled={isActiveTpi}
+            onClick={useAsTpi}
+          >
             {isActiveTpi ? "Active TPI" : "Use as TPI"}
           </button>
         )}
@@ -403,7 +466,7 @@ function DerivedRow({
                         bounds,
                         tileArchiveUrl: preview.tileArchiveUrl,
                         tileMinZoom: preview.tileMinZoom,
-                        tileMaxZoom: preview.tileMaxZoom
+                        tileMaxZoom: preview.tileMaxZoom,
                       })
                 }
               >
@@ -426,7 +489,7 @@ function JobSpecSection({
   onRunJob,
   onDeleteJob,
   onCancelJob,
-  isPending
+  isPending,
 }: {
   area: Area;
   spec: JobSpec;
@@ -454,7 +517,11 @@ function JobSpecSection({
         <button
           className="miniButton"
           disabled={unavailable || isPending}
-          title={unavailable ? spec.unavailable_reason ?? "Unavailable" : spec.description}
+          title={
+            unavailable
+              ? (spec.unavailable_reason ?? "Unavailable")
+              : spec.description
+          }
           onClick={(e) => {
             e.preventDefault();
             triggerRun();
@@ -476,7 +543,7 @@ function JobSpecSection({
         )}
         {runs.map((job) => {
           const isTpi = isTpiProducer(job);
-          const spineJobs = isTpi ? spineJobsByTpi.get(job.id) ?? [] : [];
+          const spineJobs = isTpi ? (spineJobsByTpi.get(job.id) ?? []) : [];
           return (
             <div key={job.id} className="jobRunGroup">
               <DerivedRow
@@ -507,7 +574,7 @@ function AreaCard({
   onRunJob,
   pendingKey,
   onDeleteJob,
-  onCancelJob
+  onCancelJob,
 }: {
   area: Area;
   specs: JobSpec[];
@@ -519,7 +586,9 @@ function AreaCard({
   const setActiveDemJob = useAppStore((s) => s.setActiveDemJob);
   const toggleFootprint = useAppStore((s) => s.toggleFootprint);
   const requestPan = useAppStore((s) => s.requestPan);
-  const footprintVisible = useAppStore((s) => Boolean(s.footprints[area.demJob.id]));
+  const footprintVisible = useAppStore((s) =>
+    Boolean(s.footprints[area.demJob.id]),
+  );
   const activeDemId = useAppStore((s) => s.activeDemJob?.id);
   const isActive = activeDemId === area.demJob.id;
   const friendly = useAoiName(area.bounds);
@@ -548,13 +617,20 @@ function AreaCard({
         <button
           className={footprintVisible ? "toggled" : ""}
           onClick={() =>
-            toggleFootprint({ id: area.demJob.id, name: area.name, bounds: area.bounds })
+            toggleFootprint({
+              id: area.demJob.id,
+              name: area.name,
+              bounds: area.bounds,
+            })
           }
         >
           <Square size={12} />
           {footprintVisible ? "Hide footprint" : "Show footprint"}
         </button>
-        <button onClick={() => setActiveDemJob(area.demJob)} disabled={isActive}>
+        <button
+          onClick={() => setActiveDemJob(area.demJob)}
+          disabled={isActive}
+        >
           {isActive ? "Active container" : "Set active container"}
         </button>
       </div>
@@ -589,7 +665,7 @@ function KmlImportRow({
   childLayers = [],
   onSnap,
   onDelete,
-  onCancel
+  onCancel,
 }: {
   job: Job;
   activeDemJob?: Job;
@@ -606,10 +682,15 @@ function KmlImportRow({
   const toggleKmlLabels = useAppStore((s) => s.toggleKmlLabels);
   const visible = useAppStore((s) => Boolean(s.visibleKmls[job.id]));
   const labelsVisible = useAppStore((s) => Boolean(s.kmlLabels[job.id]));
-  const name = (job.result?.name as string | undefined) ?? (job.params.name as string | undefined) ?? job.id;
+  const name =
+    (job.result?.name as string | undefined) ??
+    (job.params.name as string | undefined) ??
+    job.id;
   const kmlUrl = job.result?.kml_url as string | undefined;
-  const canCancel = Boolean(onCancel) && (job.status === "queued" || job.status === "running");
-  const canDelete = Boolean(onDelete) && job.status !== "queued" && job.status !== "running";
+  const canCancel =
+    Boolean(onCancel) && (job.status === "queued" || job.status === "running");
+  const canDelete =
+    Boolean(onDelete) && job.status !== "queued" && job.status !== "running";
 
   return (
     <div className={`kmlImport ${job.status}`}>
@@ -624,7 +705,10 @@ function KmlImportRow({
       <div className="derivedRowActions">
         {bounds && job.status === "succeeded" && (
           <>
-            <button className={visible ? "toggled" : ""} onClick={() => toggleKml(job.id)}>
+            <button
+              className={visible ? "toggled" : ""}
+              onClick={() => toggleKml(job.id)}
+            >
               <Eye size={12} />
               {visible ? "Hide" : "Show"}
             </button>
@@ -636,23 +720,37 @@ function KmlImportRow({
               <Tags size={12} />
               Labels
             </button>
-            <button onClick={() => setBounds(bounds)}>Use bounds for AOI</button>
+            <button onClick={() => setBounds(bounds)}>
+              Use bounds for AOI
+            </button>
             <button onClick={() => requestPan(bounds)}>
               <LocateFixed size={12} />
               Pan to
             </button>
             {onSnap && job.kind === "kml-import" && (
               <>
-                <button disabled={!activeDemJob} onClick={() => onSnap(job, "dem")}>
+                <button
+                  disabled={!activeDemJob}
+                  onClick={() => onSnap(job, "dem")}
+                >
                   Snap DEM
                 </button>
-                <button disabled={!activeCompareJob} onClick={() => onSnap(job, "tpi")}>
+                <button
+                  disabled={!activeCompareJob}
+                  onClick={() => onSnap(job, "tpi")}
+                >
                   Snap TPI
                 </button>
-                <button disabled={!activeCompareJob} onClick={() => onSnap(job, "geomorphon")}>
+                <button
+                  disabled={!activeCompareJob}
+                  onClick={() => onSnap(job, "geomorphon")}
+                >
                   Snap Geom
                 </button>
-                <button disabled={!activeCompareJob} onClick={() => onSnap(job, "curvature")}>
+                <button
+                  disabled={!activeCompareJob}
+                  onClick={() => onSnap(job, "curvature")}
+                >
                   Snap Curv
                 </button>
               </>
@@ -660,7 +758,12 @@ function KmlImportRow({
           </>
         )}
         {kmlUrl && (
-          <a className="linkButton" href={kmlUrl} target="_blank" rel="noreferrer">
+          <a
+            className="linkButton"
+            href={kmlUrl}
+            target="_blank"
+            rel="noreferrer"
+          >
             <ExternalLink size={12} />
             KML
           </a>
@@ -721,15 +824,22 @@ function rappelCandidates(job?: Job): RappelCandidate[] {
   return Array.isArray(rappels) ? (rappels as RappelCandidate[]) : [];
 }
 
-function ProfileChart({ samples, rappels }: { samples: ProfileSample[]; rappels: RappelCandidate[] }) {
+function ProfileChart({
+  samples,
+  rappels,
+}: {
+  samples: ProfileSample[];
+  rappels: RappelCandidate[];
+}) {
   const points = samples.filter(
     (sample) =>
       typeof sample.distance_m === "number" &&
       typeof sample.elevation_m === "number" &&
       Number.isFinite(sample.distance_m) &&
-      Number.isFinite(sample.elevation_m)
+      Number.isFinite(sample.elevation_m),
   );
-  if (points.length < 2) return <div className="empty">No valid DEM samples on this track.</div>;
+  if (points.length < 2)
+    return <div className="empty">No valid DEM samples on this track.</div>;
   const width = 320;
   const height = 120;
   const pad = 12;
@@ -737,15 +847,29 @@ function ProfileChart({ samples, rappels }: { samples: ProfileSample[]; rappels:
   const minElevation = Math.min(...points.map((p) => p.elevation_m as number));
   const maxElevation = Math.max(...points.map((p) => p.elevation_m as number));
   const elevationSpan = Math.max(1, maxElevation - minElevation);
-  const x = (distance: number) => pad + (distance / Math.max(1, maxDistance)) * (width - pad * 2);
+  const x = (distance: number) =>
+    pad + (distance / Math.max(1, maxDistance)) * (width - pad * 2);
   const y = (elevation: number) =>
-    height - pad - ((elevation - minElevation) / elevationSpan) * (height - pad * 2);
+    height -
+    pad -
+    ((elevation - minElevation) / elevationSpan) * (height - pad * 2);
   const d = points
-    .map((point, idx) => `${idx === 0 ? "M" : "L"} ${x(point.distance_m).toFixed(1)} ${y(point.elevation_m as number).toFixed(1)}`)
+    .map(
+      (point, idx) =>
+        `${idx === 0 ? "M" : "L"} ${x(point.distance_m).toFixed(1)} ${y(point.elevation_m as number).toFixed(1)}`,
+    )
     .join(" ");
   return (
-    <svg className="profileChart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Elevation profile">
-      <path className="profileFill" d={`${d} L ${x(maxDistance)} ${height - pad} L ${pad} ${height - pad} Z`} />
+    <svg
+      className="profileChart"
+      viewBox={`0 0 ${width} ${height}`}
+      role="img"
+      aria-label="Elevation profile"
+    >
+      <path
+        className="profileFill"
+        d={`${d} L ${x(maxDistance)} ${height - pad} L ${pad} ${height - pad} Z`}
+      />
       <path className="profileLine" d={d} />
       {rappels.map((rappel, idx) => (
         <line
@@ -766,9 +890,14 @@ function TrackProfilePanel({
   activeDemJob,
   profileJob,
   isPending,
-  onRun
+  onRun,
 }: {
-  selected?: { kmlJobId: string; category: TrackCategory; trackIndex: number; name: string };
+  selected?: {
+    kmlJobId: string;
+    category: TrackCategory;
+    trackIndex: number;
+    name: string;
+  };
   activeDemJob?: Job;
   profileJob?: Job;
   isPending: boolean;
@@ -783,7 +912,9 @@ function TrackProfilePanel({
         <LineChart size={16} />
         <h2>Track profile</h2>
       </div>
-      {!selected && <div className="empty">Click a visible KML line to select a track.</div>}
+      {!selected && (
+        <div className="empty">Click a visible KML line to select a track.</div>
+      )}
       {selected && (
         <>
           <div className="selection">
@@ -802,15 +933,25 @@ function TrackProfilePanel({
             <LineChart size={14} />
             Build elevation profile
           </button>
-          <button onClick={() => clearSelected(undefined)}>Clear selected track</button>
+          <button onClick={() => clearSelected(undefined)}>
+            Clear selected track
+          </button>
         </>
       )}
       {profileJob?.status === "running" && <ProgressTail job={profileJob} />}
       {profileJob?.status === "succeeded" && (
         <div className="profileResult">
           <div className="profileStats">
-            <span>Length {formatMeters(profileJob.result?.length_m as number | undefined)}</span>
-            <span>Drop {formatMeters(profileJob.result?.total_drop_m as number | undefined)}</span>
+            <span>
+              Length{" "}
+              {formatMeters(profileJob.result?.length_m as number | undefined)}
+            </span>
+            <span>
+              Drop{" "}
+              {formatMeters(
+                profileJob.result?.total_drop_m as number | undefined,
+              )}
+            </span>
             <span>Rappels {rappels.length}</span>
           </div>
           <ProfileChart samples={samples} rappels={rappels} />
@@ -833,6 +974,75 @@ function TrackProfilePanel({
   );
 }
 
+function ProjectPicker({
+  queryClient: qc,
+}: {
+  queryClient: ReturnType<typeof useQueryClient>;
+}) {
+  const { data: projects } = useQuery<Project[]>({
+    queryKey: ["projects"],
+    queryFn: listProjects,
+    staleTime: 60_000,
+  });
+  const activeProjectId = useAppStore((state) => state.activeProjectId);
+  const setActiveProjectId = useAppStore((state) => state.setActiveProjectId);
+
+  const handleChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
+    const id = e.target.value || undefined;
+    setActiveProjectId(id);
+    qc.invalidateQueries({ queryKey: ["jobs"] });
+  };
+
+  if (!projects || projects.length === 0) return null;
+
+  return (
+    <div className="projectPicker">
+      <select
+        value={activeProjectId || ""}
+        onChange={handleChange}
+        disabled={projects.length <= 1}
+      >
+        {projects.map((p) => (
+          <option key={p.id} value={p.id}>
+            {p.name}
+          </option>
+        ))}
+      </select>
+    </div>
+  );
+}
+
+function UserMenu({
+  queryClient: qc,
+}: {
+  queryClient: ReturnType<typeof useQueryClient>;
+}) {
+  const user = useAppStore((state) => state.authenticatedUser);
+  const [loggingOut, setLoggingOut] = useState(false);
+
+  const handleLogout = async () => {
+    setLoggingOut(true);
+    try {
+      await logout();
+      useAppStore.getState().setAuthenticatedUser(undefined);
+      qc.invalidateQueries({ queryKey: ["auth/me"] });
+    } catch {
+      setLoggingOut(false);
+    }
+  };
+
+  if (!user) return null;
+
+  return (
+    <div className="userMenu">
+      <span className="username">{user.username}</span>
+      <button disabled={loggingOut} onClick={handleLogout}>
+        {loggingOut ? "..." : "Logout"}
+      </button>
+    </div>
+  );
+}
+
 export function App() {
   const queryClient = useQueryClient();
   const bounds = useAppStore((state) => state.bounds);
@@ -844,7 +1054,9 @@ export function App() {
   const setActiveDemJob = useAppStore((state) => state.setActiveDemJob);
   const setOverlay = useAppStore((state) => state.setOverlay);
   const clearFootprints = useAppStore((state) => state.clearFootprints);
-  const footprintCount = useAppStore((state) => Object.keys(state.footprints).length);
+  const footprintCount = useAppStore(
+    (state) => Object.keys(state.footprints).length,
+  );
   const fileInputRef = useRef<HTMLInputElement>(null);
   const ropewikiDialogRef = useRef<HTMLDialogElement>(null);
   const demDialogRef = useRef<HTMLDialogElement>(null);
@@ -852,20 +1064,22 @@ export function App() {
   const [bufferM, setBufferM] = useState(200);
   const [snapRadiusM, setSnapRadiusM] = useState(30);
   const [snapStepM, setSnapStepM] = useState(10);
-  const [openMapTool, setOpenMapTool] = useState<"aoi" | "kml" | "ravine" | undefined>();
+  const [openMapTool, setOpenMapTool] = useState<
+    "aoi" | "kml" | "ravine" | undefined
+  >();
   const [ropewikiSource, setRopewikiSource] = useState("");
 
   const jobsQuery = useQuery({
     queryKey: ["jobs"],
     queryFn: listJobs,
-    refetchInterval: 2000
+    refetchInterval: 2000,
   });
 
   const specsQuery = useQuery({
     queryKey: ["job-specs"],
     queryFn: listJobSpecs,
     staleTime: Infinity,
-    gcTime: Infinity
+    gcTime: Infinity,
   });
 
   const jobs = jobsQuery.data ?? [];
@@ -873,15 +1087,21 @@ export function App() {
   const areas = useMemo(() => groupAreas(jobs, specs), [jobs, specs]);
   const baseKmlJobs = useMemo(
     () => jobs.filter((j) => j.kind === "kml-import" || j.kind === "kml-snap"),
-    [jobs]
+    [jobs],
   );
   const generatedKmlJobs = useMemo(() => ravineSpineLayerJobs(jobs), [jobs]);
-  const kmlImports = useMemo(() => [...baseKmlJobs, ...generatedKmlJobs], [baseKmlJobs, generatedKmlJobs]);
+  const kmlImports = useMemo(
+    () => [...baseKmlJobs, ...generatedKmlJobs],
+    [baseKmlJobs, generatedKmlJobs],
+  );
   const kmlContainers = useMemo(
     () => groupKmlContainers(areas, baseKmlJobs, generatedKmlJobs),
-    [areas, baseKmlJobs, generatedKmlJobs]
+    [areas, baseKmlJobs, generatedKmlJobs],
   );
-  const profileJobs = useMemo(() => jobs.filter((j) => j.kind === "track-profile"), [jobs]);
+  const profileJobs = useMemo(
+    () => jobs.filter((j) => j.kind === "track-profile"),
+    [jobs],
+  );
   const selectedProfileJob = useMemo(
     () =>
       selectedKmlTrack
@@ -901,14 +1121,15 @@ export function App() {
             );
           })
         : undefined,
-    [activeDemJob, profileJobs, selectedKmlTrack]
+    [activeDemJob, profileJobs, selectedKmlTrack],
   );
 
-  const invalidate = () => queryClient.invalidateQueries({ queryKey: ["jobs"] });
+  const invalidate = () =>
+    queryClient.invalidateQueries({ queryKey: ["jobs"] });
   const buildMutation = useMutation({
     mutationFn: (payload: { name: string; bounds: Bounds; bufferM: number }) =>
       buildDem(payload.name, payload.bounds, payload.bufferM),
-    onSuccess: invalidate
+    onSuccess: invalidate,
   });
   const [pendingRunKey, setPendingRunKey] = useState<string | undefined>();
   const runJobMutation = useMutation({
@@ -920,7 +1141,7 @@ export function App() {
     onSettled: () => {
       setPendingRunKey(undefined);
       invalidate();
-    }
+    },
   });
   const onRunJob = (demJob: Job, spec: JobSpec) =>
     runJobMutation.mutate({ demJob, spec });
@@ -929,20 +1150,20 @@ export function App() {
       if (!activeCompareJob) throw new Error("Select a completed TPI job");
       return runRavineSpine(activeCompareJob.id, selectedKmlTrack?.kmlJobId);
     },
-    onSuccess: invalidate
+    onSuccess: invalidate,
   });
   const uploadKmlMutation = useMutation({
     mutationFn: (file: File) => uploadKmlFile(file, activeDemJob?.id),
     onSuccess: () => {
       invalidate();
-    }
+    },
   });
   const ropewikiKmlMutation = useMutation({
     mutationFn: (source: string) => {
       if (!source) throw new Error("Enter a Ropewiki URL or title");
       return importRopewikiKml(source, activeDemJob?.id);
     },
-    onSuccess: invalidate
+    onSuccess: invalidate,
   });
   const snapKmlMutation = useMutation({
     mutationFn: ({
@@ -950,7 +1171,7 @@ export function App() {
       target,
       demJob,
       searchRadiusM,
-      sampleStepM
+      sampleStepM,
     }: {
       job: Job;
       target: KmlSnapTarget;
@@ -965,18 +1186,19 @@ export function App() {
           target,
           dem_job_id: targetDemJob.id,
           search_radius_m: searchRadiusM,
-          sample_step_m: sampleStepM
+          sample_step_m: sampleStepM,
         });
       }
-      if (!activeCompareJob) throw new Error("Select a completed TPI job first");
+      if (!activeCompareJob)
+        throw new Error("Select a completed TPI job first");
       return snapKml(job.id, {
         target,
         compare_job_id: activeCompareJob.id,
         search_radius_m: searchRadiusM,
-        sample_step_m: sampleStepM
+        sample_step_m: sampleStepM,
       });
     },
-    onSuccess: invalidate
+    onSuccess: invalidate,
   });
   const trackProfileMutation = useMutation({
     mutationFn: () => {
@@ -985,10 +1207,10 @@ export function App() {
       return runTrackProfile(selectedKmlTrack.kmlJobId, {
         dem_job_id: activeDemJob.id,
         category: selectedKmlTrack.category,
-        track_index: selectedKmlTrack.trackIndex
+        track_index: selectedKmlTrack.trackIndex,
       });
     },
-    onSuccess: invalidate
+    onSuccess: invalidate,
   });
   const deleteJobMutation = useMutation({
     mutationFn: (job: Job) => {
@@ -1002,21 +1224,27 @@ export function App() {
       }
       return deleteJobRecord(job.id);
     },
-    onSuccess: invalidate
+    onSuccess: invalidate,
   });
   const deleteJob = (job: Job) => deleteJobMutation.mutate(job);
   const cancelJobMutation = useMutation({
     mutationFn: (job: Job) => cancelJob(job.id),
-    onSuccess: invalidate
+    onSuccess: invalidate,
   });
   const cancelRunningJob = (job: Job) => cancelJobMutation.mutate(job);
 
-  const promptNumber = (label: string, current: number, min: number): number | undefined => {
+  const promptNumber = (
+    label: string,
+    current: number,
+    min: number,
+  ): number | undefined => {
     const raw = window.prompt(label, String(current));
     if (raw === null) return undefined;
     const value = Number(raw);
     if (!Number.isFinite(value) || value < min) {
-      window.alert(`${label} must be ${min > 0 ? "a positive number" : "zero or greater"}.`);
+      window.alert(
+        `${label} must be ${min > 0 ? "a positive number" : "zero or greater"}.`,
+      );
       return undefined;
     }
     return value;
@@ -1030,7 +1258,7 @@ export function App() {
     setName(finalName);
     buildMutation.mutate(
       { name: finalName, bounds, bufferM },
-      { onSuccess: () => demDialogRef.current?.close() }
+      { onSuccess: () => demDialogRef.current?.close() },
     );
   };
 
@@ -1048,7 +1276,7 @@ export function App() {
       onSuccess: () => {
         setRopewikiSource("");
         ropewikiDialogRef.current?.close();
-      }
+      },
     });
   };
 
@@ -1093,7 +1321,7 @@ export function App() {
     trackProfileMutation.error,
     deleteJobMutation.error,
     cancelJobMutation.error,
-    jobsQuery.error
+    jobsQuery.error,
   ]);
 
   return (
@@ -1103,9 +1331,13 @@ export function App() {
           <MapIcon size={18} />
           <span>canyongis</span>
         </div>
-        <button onClick={() => jobsQuery.refetch()}>
-          <RefreshCw size={16} />
-        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+          <ProjectPicker queryClient={queryClient} />
+          <UserMenu queryClient={queryClient} />
+          <button onClick={() => jobsQuery.refetch()}>
+            <RefreshCw size={16} />
+          </button>
+        </div>
       </section>
 
       <section className="workspace">
@@ -1126,14 +1358,24 @@ export function App() {
           <div className="selection">
             <div>
               <span>AOI</span>
-              <strong>{bounds ? `${bounds.west.toFixed(4)}, ${bounds.south.toFixed(4)}` : "none"}</strong>
+              <strong>
+                {bounds
+                  ? `${bounds.west.toFixed(4)}, ${bounds.south.toFixed(4)}`
+                  : "none"}
+              </strong>
             </div>
-            {bounds && <button onClick={() => setBounds(undefined)}>Clear AOI</button>}
+            {bounds && (
+              <button onClick={() => setBounds(undefined)}>Clear AOI</button>
+            )}
             <div>
               <span>DEM job</span>
               <strong>{activeDemJob?.id ?? "none"}</strong>
             </div>
-            {activeDemJob && <button onClick={() => setActiveDemJob(undefined)}>Clear active DEM/container</button>}
+            {activeDemJob && (
+              <button onClick={() => setActiveDemJob(undefined)}>
+                Clear active DEM/container
+              </button>
+            )}
             <div>
               <span>TPI job</span>
               <strong>{activeCompareJob?.id ?? "none"}</strong>
@@ -1142,9 +1384,15 @@ export function App() {
               <span>Overlay</span>
               <strong>{overlay?.name ?? "none"}</strong>
             </div>
-            {overlay && <button onClick={() => setOverlay(undefined)}>Clear overlay</button>}
+            {overlay && (
+              <button onClick={() => setOverlay(undefined)}>
+                Clear overlay
+              </button>
+            )}
             {footprintCount > 0 && (
-              <button onClick={() => clearFootprints()}>Hide all footprints ({footprintCount})</button>
+              <button onClick={() => clearFootprints()}>
+                Hide all footprints ({footprintCount})
+              </button>
             )}
           </div>
 
@@ -1159,66 +1407,89 @@ export function App() {
               <div className="empty">No DEM containers or KMLs yet.</div>
             )}
             {kmlContainers.groups.map(({ area, kmls, generated }) => {
-              const unparentedGenerated = unparentedGeneratedLayers(generated, kmls);
+              const unparentedGenerated = unparentedGeneratedLayers(
+                generated,
+                kmls,
+              );
               return (
-              <details key={area.demJob.id} open={kmls.length > 0} className="derivedSection">
-                <summary>
-                  DEM: {area.name} ({kmls.length} KML)
-                </summary>
-                <div className="derivedList">
-                  <AreaCard
-                    area={area}
-                    specs={specs}
-                    onRunJob={onRunJob}
-                    pendingKey={pendingRunKey}
-                    onDeleteJob={deleteJob}
-                    onCancelJob={cancelRunningJob}
-                  />
-                  {kmls.length === 0 && <div className="empty">No KMLs in this DEM container.</div>}
-                  {kmls.map((job) => (
-                    <KmlImportRow
-                      key={job.id}
-                      job={job}
-                      childLayers={childLayersFor(job, generated, kmls)}
-                      activeDemJob={area.demJob}
-                      activeCompareJob={activeCompareJob}
-                      onSnap={(sourceJob, target) => runSnap(sourceJob, target, area.demJob)}
-                      onDelete={deleteJob}
-                      onCancel={cancelRunningJob}
+                <details
+                  key={area.demJob.id}
+                  open={kmls.length > 0}
+                  className="derivedSection"
+                >
+                  <summary>
+                    DEM: {area.name} ({kmls.length} KML)
+                  </summary>
+                  <div className="derivedList">
+                    <AreaCard
+                      area={area}
+                      specs={specs}
+                      onRunJob={onRunJob}
+                      pendingKey={pendingRunKey}
+                      onDeleteJob={deleteJob}
+                      onCancelJob={cancelRunningJob}
                     />
-                  ))}
-                  {unparentedGenerated.length > 0 && (
-                    <details open className="derivedSection">
-                      <summary>Generated KML ({unparentedGenerated.length})</summary>
-                      <div className="derivedList">
-                        {unparentedGenerated.map((job) => (
-                          <KmlImportRow
-                            key={job.id}
-                            job={job}
-                            activeDemJob={area.demJob}
-                            activeCompareJob={activeCompareJob}
-                            onDelete={deleteJob}
-                            onCancel={cancelRunningJob}
-                          />
-                        ))}
+                    {kmls.length === 0 && (
+                      <div className="empty">
+                        No KMLs in this DEM container.
                       </div>
-                    </details>
-                  )}
-                </div>
-              </details>
-            );
+                    )}
+                    {kmls.map((job) => (
+                      <KmlImportRow
+                        key={job.id}
+                        job={job}
+                        childLayers={childLayersFor(job, generated, kmls)}
+                        activeDemJob={area.demJob}
+                        activeCompareJob={activeCompareJob}
+                        onSnap={(sourceJob, target) =>
+                          runSnap(sourceJob, target, area.demJob)
+                        }
+                        onDelete={deleteJob}
+                        onCancel={cancelRunningJob}
+                      />
+                    ))}
+                    {unparentedGenerated.length > 0 && (
+                      <details open className="derivedSection">
+                        <summary>
+                          Generated KML ({unparentedGenerated.length})
+                        </summary>
+                        <div className="derivedList">
+                          {unparentedGenerated.map((job) => (
+                            <KmlImportRow
+                              key={job.id}
+                              job={job}
+                              activeDemJob={area.demJob}
+                              activeCompareJob={activeCompareJob}
+                              onDelete={deleteJob}
+                              onCancel={cancelRunningJob}
+                            />
+                          ))}
+                        </div>
+                      </details>
+                    )}
+                  </div>
+                </details>
+              );
             })}
-            {(kmlContainers.loose.length > 0 || kmlContainers.looseGenerated.length > 0) && (
+            {(kmlContainers.loose.length > 0 ||
+              kmlContainers.looseGenerated.length > 0) && (
               <details open className="derivedSection">
                 <summary>
-                  KML: unassigned ({kmlContainers.loose.length + kmlContainers.looseGenerated.length})
+                  KML: unassigned (
+                  {kmlContainers.loose.length +
+                    kmlContainers.looseGenerated.length}
+                  )
                 </summary>
                 <div className="derivedList">
                   {kmlContainers.loose.map((job) => (
                     <KmlImportRow
                       key={job.id}
                       job={job}
-                      childLayers={childLayersFor(job, kmlContainers.looseGenerated, kmlContainers.loose)}
+                      childLayers={childLayersFor(
+                        job,
+                        kmlContainers.looseGenerated,
+                        kmlContainers.loose,
+                      )}
                       activeDemJob={activeDemJob}
                       activeCompareJob={activeCompareJob}
                       onSnap={(sourceJob, target) => runSnap(sourceJob, target)}
@@ -1226,7 +1497,10 @@ export function App() {
                       onCancel={cancelRunningJob}
                     />
                   ))}
-                  {unparentedGeneratedLayers(kmlContainers.looseGenerated, kmlContainers.loose).map((job) => (
+                  {unparentedGeneratedLayers(
+                    kmlContainers.looseGenerated,
+                    kmlContainers.loose,
+                  ).map((job) => (
                     <KmlImportRow
                       key={job.id}
                       job={job}
@@ -1256,13 +1530,19 @@ export function App() {
                   <div className="jobFooter">
                     <StatusBadge status={job.status} />
                     {(job.status === "queued" || job.status === "running") && (
-                      <button className="danger miniButton" onClick={() => cancelRunningJob(job)}>
+                      <button
+                        className="danger miniButton"
+                        onClick={() => cancelRunningJob(job)}
+                      >
                         <Square size={12} />
                         Cancel
                       </button>
                     )}
                     {job.status !== "queued" && job.status !== "running" && (
-                      <button className="danger miniButton" onClick={() => deleteJob(job)}>
+                      <button
+                        className="danger miniButton"
+                        onClick={() => deleteJob(job)}
+                      >
                         <Trash2 size={12} />
                         Delete
                       </button>
@@ -1281,7 +1561,9 @@ export function App() {
                 className={`mapToolIcon ${openMapTool === "aoi" ? "toggled" : ""}`}
                 title="AOI tools"
                 aria-label="AOI tools"
-                onClick={() => setOpenMapTool(openMapTool === "aoi" ? undefined : "aoi")}
+                onClick={() =>
+                  setOpenMapTool(openMapTool === "aoi" ? undefined : "aoi")
+                }
               >
                 <Layers size={14} />
               </button>
@@ -1292,7 +1574,11 @@ export function App() {
                     <span>AOI</span>
                   </div>
                   <div className="mapToolMeta">{selectedAoiText}</div>
-                  <button className="primary" disabled={!bounds || buildMutation.isPending} onClick={openDemDialog}>
+                  <button
+                    className="primary"
+                    disabled={!bounds || buildMutation.isPending}
+                    onClick={openDemDialog}
+                  >
                     <Play size={14} />
                     DEM Mosaic
                   </button>
@@ -1305,7 +1591,9 @@ export function App() {
                 className={`mapToolIcon ${openMapTool === "kml" ? "toggled" : ""}`}
                 title="KML import"
                 aria-label="KML import"
-                onClick={() => setOpenMapTool(openMapTool === "kml" ? undefined : "kml")}
+                onClick={() =>
+                  setOpenMapTool(openMapTool === "kml" ? undefined : "kml")
+                }
               >
                 <Upload size={14} />
               </button>
@@ -1327,13 +1615,20 @@ export function App() {
                     <span>KML</span>
                   </div>
                   <div className="mapToolMeta">
-                    {activeDemJob ? `Container ${activeDemJob.id}` : "Import unassigned"}
+                    {activeDemJob
+                      ? `Container ${activeDemJob.id}`
+                      : "Import unassigned"}
                   </div>
                   {activeDemJob && (
-                    <button onClick={() => setActiveDemJob(undefined)}>Import outside container</button>
+                    <button onClick={() => setActiveDemJob(undefined)}>
+                      Import outside container
+                    </button>
                   )}
                   <div className="mapToolButtons">
-                    <button disabled={uploadKmlMutation.isPending} onClick={() => fileInputRef.current?.click()}>
+                    <button
+                      disabled={uploadKmlMutation.isPending}
+                      onClick={() => fileInputRef.current?.click()}
+                    >
                       Upload
                     </button>
                     <button
@@ -1352,7 +1647,11 @@ export function App() {
                 className={`mapToolIcon ${openMapTool === "ravine" ? "toggled" : ""}`}
                 title="Ravine tools"
                 aria-label="Ravine tools"
-                onClick={() => setOpenMapTool(openMapTool === "ravine" ? undefined : "ravine")}
+                onClick={() =>
+                  setOpenMapTool(
+                    openMapTool === "ravine" ? undefined : "ravine",
+                  )
+                }
               >
                 <Activity size={14} />
               </button>
@@ -1362,17 +1661,17 @@ export function App() {
                     <Activity size={14} />
                     <span>Ravine</span>
                   </div>
-                  <button disabled={!activeCompareJob || spineMutation.isPending} onClick={() => spineMutation.mutate()}>
+                  <button
+                    disabled={!activeCompareJob || spineMutation.isPending}
+                    onClick={() => spineMutation.mutate()}
+                  >
                     Ravine Spine
                   </button>
                 </div>
               )}
             </div>
           </div>
-          <dialog
-            ref={demDialogRef}
-            className="appDialog"
-          >
+          <dialog ref={demDialogRef} className="appDialog">
             <form
               method="dialog"
               onSubmit={(event) => {
@@ -1404,23 +1703,28 @@ export function App() {
                 />
               </label>
               <div className="dialogActions">
-                <button type="button" onClick={() => demDialogRef.current?.close()}>
+                <button
+                  type="button"
+                  onClick={() => demDialogRef.current?.close()}
+                >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   className="primary"
-                  disabled={!bounds || buildMutation.isPending || !Number.isFinite(bufferM) || bufferM < 0}
+                  disabled={
+                    !bounds ||
+                    buildMutation.isPending ||
+                    !Number.isFinite(bufferM) ||
+                    bufferM < 0
+                  }
                 >
                   Build
                 </button>
               </div>
             </form>
           </dialog>
-          <dialog
-            ref={ropewikiDialogRef}
-            className="appDialog"
-          >
+          <dialog ref={ropewikiDialogRef} className="appDialog">
             <form
               method="dialog"
               onSubmit={(event) => {
@@ -1432,7 +1736,9 @@ export function App() {
                 <Upload size={16} />
                 <strong>Import Ropewiki KML</strong>
               </div>
-              {activeDemJob && <div className="mapToolMeta">Container {activeDemJob.id}</div>}
+              {activeDemJob && (
+                <div className="mapToolMeta">Container {activeDemJob.id}</div>
+              )}
               <label>
                 Ropewiki URL or title
                 <input
@@ -1442,13 +1748,18 @@ export function App() {
                 />
               </label>
               <div className="dialogActions">
-                <button type="button" onClick={() => ropewikiDialogRef.current?.close()}>
+                <button
+                  type="button"
+                  onClick={() => ropewikiDialogRef.current?.close()}
+                >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   className="primary"
-                  disabled={!ropewikiSource.trim() || ropewikiKmlMutation.isPending}
+                  disabled={
+                    !ropewikiSource.trim() || ropewikiKmlMutation.isPending
+                  }
                 >
                   Import
                 </button>

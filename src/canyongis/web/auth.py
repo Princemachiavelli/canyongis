@@ -83,9 +83,7 @@ class AuthManager:
 
     def get_user_by_id(self, user_id: str) -> User | None:
         with self._connect() as conn, conn.cursor() as cur:
-            cur.execute(
-                "SELECT id, username FROM canyongis_users WHERE id = %s", (user_id,)
-            )
+            cur.execute("SELECT id, username FROM canyongis_users WHERE id = %s", (user_id,))
             row = cur.fetchone()
         if row is None:
             return None
@@ -115,8 +113,7 @@ class AuthManager:
         user_id = uuid.uuid4().hex[:16]
         with self._connect() as conn, conn.cursor() as cur:
             cur.execute(
-                "INSERT INTO canyongis_users (id, username, password_hash) "
-                "VALUES (%s, %s, %s)",
+                "INSERT INTO canyongis_users (id, username, password_hash) VALUES (%s, %s, %s)",
                 (user_id, username, hash_password(password)),
             )
         return User(id=user_id, username=username)

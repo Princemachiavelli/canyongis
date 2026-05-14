@@ -67,12 +67,9 @@ def upgrade() -> None:
             ADD COLUMN canceled_by_user_id text REFERENCES canyongis_users(id)
         """
     )
+    op.execute("CREATE INDEX canyongis_jobs_project_id_idx ON canyongis_jobs (project_id)")
     op.execute(
-        "CREATE INDEX canyongis_jobs_project_id_idx ON canyongis_jobs (project_id)"
-    )
-    op.execute(
-        "CREATE INDEX canyongis_jobs_created_by_user_id_idx "
-        "ON canyongis_jobs (created_by_user_id)"
+        "CREATE INDEX canyongis_jobs_created_by_user_id_idx ON canyongis_jobs (created_by_user_id)"
     )
 
     op.execute(

@@ -56,8 +56,7 @@ def live_postgres() -> Iterator[PostgresConfig]:
         admin_conn.autocommit = True
         with admin_conn.cursor() as cur:
             cur.execute(
-                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity "
-                "WHERE datname = %s",
+                "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s",
                 (db_name,),
             )
             cur.execute(f'DROP DATABASE IF EXISTS "{db_name}"')

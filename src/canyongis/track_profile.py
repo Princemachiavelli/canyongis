@@ -95,9 +95,7 @@ def _elevation_samples(src, points: list[Point]) -> list[float]:
     out: list[float] = []
     for row in src.sample(coords):
         value = float(row[0])
-        if nodata is not None and value == nodata:
-            out.append(math.nan)
-        elif not math.isfinite(value):
+        if (nodata is not None and value == nodata) or not math.isfinite(value):
             out.append(math.nan)
         else:
             out.append(value)
@@ -249,12 +247,14 @@ def analyze_track_profile(
             lon=float(point.x),
             lat=float(point.y),
         )
-        for distance, elevation, slope, point in zip(distances, elevations, slopes, points_wgs84, strict=True)
+        for distance, elevation, slope, point in zip(
+            distances, elevations, slopes, points_wgs84, strict=True
+        )
     ]
-    finite_elev = np.asarray([value for value in elevations if math.isfinite(value)], dtype=np.float64)
-    total_drop = (
-        float(finite_elev[0] - finite_elev[-1]) if finite_elev.size >= 2 else None
+    finite_elev = np.asarray(
+        [value for value in elevations if math.isfinite(value)], dtype=np.float64
     )
+    total_drop = float(finite_elev[0] - finite_elev[-1]) if finite_elev.size >= 2 else None
     rappels = _detect_rappels(
         distances,
         elevations,

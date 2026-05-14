@@ -94,9 +94,7 @@ def export_rvt_previews(
 
     artifacts: dict[str, PreviewArtifacts] = {}
 
-    def write_score(
-        key: str, score: np.ndarray, *, invert_for_display: bool = False
-    ) -> None:
+    def write_score(key: str, score: np.ndarray, *, invert_for_display: bool = False) -> None:
         tif_path = out_dir / f"rvt_{key}.tif"
         _write_score_geotiff(tif_path, score, profile)
         display = -score if invert_for_display else score
@@ -156,9 +154,7 @@ def export_rvt_previews(
         if "svf" in requested and "svf" in out:
             write_score("svf", np.asarray(out["svf"], dtype=np.float32), invert_for_display=True)
         if "asvf" in requested and "asvf" in out:
-            write_score(
-                "asvf", np.asarray(out["asvf"], dtype=np.float32), invert_for_display=True
-            )
+            write_score("asvf", np.asarray(out["asvf"], dtype=np.float32), invert_for_display=True)
         if "opns_pos" in requested and "opns" in out:
             write_score(
                 "opns_pos",

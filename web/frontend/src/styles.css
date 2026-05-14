@@ -1,848 +1,936 @@
 :root {
-  font-family:
-    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-  color: #172026;
-  background: #eef1f3;
+    font-family:
+        Inter,
+        ui-sans-serif,
+        system-ui,
+        -apple-system,
+        BlinkMacSystemFont,
+        "Segoe UI",
+        sans-serif;
+    color: #172026;
+    background: #eef1f3;
 }
 
 * {
-  box-sizing: border-box;
+    box-sizing: border-box;
 }
 
 body {
-  margin: 0;
+    margin: 0;
 }
 
 html,
 body,
 #root {
-  height: 100%;
-  overflow: hidden;
+    height: 100%;
+    overflow: hidden;
 }
 
 button,
 input {
-  font: inherit;
+    font: inherit;
 }
 
 button {
-  border: 1px solid #b9c2c8;
-  background: #ffffff;
-  color: #172026;
-  min-height: 34px;
-  padding: 0 10px;
-  border-radius: 6px;
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
-  gap: 6px;
-  cursor: pointer;
+    border: 1px solid #b9c2c8;
+    background: #ffffff;
+    color: #172026;
+    min-height: 34px;
+    padding: 0 10px;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    cursor: pointer;
 }
 
 button:disabled {
-  color: #8c969c;
-  background: #f0f3f4;
-  cursor: not-allowed;
+    color: #8c969c;
+    background: #f0f3f4;
+    cursor: not-allowed;
 }
 
 button.primary {
-  background: #0c6b58;
-  color: #ffffff;
-  border-color: #0c6b58;
-  width: 100%;
+    background: #0c6b58;
+    color: #ffffff;
+    border-color: #0c6b58;
+    width: 100%;
 }
 
 input {
-  width: 100%;
-  min-height: 34px;
-  border: 1px solid #b9c2c8;
-  border-radius: 6px;
-  padding: 0 9px;
-  background: #ffffff;
+    width: 100%;
+    min-height: 34px;
+    border: 1px solid #b9c2c8;
+    border-radius: 6px;
+    padding: 0 9px;
+    background: #ffffff;
 }
 
 .shell {
-  height: 100vh;
-  display: grid;
-  grid-template-rows: 44px 1fr;
-  overflow: hidden;
+    height: 100vh;
+    display: grid;
+    grid-template-rows: 44px 1fr;
+    overflow: hidden;
 }
 
 .toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  border-bottom: 1px solid #cbd3d8;
-  background: #ffffff;
-  padding: 0 12px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    border-bottom: 1px solid #cbd3d8;
+    background: #ffffff;
+    padding: 0 12px;
 }
 
 .brand {
-  display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 700;
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+    font-weight: 700;
 }
 
 .workspace {
-  min-height: 0;
-  height: 100%;
-  display: grid;
-  grid-template-columns: 360px 1fr;
-  overflow: hidden;
+    min-height: 0;
+    height: 100%;
+    display: grid;
+    grid-template-columns: 360px 1fr;
+    overflow: hidden;
 }
 
 .panel {
-  min-height: 0;
-  height: calc(100vh - 44px);
-  overflow: auto;
-  overscroll-behavior: contain;
-  background: #f8fafb;
-  border-right: 1px solid #cbd3d8;
-  padding: 14px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
+    min-height: 0;
+    height: calc(100vh - 44px);
+    overflow: auto;
+    overscroll-behavior: contain;
+    background: #f8fafb;
+    border-right: 1px solid #cbd3d8;
+    padding: 14px;
+    display: flex;
+    flex-direction: column;
+    gap: 12px;
 }
 
 .panelHeader,
 .jobsHeader {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
 }
 
 h1,
 h2 {
-  margin: 0;
-  font-size: 15px;
+    margin: 0;
+    font-size: 15px;
 }
 
 label {
-  display: grid;
-  gap: 5px;
-  font-size: 12px;
-  color: #46535b;
+    display: grid;
+    gap: 5px;
+    font-size: 12px;
+    color: #46535b;
 }
 
 .toolGroup {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
 }
 
 .toolGroup button:last-child {
-  grid-column: 1 / -1;
+    grid-column: 1 / -1;
 }
 
 .importPanel {
-  border-top: 1px solid #d6dde1;
-  border-bottom: 1px solid #d6dde1;
-  padding: 12px 0;
-  display: grid;
-  gap: 9px;
+    border-top: 1px solid #d6dde1;
+    border-bottom: 1px solid #d6dde1;
+    padding: 12px 0;
+    display: grid;
+    gap: 9px;
 }
 
 .importPanel button {
-  width: 100%;
+    width: 100%;
 }
 
 .trackPanel {
-  border-top: 1px solid #d6dde1;
-  border-bottom: 1px solid #d6dde1;
-  padding: 12px 0;
-  display: grid;
-  gap: 9px;
+    border-top: 1px solid #d6dde1;
+    border-bottom: 1px solid #d6dde1;
+    padding: 12px 0;
+    display: grid;
+    gap: 9px;
 }
 
 .trackPanel button {
-  width: 100%;
+    width: 100%;
 }
 
 .profileResult {
-  display: grid;
-  gap: 8px;
+    display: grid;
+    gap: 8px;
 }
 
 .profileStats {
-  display: grid;
-  grid-template-columns: repeat(3, 1fr);
-  gap: 5px;
-  font-size: 11px;
-  color: #46535b;
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 5px;
+    font-size: 11px;
+    color: #46535b;
 }
 
 .profileStats span {
-  border: 1px solid #d6dde1;
-  border-radius: 6px;
-  padding: 5px 6px;
-  background: #ffffff;
-  text-align: center;
+    border: 1px solid #d6dde1;
+    border-radius: 6px;
+    padding: 5px 6px;
+    background: #ffffff;
+    text-align: center;
 }
 
 .profileChart {
-  width: 100%;
-  height: 120px;
-  display: block;
-  border: 1px solid #d6dde1;
-  border-radius: 6px;
-  background: #ffffff;
+    width: 100%;
+    height: 120px;
+    display: block;
+    border: 1px solid #d6dde1;
+    border-radius: 6px;
+    background: #ffffff;
 }
 
 .profileFill {
-  fill: #d9ece7;
-  opacity: 0.8;
+    fill: #d9ece7;
+    opacity: 0.8;
 }
 
 .profileLine {
-  fill: none;
-  stroke: #0c6b58;
-  stroke-width: 2;
+    fill: none;
+    stroke: #0c6b58;
+    stroke-width: 2;
 }
 
 .profileRappel {
-  stroke: #c2410c;
-  stroke-width: 1.5;
-  stroke-dasharray: 4 3;
+    stroke: #c2410c;
+    stroke-width: 1.5;
+    stroke-dasharray: 4 3;
 }
 
 .rappelList {
-  display: grid;
-  gap: 5px;
+    display: grid;
+    gap: 5px;
 }
 
 .rappelRow {
-  display: grid;
-  grid-template-columns: 32px 1fr 1fr 44px;
-  gap: 6px;
-  align-items: center;
-  border: 1px solid #ead2b8;
-  border-radius: 6px;
-  padding: 5px 6px;
-  background: #fffaf2;
-  font-size: 11px;
+    display: grid;
+    grid-template-columns: 32px 1fr 1fr 44px;
+    gap: 6px;
+    align-items: center;
+    border: 1px solid #ead2b8;
+    border-radius: 6px;
+    padding: 5px 6px;
+    background: #fffaf2;
+    font-size: 11px;
 }
 
 .selection {
-  display: grid;
-  gap: 8px;
-  border-top: 1px solid #d6dde1;
-  border-bottom: 1px solid #d6dde1;
-  padding: 12px 0;
+    display: grid;
+    gap: 8px;
+    border-top: 1px solid #d6dde1;
+    border-bottom: 1px solid #d6dde1;
+    padding: 12px 0;
 }
 
 .selection div {
-  display: flex;
-  justify-content: space-between;
-  gap: 10px;
-  font-size: 12px;
+    display: flex;
+    justify-content: space-between;
+    gap: 10px;
+    font-size: 12px;
 }
 
 .selection span {
-  color: #64727b;
+    color: #64727b;
 }
 
 .selection strong {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+/* Auth overlay */
+.authOverlay {
+    position: fixed;
+    inset: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    background: rgba(15, 23, 42, 0.35);
+    z-index: 9999;
+}
+
+.loginCard {
+    width: min(340px, calc(100vw - 32px));
+    background: #ffffff;
+    border: 1px solid #b9c2c8;
+    border-radius: 8px;
+    padding: 20px;
+    display: grid;
+    gap: 14px;
+    box-shadow: 0 18px 48px rgba(15, 23, 42, 0.24);
+}
+
+.loginCard h2 {
+    font-size: 17px;
+    margin: 0;
+}
+
+.loginCard form {
+    display: grid;
+    gap: 12px;
+}
+
+.loginCard .error {
+    margin: 0;
+}
+
+.loginCard p {
+    margin: 0;
+    font-size: 13px;
+    color: #46535b;
+}
+
+/* Header user menu + project picker */
+.userMenu {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.userMenu .username {
+    font-size: 12px;
+    color: #46535b;
+}
+
+.userMenu button {
+    min-height: 28px;
+    font-size: 12px;
+}
+
+.projectPicker {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.projectPicker select {
+    font: inherit;
+    font-size: 12px;
+    min-height: 28px;
+    border: 1px solid #b9c2c8;
+    border-radius: 6px;
+    padding: 0 8px;
+    background: #ffffff;
+    color: #172026;
+}
+
+.projectPicker select:disabled {
+    color: #8c969c;
+    background: #f0f3f4;
+    cursor: not-allowed;
 }
 
 .jobs {
-  display: grid;
-  gap: 8px;
+    display: grid;
+    gap: 8px;
 }
 
 .job {
-  border: 1px solid #d1d9de;
-  background: #ffffff;
-  border-radius: 8px;
-  padding: 9px;
-  display: grid;
-  gap: 7px;
+    border: 1px solid #d1d9de;
+    background: #ffffff;
+    border-radius: 8px;
+    padding: 9px;
+    display: grid;
+    gap: 7px;
 }
 
 .job > div:first-child {
-  display: flex;
-  justify-content: space-between;
-  gap: 8px;
-  font-size: 12px;
+    display: flex;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 12px;
 }
 
 .job > div:first-child span {
-  color: #65737c;
+    color: #65737c;
 }
 
 .jobMeta {
-  color: #56656d;
-  font-size: 12px;
+    color: #56656d;
+    font-size: 12px;
 }
 
 .job.running {
-  border-color: #2d95bf;
+    border-color: #2d95bf;
 }
 
 .job.succeeded {
-  border-color: #67a86f;
+    border-color: #67a86f;
 }
 
 .job.failed {
-  border-color: #c76b6b;
+    border-color: #c76b6b;
 }
 
 .job.canceled {
-  border-color: #a8b1b7;
+    border-color: #a8b1b7;
 }
 
 .jobActions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
 }
 
 .jobActions button {
-  min-height: 28px;
-  font-size: 12px;
+    min-height: 28px;
+    font-size: 12px;
 }
 
 .error {
-  max-height: 160px;
-  overflow: auto;
-  color: #9a2e2e;
-  background: #fff2f2;
-  border: 1px solid #f0c9c9;
-  border-radius: 6px;
-  padding: 8px;
-  white-space: pre-wrap;
-  font-size: 12px;
+    max-height: 160px;
+    overflow: auto;
+    color: #9a2e2e;
+    background: #fff2f2;
+    border: 1px solid #f0c9c9;
+    border-radius: 6px;
+    padding: 8px;
+    white-space: pre-wrap;
+    font-size: 12px;
 }
 
 .areas {
-  display: grid;
-  gap: 10px;
+    display: grid;
+    gap: 10px;
 }
 
 .area {
-  border: 1px solid #d1d9de;
-  background: #ffffff;
-  border-radius: 8px;
-  padding: 10px;
-  display: grid;
-  gap: 8px;
+    border: 1px solid #d1d9de;
+    background: #ffffff;
+    border-radius: 8px;
+    padding: 10px;
+    display: grid;
+    gap: 8px;
 }
 
 .kmlImport {
-  border: 1px solid #d1d9de;
-  border-left-width: 3px;
-  border-radius: 8px;
-  padding: 8px;
-  display: grid;
-  gap: 7px;
-  background: #ffffff;
+    border: 1px solid #d1d9de;
+    border-left-width: 3px;
+    border-radius: 8px;
+    padding: 8px;
+    display: grid;
+    gap: 7px;
+    background: #ffffff;
 }
 
 .kmlImport.running {
-  border-left-color: #2d95bf;
+    border-left-color: #2d95bf;
 }
 
 .kmlImport.succeeded {
-  border-left-color: #67a86f;
+    border-left-color: #67a86f;
 }
 
 .kmlImport.failed {
-  border-left-color: #c76b6b;
+    border-left-color: #c76b6b;
 }
 
 .kmlImport.queued {
-  border-left-color: #b9c2c8;
+    border-left-color: #b9c2c8;
 }
 
 .kmlImport.canceled {
-  border-left-color: #a8b1b7;
+    border-left-color: #a8b1b7;
 }
 
 .area.active {
-  border-color: #0c6b58;
-  box-shadow: 0 0 0 1px #0c6b58 inset;
+    border-color: #0c6b58;
+    box-shadow: 0 0 0 1px #0c6b58 inset;
 }
 
 .areaHead {
-  display: flex;
-  align-items: baseline;
-  justify-content: space-between;
-  gap: 8px;
+    display: flex;
+    align-items: baseline;
+    justify-content: space-between;
+    gap: 8px;
 }
 
 .areaHead strong {
-  font-size: 13px;
+    font-size: 13px;
 }
 
 .areaNameButton {
-  background: none;
-  border: none;
-  padding: 0;
-  min-height: auto;
-  font-size: 13px;
-  font-weight: 600;
-  color: #0c6b58;
-  cursor: pointer;
-  text-align: left;
+    background: none;
+    border: none;
+    padding: 0;
+    min-height: auto;
+    font-size: 13px;
+    font-weight: 600;
+    color: #0c6b58;
+    cursor: pointer;
+    text-align: left;
 }
 
 .areaNameButton:hover {
-  text-decoration: underline;
+    text-decoration: underline;
 }
 
 .areaSubName {
-  font-size: 11px;
-  color: #8c969c;
-  margin-left: 6px;
+    font-size: 11px;
+    color: #8c969c;
+    margin-left: 6px;
 }
 
 .areaHead code,
 .derivedRowHead code,
 .job code {
-  font-size: 11px;
-  color: #65737c;
-  margin-left: 6px;
+    font-size: 11px;
+    color: #65737c;
+    margin-left: 6px;
 }
 
 .areaBounds {
-  font-size: 11px;
-  color: #56656d;
-  font-variant-numeric: tabular-nums;
+    font-size: 11px;
+    color: #56656d;
+    font-variant-numeric: tabular-nums;
 }
 
 .areaActions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
 }
 
 .areaActions button,
 .derivedRowActions button,
 .derivedRowActions .linkButton {
-  min-height: 26px;
-  font-size: 11px;
-  padding: 0 8px;
+    min-height: 26px;
+    font-size: 11px;
+    padding: 0 8px;
 }
 
 button.toggled {
-  background: #d4ecf7;
-  border-color: #6cb1cf;
+    background: #d4ecf7;
+    border-color: #6cb1cf;
 }
 
 button:disabled {
-  color: #9aa5ab;
-  background: #eef2f4;
-  border-color: #d6dde1;
-  cursor: not-allowed;
+    color: #9aa5ab;
+    background: #eef2f4;
+    border-color: #d6dde1;
+    cursor: not-allowed;
 }
 
 button.danger {
-  color: #8a3434;
-  border-color: #d9a1a1;
-  background: #fff6f6;
+    color: #8a3434;
+    border-color: #d9a1a1;
+    background: #fff6f6;
 }
 
 button.danger:hover {
-  background: #fdeaea;
+    background: #fdeaea;
 }
 
 button.miniButton {
-  min-height: 24px;
-  font-size: 11px;
-  padding: 0 7px;
+    min-height: 24px;
+    font-size: 11px;
+    padding: 0 7px;
 }
 
 .derivedSection {
-  border-top: 1px solid #ecf0f2;
-  padding-top: 6px;
+    border-top: 1px solid #ecf0f2;
+    padding-top: 6px;
 }
 
 .derivedSection summary {
-  cursor: pointer;
-  font-size: 12px;
-  color: #46535b;
-  list-style: revert;
+    cursor: pointer;
+    font-size: 12px;
+    color: #46535b;
+    list-style: revert;
 }
 
 .derivedList {
-  display: grid;
-  gap: 6px;
-  margin-top: 6px;
+    display: grid;
+    gap: 6px;
+    margin-top: 6px;
 }
 
 .derivedRow {
-  border: 1px solid #e3e8eb;
-  border-left-width: 3px;
-  border-radius: 6px;
-  padding: 6px 8px;
-  display: grid;
-  gap: 5px;
-  background: #fbfcfc;
+    border: 1px solid #e3e8eb;
+    border-left-width: 3px;
+    border-radius: 6px;
+    padding: 6px 8px;
+    display: grid;
+    gap: 5px;
+    background: #fbfcfc;
 }
 
 .derivedRow.running {
-  border-left-color: #2d95bf;
+    border-left-color: #2d95bf;
 }
 
 .derivedRow.succeeded {
-  border-left-color: #67a86f;
+    border-left-color: #67a86f;
 }
 
 .derivedRow.failed {
-  border-left-color: #c76b6b;
+    border-left-color: #c76b6b;
 }
 
 .derivedRow.queued {
-  border-left-color: #b9c2c8;
+    border-left-color: #b9c2c8;
 }
 
 .derivedRow.canceled {
-  border-left-color: #a8b1b7;
+    border-left-color: #a8b1b7;
 }
 
 .derivedRow.active {
-  border-color: #0c6b58;
-  box-shadow: 0 0 0 1px #0c6b58 inset;
+    border-color: #0c6b58;
+    box-shadow: 0 0 0 1px #0c6b58 inset;
 }
 
 .derivedRowHead {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  gap: 8px;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    gap: 8px;
 }
 
 .derivedRowActions {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 5px;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 5px;
 }
 
 .spineNest {
-  margin-left: 14px;
-  margin-top: 5px;
-  display: grid;
-  gap: 5px;
+    margin-left: 14px;
+    margin-top: 5px;
+    display: grid;
+    gap: 5px;
 }
 
 .compareGroup,
 .jobRunGroup {
-  display: grid;
-  gap: 4px;
+    display: grid;
+    gap: 4px;
 }
 
 .jobSpecList {
-  display: grid;
-  gap: 4px;
-  margin-top: 8px;
+    display: grid;
+    gap: 4px;
+    margin-top: 8px;
 }
 
 .derivedSection.jobSpec summary {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  padding: 2px 0;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    padding: 2px 0;
 }
 
 .jobSpecLabel {
-  flex: 1 1 auto;
-  font-weight: 500;
-  color: #2c3a42;
+    flex: 1 1 auto;
+    font-weight: 500;
+    color: #2c3a42;
 }
 
 .jobSpecCount {
-  font-size: 11px;
-  color: #65737c;
+    font-size: 11px;
+    color: #65737c;
 }
 
 .derivedSection.jobSpec summary .miniButton {
-  margin-left: auto;
+    margin-left: auto;
 }
 
 .visListMuted {
-  list-style: none;
-  padding: 4px 0 4px 18px;
-  margin: 0;
-  display: grid;
-  gap: 2px;
-  cursor: pointer;
+    list-style: none;
+    padding: 4px 0 4px 18px;
+    margin: 0;
+    display: grid;
+    gap: 2px;
+    cursor: pointer;
 }
 
 .visListMuted li.muted {
-  color: #98a2a8;
-  font-size: 12px;
+    color: #98a2a8;
+    font-size: 12px;
 }
 
 .visListMuted:hover li.muted {
-  color: #2d95bf;
-  text-decoration: underline;
+    color: #2d95bf;
+    text-decoration: underline;
 }
 
 .statusBadge {
-  font-size: 10px;
-  text-transform: uppercase;
-  letter-spacing: 0.04em;
-  color: #56656d;
-  padding: 2px 6px;
-  border-radius: 4px;
-  background: #eef1f3;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: #56656d;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: #eef1f3;
 }
 
 .statusBadge.running {
-  color: #14637e;
-  background: #d8edf6;
+    color: #14637e;
+    background: #d8edf6;
 }
 
 .statusBadge.succeeded {
-  color: #2f6a36;
-  background: #d8efdb;
+    color: #2f6a36;
+    background: #d8efdb;
 }
 
 .statusBadge.failed {
-  color: #8a3434;
-  background: #f5d8d8;
+    color: #8a3434;
+    background: #f5d8d8;
 }
 
 .statusBadge.canceled {
-  color: #56656d;
-  background: #dde3e6;
+    color: #56656d;
+    background: #dde3e6;
 }
 
 .linkButton {
-  border: 1px solid #b9c2c8;
-  background: #ffffff;
-  color: #172026;
-  border-radius: 6px;
-  display: inline-flex;
-  align-items: center;
-  gap: 5px;
-  text-decoration: none;
-  padding: 0 8px;
+    border: 1px solid #b9c2c8;
+    background: #ffffff;
+    color: #172026;
+    border-radius: 6px;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    text-decoration: none;
+    padding: 0 8px;
 }
 
 .empty {
-  font-size: 12px;
-  color: #65737c;
-  padding: 8px;
-  border: 1px dashed #cbd3d8;
-  border-radius: 6px;
-  text-align: center;
+    font-size: 12px;
+    color: #65737c;
+    padding: 8px;
+    border: 1px dashed #cbd3d8;
+    border-radius: 6px;
+    text-align: center;
 }
 
 .progressTail {
-  margin: 4px 0 0;
-  padding: 6px 8px;
-  font-size: 11px;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  color: #46535b;
-  background: #f1f4f6;
-  border-radius: 4px;
-  max-height: 100px;
-  overflow: auto;
-  white-space: pre-wrap;
+    margin: 4px 0 0;
+    padding: 6px 8px;
+    font-size: 11px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    color: #46535b;
+    background: #f1f4f6;
+    border-radius: 4px;
+    max-height: 100px;
+    overflow: auto;
+    white-space: pre-wrap;
 }
 
 .progressTail div {
-  white-space: pre-wrap;
-  word-break: break-word;
+    white-space: pre-wrap;
+    word-break: break-word;
 }
 
 .progressTail.failed {
-  max-height: 180px;
-  background: #fdecea;
-  color: #5b1a14;
+    max-height: 180px;
+    background: #fdecea;
+    color: #5b1a14;
 }
 
 .jobLogDetails {
-  margin-top: 4px;
+    margin-top: 4px;
 }
 
 .jobLogDetails summary {
-  cursor: pointer;
-  font-size: 11px;
-  color: #8a3434;
+    cursor: pointer;
+    font-size: 11px;
+    color: #8a3434;
 }
 
 .jobLogDetails .miniButton {
-  margin-top: 6px;
+    margin-top: 6px;
 }
 
 .jobError {
-  margin: 4px 0 0;
-  padding: 6px 8px;
-  font-size: 11px;
-  font-family: ui-monospace, "SF Mono", Menlo, monospace;
-  color: #5b1a14;
-  background: #fdecea;
-  border: 1px solid #f4b5ad;
-  border-radius: 4px;
-  max-height: 180px;
-  overflow: auto;
-  white-space: pre-wrap;
-  word-break: break-word;
+    margin: 4px 0 0;
+    padding: 6px 8px;
+    font-size: 11px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    color: #5b1a14;
+    background: #fdecea;
+    border: 1px solid #f4b5ad;
+    border-radius: 4px;
+    max-height: 180px;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-break: break-word;
 }
 
 .allJobs summary {
-  cursor: pointer;
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  color: #46535b;
-  list-style: revert;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    color: #46535b;
+    list-style: revert;
 }
 
 .allJobs .jobs {
-  margin-top: 8px;
+    margin-top: 8px;
 }
 
 .jobFooter {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 8px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
 }
 
 .mapFrame,
 .map {
-  min-height: 0;
-  height: 100%;
+    min-height: 0;
+    height: 100%;
 }
 
 .mapFrame {
-  position: relative;
+    position: relative;
 }
 
 .mapToolDock {
-  position: absolute;
-  top: 12px;
-  left: 52px;
-  z-index: 700;
-  width: 34px;
-  display: grid;
-  gap: 8px;
-  pointer-events: none;
+    position: absolute;
+    top: 12px;
+    left: 52px;
+    z-index: 700;
+    width: 34px;
+    display: grid;
+    gap: 8px;
+    pointer-events: none;
 }
 
 .mapToolGroup {
-  position: relative;
-  pointer-events: auto;
+    position: relative;
+    pointer-events: auto;
 }
 
 .mapToolIcon {
-  width: 34px;
-  min-width: 34px;
-  height: 34px;
-  min-height: 34px;
-  padding: 0;
-  background: rgba(255, 255, 255, 0.95);
-  box-shadow: 0 3px 10px rgba(15, 23, 42, 0.14);
+    width: 34px;
+    min-width: 34px;
+    height: 34px;
+    min-height: 34px;
+    padding: 0;
+    background: rgba(255, 255, 255, 0.95);
+    box-shadow: 0 3px 10px rgba(15, 23, 42, 0.14);
 }
 
 .mapToolPopover {
-  position: absolute;
-  top: 0;
-  left: 42px;
-  width: min(290px, calc(100vw - 470px));
-  border: 1px solid rgba(126, 143, 153, 0.45);
-  border-radius: 8px;
-  background: rgba(255, 255, 255, 0.94);
-  box-shadow: 0 6px 18px rgba(15, 23, 42, 0.14);
-  padding: 8px;
-  display: grid;
-  gap: 7px;
+    position: absolute;
+    top: 0;
+    left: 42px;
+    width: min(290px, calc(100vw - 470px));
+    border: 1px solid rgba(126, 143, 153, 0.45);
+    border-radius: 8px;
+    background: rgba(255, 255, 255, 0.94);
+    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.14);
+    padding: 8px;
+    display: grid;
+    gap: 7px;
 }
 
 .mapToolHead {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  font-size: 12px;
-  font-weight: 650;
-  color: #2c3a42;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    font-size: 12px;
+    font-weight: 650;
+    color: #2c3a42;
 }
 
 .mapToolMeta {
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-size: 11px;
-  color: #56656d;
-  font-variant-numeric: tabular-nums;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    font-size: 11px;
+    color: #56656d;
+    font-variant-numeric: tabular-nums;
 }
 
 .mapToolButtons {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 6px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
 }
 
 .mapToolPopover button {
-  min-height: 30px;
-  font-size: 12px;
+    min-height: 30px;
+    font-size: 12px;
 }
 
 .hiddenFileInput {
-  display: none;
+    display: none;
 }
 
 .appDialog {
-  width: min(380px, calc(100vw - 32px));
-  border: 1px solid #b9c2c8;
-  border-radius: 8px;
-  padding: 0;
-  color: #172026;
-  background: #ffffff;
-  box-shadow: 0 18px 48px rgba(15, 23, 42, 0.24);
+    width: min(380px, calc(100vw - 32px));
+    border: 1px solid #b9c2c8;
+    border-radius: 8px;
+    padding: 0;
+    color: #172026;
+    background: #ffffff;
+    box-shadow: 0 18px 48px rgba(15, 23, 42, 0.24);
 }
 
 .appDialog::backdrop {
-  background: rgba(15, 23, 42, 0.22);
+    background: rgba(15, 23, 42, 0.22);
 }
 
 .appDialog form {
-  display: grid;
-  gap: 12px;
-  padding: 14px;
+    display: grid;
+    gap: 12px;
+    padding: 14px;
 }
 
 .dialogHead {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-size: 14px;
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 14px;
 }
 
 .dialogActions {
-  display: grid;
-  grid-template-columns: 1fr 1fr;
-  gap: 8px;
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 8px;
 }
 
 .dialogActions .primary {
-  width: auto;
+    width: auto;
 }
 
 .leaflet-container {
-  background: #d9e0e4;
+    background: #d9e0e4;
 }
 
 .leaflet-tooltip.kmlLabel,
 .leaflet-tooltip.kmlHoverLabel {
-  padding: 2px 6px;
-  color: #263238;
-  background: rgba(255, 255, 255, 0.92);
-  border: 1px solid rgba(64, 78, 86, 0.28);
-  border-radius: 4px;
-  box-shadow: 0 1px 4px rgba(15, 23, 42, 0.18);
-  font-size: 11px;
-  font-weight: 650;
+    padding: 2px 6px;
+    color: #263238;
+    background: rgba(255, 255, 255, 0.92);
+    border: 1px solid rgba(64, 78, 86, 0.28);
+    border-radius: 4px;
+    box-shadow: 0 1px 4px rgba(15, 23, 42, 0.18);
+    font-size: 11px;
+    font-weight: 650;
 }
 
 .leaflet-tooltip.kmlLabel::before,
 .leaflet-tooltip.kmlHoverLabel::before {
-  display: none;
+    display: none;
 }

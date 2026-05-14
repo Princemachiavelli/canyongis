@@ -62,7 +62,9 @@ class DemJobSpec:
 _REGISTRY: list[DemJobSpec] = []
 
 
-def _tile_payload(prefix: str, archive: TileArchive | None, output_url: OutputUrlFn) -> dict[str, Any]:
+def _tile_payload(
+    prefix: str, archive: TileArchive | None, output_url: OutputUrlFn
+) -> dict[str, Any]:
     if archive is None:
         return {}
     return {

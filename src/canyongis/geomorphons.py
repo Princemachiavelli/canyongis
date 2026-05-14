@@ -137,10 +137,7 @@ def export_geomorphons(
             str(script_path),
             str(params_path),
         ]
-        emit(
-            f"running GRASS r.geomorphon (search={search_m}m, skip={skip_m}m, "
-            f"flat={flat_deg}deg)"
-        )
+        emit(f"running GRASS r.geomorphon (search={search_m}m, skip={skip_m}m, flat={flat_deg}deg)")
         env = os.environ.copy()
         if quiet:
             env.setdefault("GRASS_VERBOSE", "0")

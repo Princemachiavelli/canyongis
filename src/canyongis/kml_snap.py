@@ -13,8 +13,8 @@ import numpy as np
 import pandas as pd
 import rasterio
 from scipy import ndimage as ndi
+from shapely.geometry import LineString, Point
 from skimage.graph import route_through_array
-from shapely.geometry import LineString, MultiLineString, Point
 
 from .io import log
 from .validate import parse_kml
@@ -282,8 +282,7 @@ def _route_between_high_cells(
             coord = (float(x), float(y))
             if (
                 not routed
-                or math.hypot(coord[0] - routed[-1][0], coord[1] - routed[-1][1])
-                >= pixel_m * 0.5
+                or math.hypot(coord[0] - routed[-1][0], coord[1] - routed[-1][1]) >= pixel_m * 0.5
             ):
                 routed.append(coord)
 
@@ -447,9 +446,7 @@ def _feature_rows(features) -> gpd.GeoDataFrame:
         explicit_descent = descent_lines[descent_names.str.contains("descent", na=False)]
         if not explicit_descent.empty:
             descent_lines = explicit_descent.reset_index(drop=True)
-    for fallback_category, gdf in (
-        ("descent", descent_lines),
-    ):
+    for fallback_category, gdf in (("descent", descent_lines),):
         if gdf.empty:
             continue
         frame = gdf.copy()
@@ -584,9 +581,9 @@ def snap_kml_to_raster(
                 )
                 all_shifts.append(shift)
 
-        snapped_gdf = gpd.GeoDataFrame(
-            snapped_rows, geometry="geometry", crs=src.crs
-        ).to_crs("EPSG:4326")
+        snapped_gdf = gpd.GeoDataFrame(snapped_rows, geometry="geometry", crs=src.crs).to_crs(
+            "EPSG:4326"
+        )
 
     snapped_kml_path = out_dir / output_name
     snapped_gpkg_path = snapped_kml_path.with_suffix(".gpkg")
@@ -601,7 +598,7 @@ def snap_kml_to_raster(
         search_radius_m=search_radius_m,
         sample_step_m=sample_step_m,
         high_threshold=high_threshold,
-        feature_count=int(len(snapped_gdf)),
+        feature_count=len(snapped_gdf),
         mean_shift_m=float(np.nanmean(all_shifts)) if all_shifts else 0.0,
         max_shift_m=float(np.nanmax(all_shifts)) if all_shifts else 0.0,
     )

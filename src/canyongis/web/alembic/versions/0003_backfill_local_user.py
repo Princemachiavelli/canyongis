@@ -50,10 +50,7 @@ def upgrade() -> None:
         hashed = bcrypt.hashpw(password.encode("utf-8"), bcrypt.gensalt()).decode("ascii")
         local_user_id = _new_id()
         conn.execute(
-            text(
-                "INSERT INTO canyongis_users (id, username, password_hash) "
-                "VALUES (:id, :u, :h)"
-            ),
+            text("INSERT INTO canyongis_users (id, username, password_hash) VALUES (:id, :u, :h)"),
             {"id": local_user_id, "u": LOCAL_USERNAME, "h": hashed},
         )
     else:
@@ -63,10 +60,7 @@ def upgrade() -> None:
     output_roots = [
         r[0]
         for r in conn.execute(
-            text(
-                "SELECT DISTINCT output_root FROM canyongis_jobs "
-                "WHERE project_id IS NULL"
-            )
+            text("SELECT DISTINCT output_root FROM canyongis_jobs WHERE project_id IS NULL")
         ).fetchall()
     ]
     # Always ensure a default Personal project exists, even if there are no
@@ -126,14 +120,11 @@ def upgrade() -> None:
         if not output_root:
             continue
         result_dict = result if isinstance(result, dict) else json.loads(result)
-        candidates = extract_asset_candidates(
-            result_dict, output_root=Path(output_root)
-        )
+        candidates = extract_asset_candidates(result_dict, output_root=Path(output_root))
         for cand in candidates:
             already = conn.execute(
                 text(
-                    "SELECT 1 FROM canyongis_assets "
-                    "WHERE project_id = :p AND path = :path LIMIT 1"
+                    "SELECT 1 FROM canyongis_assets WHERE project_id = :p AND path = :path LIMIT 1"
                 ),
                 {"p": project_id, "path": cand.path},
             ).fetchone()
