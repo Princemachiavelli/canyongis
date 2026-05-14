@@ -67,6 +67,8 @@
             inherit pysheds;
             inherit rvt-py;
             webFrontend = canyongis-web-frontend;
+            gdal = pkgs.gdal;
+            pmtiles = pkgs.pmtiles;
             torch = python.pkgs.torch;
             segmentation_models_pytorch = python.pkgs.segmentation_models_pytorch;
           };
@@ -95,6 +97,7 @@
             packages = [
               pkgs.grass
               pkgs.gdal
+              pkgs.pmtiles
               pkgs.nodejs
               python.pkgs.pytest
             ];

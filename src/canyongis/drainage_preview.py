@@ -11,10 +11,9 @@ from PIL import Image
 
 from .hydrology import compute_flow_accum
 from .io import log, read_dem, write_raster
+from .preview_tiles import TileArchive, write_pmtiles_preview, write_wgs84_webp_preview
 from .ravine_compare import (
-    OVERLAY_DOWNSAMPLE_FACTOR,
     _blend_over_hillshade,
-    _downsample_by_factor,
     _percentile_stretch,
     compute_hillshade,
 )
@@ -27,6 +26,8 @@ class DrainagePreviewResult:
     flow_accum_path: str
     flow_preview_path: str
     stream_preview_path: str
+    flow_tile_archive: TileArchive | None
+    stream_tile_archive: TileArchive | None
     thresholds: tuple[int, ...]
     stream_pixels: dict[str, int]
 
@@ -114,12 +115,16 @@ def export_drainage_previews(
         dst.write(np.where(np.isfinite(flow_accum), flow_accum, nodata).astype(np.float32), 1)
 
     hillshade = compute_hillshade(elev, pixel_size)
+    valid_mask = np.isfinite(elev)
     flow_log = np.log1p(np.clip(flow_accum, 0.0, None)).astype(np.float32)
     flow01, lo, hi = _percentile_stretch(flow_log, 1.0, preview_hi_pct)
     flow_preview = _blend_over_hillshade(hillshade, flow01, alpha_gamma=0.65)
     flow_preview_path = out_dir / "flow_accum_log_preview.webp"
-    _downsample_by_factor(flow_preview, OVERLAY_DOWNSAMPLE_FACTOR).save(
-        flow_preview_path, quality=85, method=4
+    write_wgs84_webp_preview(
+        flow_preview, valid_mask, transform, crs, flow_preview_path, quality=85
+    )
+    flow_tile_archive = write_pmtiles_preview(
+        flow_preview, valid_mask, transform, crs, out_dir / "flow_accum_log_preview.pmtiles"
     )
 
     stream_pixels: dict[str, int] = {}
@@ -135,8 +140,11 @@ def export_drainage_previews(
         line_width_px=line_width_px,
     )
     stream_preview_path = out_dir / "stream_network_preview.webp"
-    _downsample_by_factor(stream_preview, OVERLAY_DOWNSAMPLE_FACTOR).save(
-        stream_preview_path, quality=85, method=4
+    write_wgs84_webp_preview(
+        stream_preview, valid_mask, transform, crs, stream_preview_path, quality=85
+    )
+    stream_tile_archive = write_pmtiles_preview(
+        stream_preview, valid_mask, transform, crs, out_dir / "stream_network_preview.pmtiles"
     )
 
     summary = {
@@ -152,6 +160,8 @@ def export_drainage_previews(
             "flow_accum_tif": str(flow_path),
             "flow_accum_log_preview_webp": str(flow_preview_path),
             "stream_network_preview_webp": str(stream_preview_path),
+            "flow_accum_log_preview_pmtiles": flow_tile_archive.pmtiles_path,
+            "stream_network_preview_pmtiles": stream_tile_archive.pmtiles_path,
         },
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
@@ -162,6 +172,8 @@ def export_drainage_previews(
         flow_accum_path=str(flow_path),
         flow_preview_path=str(flow_preview_path),
         stream_preview_path=str(stream_preview_path),
+        flow_tile_archive=flow_tile_archive,
+        stream_tile_archive=stream_tile_archive,
         thresholds=thresholds,
         stream_pixels=stream_pixels,
     )

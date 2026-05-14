@@ -6,7 +6,7 @@ import os
 import shutil
 import traceback
 import uuid
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
@@ -35,7 +35,7 @@ from ..track_profile import _rappels_geojson, analyze_track_profile
 from ..validate import parse_kml
 from .dem_jobs import get_spec, list_specs
 
-JobStatus = Literal["queued", "running", "succeeded", "failed"]
+JobStatus = Literal["queued", "running", "succeeded", "failed", "canceled"]
 
 
 PROGRESS_CAP = 200
@@ -90,7 +90,7 @@ class Bounds(BaseModel):
 
 
 class BuildDemRequest(BaseModel):
-    name: str = Field(default="aoi", pattern=r"^[A-Za-z0-9_.-]+$")
+    name: str = Field(default="aoi", min_length=1)
     bounds: Bounds
     buffer_m: float = 200.0
     max_products: int = 24
@@ -135,8 +135,25 @@ class WebContext:
         self.dem_cache = self.output_root / "dem-cache"
         self.store = JobStore(self.output_root)
         self.lock = Lock()
-        self.executor = ThreadPoolExecutor(max_workers=1)
+        self.futures: dict[str, Future] = {}
+        self.executor = ThreadPoolExecutor(max_workers=int(os.environ.get("CANYONGIS_WEB_WORKERS", "4")))
         self.frontend_dist = frontend_dist
+        self._recover_incomplete_jobs()
+
+    def _recover_incomplete_jobs(self) -> None:
+        with self.lock:
+            changed = False
+            for job in self.store.jobs.values():
+                if job.status in {"queued", "running"}:
+                    job.status = "canceled"
+                    job.updated_at = self.now()
+                    job.error = (
+                        "Job was queued or running when the server stopped; "
+                        "marked canceled on startup."
+                    )
+                    changed = True
+            if changed:
+                self.store.save()
 
     def now(self) -> str:
         return datetime.now(UTC).isoformat()
@@ -155,21 +172,37 @@ class WebContext:
         with self.lock:
             self.store.jobs[job.id] = job
             self.store.save()
-        self.executor.submit(self._run, job.id, fn, include_job_id)
+        future = self.executor.submit(self._run, job.id, fn, include_job_id)
+        with self.lock:
+            self.futures[job.id] = future
         return job
 
     def _run(self, job_id: str, fn, include_job_id: bool) -> None:
+        if self.is_canceled(job_id):
+            return
         self._update(job_id, status="running")
 
         def progress_cb(line: str) -> None:
+            if self.is_canceled(job_id):
+                raise RuntimeError("job canceled")
             self.append_progress(job_id, line)
 
         try:
             result = fn(progress_cb, job_id) if include_job_id else fn(progress_cb)
         except Exception as exc:  # pragma: no cover - exercised by real jobs
-            self._update(job_id, status="failed", error=f"{exc}\n{traceback.format_exc()}")
+            if self.is_canceled(job_id):
+                self._update(job_id, status="canceled", error="Job canceled.")
+            else:
+                self._update(job_id, status="failed", error=f"{exc}\n{traceback.format_exc()}")
+            with self.lock:
+                self.futures.pop(job_id, None)
             return
-        self._update(job_id, status="succeeded", result=result)
+        if self.is_canceled(job_id):
+            self._update(job_id, status="canceled", error="Job canceled.")
+        else:
+            self._update(job_id, status="succeeded", result=result)
+        with self.lock:
+            self.futures.pop(job_id, None)
 
     def _update(
         self,
@@ -181,6 +214,8 @@ class WebContext:
     ) -> None:
         with self.lock:
             job = self.store.jobs[job_id]
+            if job.status == "canceled" and status != "canceled":
+                return
             job.status = status
             job.updated_at = self.now()
             if result is not None:
@@ -188,6 +223,27 @@ class WebContext:
             if error is not None:
                 job.error = error
             self.store.save()
+
+    def is_canceled(self, job_id: str) -> bool:
+        with self.lock:
+            job = self.store.jobs.get(job_id)
+            return job is None or job.status == "canceled"
+
+    def cancel_job(self, job_id: str) -> Job:
+        with self.lock:
+            job = self.store.jobs.get(job_id)
+            if job is None:
+                raise HTTPException(status_code=404, detail=f"job not found: {job_id}")
+            if job.status not in {"queued", "running"}:
+                return job
+            future = self.futures.get(job_id)
+            if future is not None:
+                future.cancel()
+            job.status = "canceled"
+            job.updated_at = self.now()
+            job.error = "Job canceled by user."
+            self.store.save()
+            return job
 
     def append_progress(self, job_id: str, line: str) -> None:
         with self.lock:
@@ -273,10 +329,10 @@ def _build_kml_import_result(
         "unclassified_geojson": _gdf_to_geojson(features.unclassified_lines),
         "points_geojson": _gdf_to_geojson(features.points),
         "counts": {
-            "descent_lines": int(len(features.descent_lines)),
-            "approach_lines": int(len(features.approach_lines)),
-            "unclassified_lines": int(len(features.unclassified_lines)),
-            "points": int(len(features.points)),
+            "descent_lines": len(features.descent_lines),
+            "approach_lines": len(features.approach_lines),
+            "unclassified_lines": len(features.unclassified_lines),
+            "points": len(features.points),
         },
         "source": source,
     }
@@ -473,6 +529,45 @@ def _delete_kml_job_outputs(ctx: WebContext, job: Job) -> list[str]:
     return deleted
 
 
+def _delete_job_outputs(ctx: WebContext, job: Job) -> list[str]:
+    if not job.result:
+        return []
+    root = ctx.output_root.resolve()
+    deleted: list[str] = []
+    candidates: list[Path] = []
+    for key, value in job.result.items():
+        if not isinstance(value, str) or not value:
+            continue
+        if key.endswith("_path") or key in {"out_dir", "kml_path", "dem_path"}:
+            candidates.append(Path(value))
+
+    if job.kind in {"kml-import", "kml-snap"}:
+        deleted.extend(_delete_kml_job_outputs(ctx, job))
+
+    dirs: set[Path] = set()
+    for path in candidates:
+        if not _path_is_within(path, root):
+            continue
+        resolved = path.resolve()
+        if not resolved.exists():
+            continue
+        if resolved.is_dir():
+            dirs.add(resolved)
+            continue
+        parent = resolved.parent
+        if parent.parent == root / "jobs" or parent.parent == root / "areas":
+            dirs.add(parent)
+        elif resolved.exists() and resolved.is_file():
+            resolved.unlink()
+            deleted.append(str(resolved))
+
+    for directory in sorted(dirs, key=lambda item: len(item.parts), reverse=True):
+        if directory.exists() and directory.is_dir() and _path_is_within(directory, root):
+            shutil.rmtree(directory)
+            deleted.append(str(directory))
+    return sorted(set(deleted))
+
+
 def create_app(
     *,
     output_root: str | Path = "runs/web",
@@ -545,6 +640,10 @@ def create_app(
     def get_job(job_id: str) -> dict[str, Any]:
         return _job_response(ctx, ctx.job_or_404(job_id))
 
+    @app.post("/api/jobs/{job_id}/cancel")
+    def cancel_job(job_id: str) -> dict[str, Any]:
+        return _job_response(ctx, ctx.cancel_job(job_id))
+
     @app.delete("/api/jobs/{job_id}")
     def delete_job(job_id: str) -> dict[str, Any]:
         with ctx.lock:
@@ -552,14 +651,8 @@ def create_app(
             if job is None:
                 raise HTTPException(status_code=404, detail=f"job not found: {job_id}")
             if job.status in {"queued", "running"}:
-                raise HTTPException(status_code=400, detail="running jobs cannot be deleted")
-            if job.status != "failed" and job.kind not in {"kml-import", "kml-snap"}:
-                raise HTTPException(
-                    status_code=400, detail="only failed jobs and KML layers can be deleted"
-                )
-            deleted_outputs = (
-                _delete_kml_job_outputs(ctx, job) if job.kind in {"kml-import", "kml-snap"} else []
-            )
+                raise HTTPException(status_code=400, detail="cancel running jobs before deleting them")
+            deleted_outputs = _delete_job_outputs(ctx, job)
             del ctx.store.jobs[job_id]
             ctx.store.save()
         return {"deleted": True, "job_id": job_id, "deleted_outputs": deleted_outputs}
@@ -599,7 +692,7 @@ def create_app(
 
     @app.post("/api/jobs/import-kml-file")
     async def import_kml_file(
-        file: UploadFile = File(...),
+        file: UploadFile = File(...),  # noqa: B008
         container_dem_job_id: str | None = Form(default=None),
     ) -> dict[str, Any]:
         original_name = file.filename or "uploaded.kml"

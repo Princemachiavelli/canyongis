@@ -23,6 +23,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from ..drainage_preview import export_drainage_previews
+from ..preview_tiles import TileArchive
 from ..ravine_compare import (
     export_curvature_preview,
     export_geomorphon_ravine_preview,
@@ -59,6 +60,20 @@ class DemJobSpec:
 
 
 _REGISTRY: list[DemJobSpec] = []
+
+
+def _tile_payload(prefix: str, archive: TileArchive | None, output_url: OutputUrlFn) -> dict[str, Any]:
+    if archive is None:
+        return {}
+    return {
+        f"{prefix}_pmtiles_path": archive.pmtiles_path,
+        f"{prefix}_pmtiles_url": output_url(Path(archive.pmtiles_path)),
+        f"{prefix}_tile_bounds_wgs84": archive.bounds_wgs84,
+        f"{prefix}_tile_min_zoom": archive.min_zoom,
+        f"{prefix}_tile_max_zoom": archive.max_zoom,
+        f"{prefix}_tile_format": archive.tile_format,
+        f"{prefix}_tile_archive_format": archive.tile_archive_format,
+    }
 
 
 def register(spec: DemJobSpec) -> None:
@@ -101,6 +116,7 @@ def _run_hillshade(
         "bounds_wgs84": art.bounds_wgs84,
         "hillshade_tif_path": art.tif_path,
         "panel_hillshade_url": output_url(Path(art.panel_path)),
+        **_tile_payload("panel_hillshade", art.tile_archive, output_url),
         "meta": art.meta,
     }
 
@@ -133,6 +149,8 @@ def _run_drainage(
         "flow_accum_path": result.flow_accum_path,
         "flow_preview_url": output_url(Path(result.flow_preview_path)),
         "stream_preview_url": output_url(Path(result.stream_preview_path)),
+        **_tile_payload("flow_preview", result.flow_tile_archive, output_url),
+        **_tile_payload("stream_preview", result.stream_tile_archive, output_url),
         "thresholds": list(result.thresholds),
         "stream_pixels": result.stream_pixels,
     }
@@ -166,6 +184,7 @@ def _run_geomorphon(
         "bounds_wgs84": art.bounds_wgs84,
         "a_geomorphon_path": art.tif_path,
         "panel_a_geomorphon_url": output_url(Path(art.panel_path)),
+        **_tile_payload("panel_a_geomorphon", art.tile_archive, output_url),
         "meta": art.meta,
     }
 
@@ -204,6 +223,7 @@ def _run_tpi(
         "bounds_wgs84": art.bounds_wgs84,
         "b_tpi_path": art.tif_path,
         "panel_b_tpi_url": output_url(Path(art.panel_path)),
+        **_tile_payload("panel_b_tpi", art.tile_archive, output_url),
         "meta": art.meta,
     }
 
@@ -236,6 +256,7 @@ def _run_curvature(
         "bounds_wgs84": art.bounds_wgs84,
         "c_curvature_path": art.tif_path,
         "panel_c_curvature_url": output_url(Path(art.panel_path)),
+        **_tile_payload("panel_c_curvature", art.tile_archive, output_url),
         "meta": art.meta,
     }
 

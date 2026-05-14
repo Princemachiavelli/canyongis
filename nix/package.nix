@@ -3,6 +3,7 @@
   buildPythonPackage,
   albumentations,
   fastapi,
+  gdal,
   grass,
   setuptools,
   folium,
@@ -15,6 +16,7 @@
   pyogrio,
   pyproj,
   pysheds,
+  pmtiles,
   rasterio,
   rvt-py,
   scipy,
@@ -75,7 +77,11 @@ buildPythonPackage {
     "--prefix"
     "PATH"
     ":"
-    (lib.makeBinPath [ grass ])
+    (lib.makeBinPath [
+      gdal
+      grass
+      pmtiles
+    ])
   ]
   ++ lib.optionals (webFrontend != null) [
     "--set-default"

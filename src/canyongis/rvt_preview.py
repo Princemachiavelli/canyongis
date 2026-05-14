@@ -14,21 +14,17 @@ from collections.abc import Callable
 from pathlib import Path
 
 import numpy as np
-from PIL import Image
-
 import rvt.blend
 import rvt.blend_func
 import rvt.vis
+from PIL import Image
 
 from .ravine_compare import (
-    OVERLAY_DOWNSAMPLE_FACTOR,
     PreviewArtifacts,
-    _downsample_by_factor,
     _make_emit,
     _open_dem,
     _render_score_panel,
-    _save_panel_webp,
-    _warp_rgb_image_to_wgs84,
+    _save_panel_previews,
     _write_score_geotiff,
     compute_hillshade,
 )
@@ -62,9 +58,7 @@ RVT_VIS_LABELS: dict[str, str] = {
 }
 
 
-def _save_rgb_panel(
-    rgb: np.ndarray, transform, crs, out_path: Path
-) -> tuple[float, float, float, float]:
+def _save_rgb_panel(rgb: np.ndarray, valid_mask: np.ndarray, transform, crs, out_path: Path):
     arr = rgb
     if arr.ndim == 3 and arr.shape[0] in (3, 4) and arr.shape[2] not in (3, 4):
         arr = np.transpose(arr, (1, 2, 0))
@@ -72,13 +66,9 @@ def _save_rgb_panel(
         arr = np.clip(arr * (255.0 if arr.max() <= 1.0 else 1.0), 0, 255).astype(np.uint8)
     if arr.ndim == 3 and arr.shape[2] == 4:
         arr = arr[:, :, :3]
-    overlay, bounds = _warp_rgb_image_to_wgs84(
-        Image.fromarray(arr, mode="RGB"), src_transform=transform, src_crs=crs
+    return _save_panel_previews(
+        Image.fromarray(arr, mode="RGB"), valid_mask, transform, crs, out_path
     )
-    _downsample_by_factor(overlay, OVERLAY_DOWNSAMPLE_FACTOR).save(
-        out_path, quality=85, method=4
-    )
-    return bounds
 
 
 def export_rvt_previews(
@@ -99,6 +89,7 @@ def export_rvt_previews(
 
     elev, transform, crs, pixel_size, profile = _open_dem(dem_path)
     hillshade = compute_hillshade(elev, pixel_size)
+    valid_mask = np.isfinite(elev)
     filled = np.where(np.isfinite(elev), elev, float(np.nanmedian(elev))).astype(np.float32)
 
     artifacts: dict[str, PreviewArtifacts] = {}
@@ -113,24 +104,26 @@ def export_rvt_previews(
             display, hillshade, display_pct=display_pct, alpha_gamma=alpha_gamma
         )
         panel_path = out_dir / f"panel_rvt_{key}.webp"
-        bounds = _save_panel_webp(panel, transform, crs, panel_path)
+        bounds, tile_archive = _save_panel_previews(panel, valid_mask, transform, crs, panel_path)
         artifacts[key] = PreviewArtifacts(
             out_dir=str(out_dir),
             bounds_wgs84=bounds,
             panel_path=str(panel_path),
             tif_path=str(tif_path),
             meta={"display_lo": lo, "display_hi": hi},
+            tile_archive=tile_archive,
         )
 
     def write_rgb(key: str, rgb: np.ndarray) -> None:
         panel_path = out_dir / f"panel_rvt_{key}.webp"
-        bounds = _save_rgb_panel(rgb, transform, crs, panel_path)
+        bounds, tile_archive = _save_rgb_panel(rgb, valid_mask, transform, crs, panel_path)
         artifacts[key] = PreviewArtifacts(
             out_dir=str(out_dir),
             bounds_wgs84=bounds,
             panel_path=str(panel_path),
             tif_path=str(panel_path),
             meta={},
+            tile_archive=tile_archive,
         )
 
     def attempt(key: str, fn: Callable[[], None]) -> None:

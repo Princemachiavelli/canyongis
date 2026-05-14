@@ -3,6 +3,7 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Activity, ExternalLink, Eye, Layers, LineChart, LocateFixed, Map as MapIcon, Play, RefreshCw, Square, Tags, Trash2, Upload } from "lucide-react";
 import {
   buildDem,
+  cancelJob,
   deleteGeneratedKmlLayer,
   deleteJobRecord,
   importRopewikiKml,
@@ -29,14 +30,34 @@ function jobBoundsWgs84(job: Job): Bounds | undefined {
   return { west: arr[0], south: arr[1], east: arr[2], north: arr[3] };
 }
 
-type PreviewLink = { key: string; label: string; url: string };
+type PreviewLink = {
+  key: string;
+  label: string;
+  url: string;
+  tileArchiveUrl?: string;
+  tileMinZoom?: number;
+  tileMaxZoom?: number;
+};
 
 function previewsFor(job: Job, spec: JobSpec): PreviewLink[] {
   const result = (job.result ?? {}) as Record<string, unknown>;
   const out: PreviewLink[] = [];
   for (const vis of spec.visualizations) {
     const url = result[vis.url_field];
-    if (typeof url === "string") out.push({ key: vis.key, label: vis.label, url });
+    if (typeof url === "string") {
+      const tilePrefix = vis.url_field.replace(/_url$/, "");
+      const tileArchiveUrl = result[`${tilePrefix}_pmtiles_url`];
+      const tileMinZoom = result[`${tilePrefix}_tile_min_zoom`];
+      const tileMaxZoom = result[`${tilePrefix}_tile_max_zoom`];
+      out.push({
+        key: vis.key,
+        label: vis.label,
+        url,
+        tileArchiveUrl: typeof tileArchiveUrl === "string" ? tileArchiveUrl : undefined,
+        tileMinZoom: typeof tileMinZoom === "number" ? tileMinZoom : undefined,
+        tileMaxZoom: typeof tileMaxZoom === "number" ? tileMaxZoom : undefined
+      });
+    }
   }
   return out;
 }
@@ -264,19 +285,33 @@ function StatusBadge({ status }: { status: Job["status"] }) {
   return <span className={`statusBadge ${status}`}>{status}</span>;
 }
 
-function ProgressTail({ job, onDelete }: { job: Job; onDelete?: (job: Job) => void }) {
-  if (job.status !== "running" && job.status !== "queued" && job.status !== "failed") return null;
+function ProgressTail({
+  job,
+  onDelete,
+  onCancel
+}: {
+  job: Job;
+  onDelete?: (job: Job) => void;
+  onCancel?: (job: Job) => void;
+}) {
+  if (!["running", "queued", "failed", "canceled"].includes(job.status)) return null;
   const tailCount = job.status === "failed" ? 20 : 4;
   const tail = (job.progress ?? []).slice(-tailCount);
   if (tail.length === 0 && !job.error) return null;
-  if (job.status === "failed") {
+  if (job.status === "failed" || job.status === "canceled") {
     return (
       <details className="jobLogDetails">
-        <summary>Error log</summary>
-        {onDelete && (
+        <summary>{job.status === "failed" ? "Error log" : "Canceled job"}</summary>
+        {job.status === "failed" && onDelete && (
           <button className="danger miniButton" onClick={() => onDelete(job)}>
             <Trash2 size={12} />
             Delete failed job
+          </button>
+        )}
+        {job.status === "canceled" && onDelete && (
+          <button className="danger miniButton" onClick={() => onDelete(job)}>
+            <Trash2 size={12} />
+            Delete canceled job
           </button>
         )}
         {tail.length > 0 && (
@@ -291,11 +326,19 @@ function ProgressTail({ job, onDelete }: { job: Job; onDelete?: (job: Job) => vo
     );
   }
   return (
-    <pre className="progressTail">
-      {tail.map((line, i) => (
-        <div key={i}>{line}</div>
-      ))}
-    </pre>
+    <>
+      {onCancel && (
+        <button className="danger miniButton" onClick={() => onCancel(job)}>
+          <Square size={12} />
+          Cancel job
+        </button>
+      )}
+      <pre className="progressTail">
+        {tail.map((line, i) => (
+          <div key={i}>{line}</div>
+        ))}
+      </pre>
+    </>
   );
 }
 
@@ -307,12 +350,14 @@ function DerivedRow({
   job,
   spec,
   demJob,
-  onDelete
+  onDelete,
+  onCancel
 }: {
   job: Job;
   spec?: JobSpec;
   demJob?: Job;
   onDelete?: (job: Job) => void;
+  onCancel?: (job: Job) => void;
 }) {
   const setActiveDemJob = useAppStore((s) => s.setActiveDemJob);
   const setActiveCompareJob = useAppStore((s) => s.setActiveCompareJob);
@@ -320,7 +365,7 @@ function DerivedRow({
   const overlay = useAppStore((s) => s.overlay);
   const activeCompareId = useAppStore((s) => s.activeCompareJob?.id);
   const previews = spec ? previewsFor(job, spec) : [];
-  const bounds = jobBoundsWgs84(job);
+  const bounds = jobBoundsWgs84(job) ?? (demJob ? jobBoundsWgs84(demJob) : undefined);
   const canBeTpi = isTpiProducer(job);
   const isActiveTpi = canBeTpi && activeCompareId === job.id;
   const useAsTpi = () => {
@@ -355,7 +400,10 @@ function DerivedRow({
                         id: overlayId,
                         name: preview.label,
                         url: preview.url,
-                        bounds
+                        bounds,
+                        tileArchiveUrl: preview.tileArchiveUrl,
+                        tileMinZoom: preview.tileMinZoom,
+                        tileMaxZoom: preview.tileMaxZoom
                       })
                 }
               >
@@ -365,7 +413,7 @@ function DerivedRow({
             );
           })}
       </div>
-      <ProgressTail job={job} onDelete={onDelete} />
+      <ProgressTail job={job} onDelete={onDelete} onCancel={onCancel} />
     </div>
   );
 }
@@ -377,6 +425,7 @@ function JobSpecSection({
   spineJobsByTpi,
   onRunJob,
   onDeleteJob,
+  onCancelJob,
   isPending
 }: {
   area: Area;
@@ -385,6 +434,7 @@ function JobSpecSection({
   spineJobsByTpi: Map<string, Job[]>;
   onRunJob: (demJob: Job, spec: JobSpec) => void;
   onDeleteJob?: (job: Job) => void;
+  onCancelJob?: (job: Job) => void;
   isPending: boolean;
 }) {
   const setOverlay = useAppStore((s) => s.setOverlay);
@@ -434,6 +484,7 @@ function JobSpecSection({
                 spec={spec}
                 demJob={area.demJob}
                 onDelete={onDeleteJob}
+                onCancel={onCancelJob}
               />
               {spineJobs.length > 0 && (
                 <div className="spineNest">
@@ -455,13 +506,15 @@ function AreaCard({
   specs,
   onRunJob,
   pendingKey,
-  onDeleteJob
+  onDeleteJob,
+  onCancelJob
 }: {
   area: Area;
   specs: JobSpec[];
   onRunJob: (demJob: Job, spec: JobSpec) => void;
   pendingKey?: string;
   onDeleteJob?: (job: Job) => void;
+  onCancelJob?: (job: Job) => void;
 }) {
   const setActiveDemJob = useAppStore((s) => s.setActiveDemJob);
   const toggleFootprint = useAppStore((s) => s.toggleFootprint);
@@ -502,7 +555,7 @@ function AreaCard({
           {footprintVisible ? "Hide footprint" : "Show footprint"}
         </button>
         <button onClick={() => setActiveDemJob(area.demJob)} disabled={isActive}>
-          {isActive ? "Active DEM" : "Use as DEM"}
+          {isActive ? "Active container" : "Set active container"}
         </button>
       </div>
 
@@ -519,6 +572,7 @@ function AreaCard({
               spineJobsByTpi={area.spineJobsByTpi}
               onRunJob={onRunJob}
               onDeleteJob={onDeleteJob}
+              onCancelJob={onCancelJob}
               isPending={pendingKey === key}
             />
           );
@@ -534,7 +588,8 @@ function KmlImportRow({
   activeCompareJob,
   childLayers = [],
   onSnap,
-  onDelete
+  onDelete,
+  onCancel
 }: {
   job: Job;
   activeDemJob?: Job;
@@ -542,6 +597,7 @@ function KmlImportRow({
   childLayers?: Job[];
   onSnap?: (job: Job, target: KmlSnapTarget) => void;
   onDelete?: (job: Job) => void;
+  onCancel?: (job: Job) => void;
 }) {
   const bounds = jobBoundsWgs84(job);
   const setBounds = useAppStore((s) => s.setBounds);
@@ -552,9 +608,8 @@ function KmlImportRow({
   const labelsVisible = useAppStore((s) => Boolean(s.kmlLabels[job.id]));
   const name = (job.result?.name as string | undefined) ?? (job.params.name as string | undefined) ?? job.id;
   const kmlUrl = job.result?.kml_url as string | undefined;
+  const canCancel = Boolean(onCancel) && (job.status === "queued" || job.status === "running");
   const canDelete = Boolean(onDelete) && job.status !== "queued" && job.status !== "running";
-  const canDeleteLayer =
-    canDelete && (job.kind === "kml-import" || job.kind === "kml-snap" || job.kind === "kml-layer");
 
   return (
     <div className={`kmlImport ${job.status}`}>
@@ -610,7 +665,13 @@ function KmlImportRow({
             KML
           </a>
         )}
-        {canDeleteLayer && (
+        {canCancel && (
+          <button className="danger miniButton" onClick={() => onCancel?.(job)}>
+            <Square size={12} />
+            Cancel
+          </button>
+        )}
+        {canDelete && (
           <button className="danger miniButton" onClick={() => onDelete?.(job)}>
             <Trash2 size={12} />
             Delete
@@ -626,11 +687,12 @@ function KmlImportRow({
               activeDemJob={activeDemJob}
               activeCompareJob={activeCompareJob}
               onDelete={onDelete}
+              onCancel={onCancel}
             />
           ))}
         </div>
       )}
-      <ProgressTail job={job} onDelete={onDelete} />
+      <ProgressTail job={job} onDelete={onDelete} onCancel={onCancel} />
     </div>
   );
 }
@@ -779,11 +841,13 @@ export function App() {
   const selectedKmlTrack = useAppStore((state) => state.selectedKmlTrack);
   const overlay = useAppStore((state) => state.overlay);
   const setBounds = useAppStore((state) => state.setBounds);
+  const setActiveDemJob = useAppStore((state) => state.setActiveDemJob);
   const setOverlay = useAppStore((state) => state.setOverlay);
   const clearFootprints = useAppStore((state) => state.clearFootprints);
   const footprintCount = useAppStore((state) => Object.keys(state.footprints).length);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const ropewikiDialogRef = useRef<HTMLDialogElement>(null);
+  const demDialogRef = useRef<HTMLDialogElement>(null);
   const [name, setName] = useState("aoi");
   const [bufferM, setBufferM] = useState(200);
   const [snapRadiusM, setSnapRadiusM] = useState(30);
@@ -941,6 +1005,11 @@ export function App() {
     onSuccess: invalidate
   });
   const deleteJob = (job: Job) => deleteJobMutation.mutate(job);
+  const cancelJobMutation = useMutation({
+    mutationFn: (job: Job) => cancelJob(job.id),
+    onSuccess: invalidate
+  });
+  const cancelRunningJob = (job: Job) => cancelJobMutation.mutate(job);
 
   const promptNumber = (label: string, current: number, min: number): number | undefined => {
     const raw = window.prompt(label, String(current));
@@ -955,17 +1024,21 @@ export function App() {
 
   const runBuildDem = () => {
     if (!bounds) {
-      window.alert("Draw or select an AOI first.");
       return;
     }
-    const nextName = window.prompt("Area name", name)?.trim();
-    if (nextName === undefined) return;
-    const nextBuffer = promptNumber("DEM buffer meters", bufferM, 0);
-    if (nextBuffer === undefined) return;
-    const finalName = nextName || "aoi";
+    const finalName = name.trim() || "aoi";
     setName(finalName);
-    setBufferM(nextBuffer);
-    buildMutation.mutate({ name: finalName, bounds, bufferM: nextBuffer });
+    buildMutation.mutate(
+      { name: finalName, bounds, bufferM },
+      { onSuccess: () => demDialogRef.current?.close() }
+    );
+  };
+
+  const openDemDialog = () => {
+    if (!bounds) return;
+    const dialog = demDialogRef.current;
+    if (!dialog) return;
+    if (!dialog.open) dialog.showModal();
   };
 
   const runRopewikiImport = () => {
@@ -1007,6 +1080,7 @@ export function App() {
       snapKmlMutation.error ??
       trackProfileMutation.error ??
       deleteJobMutation.error ??
+      cancelJobMutation.error ??
       jobsQuery.error
     );
   }, [
@@ -1018,6 +1092,7 @@ export function App() {
     snapKmlMutation.error,
     trackProfileMutation.error,
     deleteJobMutation.error,
+    cancelJobMutation.error,
     jobsQuery.error
   ]);
 
@@ -1058,6 +1133,7 @@ export function App() {
               <span>DEM job</span>
               <strong>{activeDemJob?.id ?? "none"}</strong>
             </div>
+            {activeDemJob && <button onClick={() => setActiveDemJob(undefined)}>Clear active DEM/container</button>}
             <div>
               <span>TPI job</span>
               <strong>{activeCompareJob?.id ?? "none"}</strong>
@@ -1087,7 +1163,7 @@ export function App() {
               return (
               <details key={area.demJob.id} open={kmls.length > 0} className="derivedSection">
                 <summary>
-                  {area.name} ({kmls.length} KML)
+                  DEM: {area.name} ({kmls.length} KML)
                 </summary>
                 <div className="derivedList">
                   <AreaCard
@@ -1096,6 +1172,7 @@ export function App() {
                     onRunJob={onRunJob}
                     pendingKey={pendingRunKey}
                     onDeleteJob={deleteJob}
+                    onCancelJob={cancelRunningJob}
                   />
                   {kmls.length === 0 && <div className="empty">No KMLs in this DEM container.</div>}
                   {kmls.map((job) => (
@@ -1107,6 +1184,7 @@ export function App() {
                       activeCompareJob={activeCompareJob}
                       onSnap={(sourceJob, target) => runSnap(sourceJob, target, area.demJob)}
                       onDelete={deleteJob}
+                      onCancel={cancelRunningJob}
                     />
                   ))}
                   {unparentedGenerated.length > 0 && (
@@ -1120,6 +1198,7 @@ export function App() {
                             activeDemJob={area.demJob}
                             activeCompareJob={activeCompareJob}
                             onDelete={deleteJob}
+                            onCancel={cancelRunningJob}
                           />
                         ))}
                       </div>
@@ -1132,7 +1211,7 @@ export function App() {
             {(kmlContainers.loose.length > 0 || kmlContainers.looseGenerated.length > 0) && (
               <details open className="derivedSection">
                 <summary>
-                  KML-first / unassigned ({kmlContainers.loose.length + kmlContainers.looseGenerated.length})
+                  KML: unassigned ({kmlContainers.loose.length + kmlContainers.looseGenerated.length})
                 </summary>
                 <div className="derivedList">
                   {kmlContainers.loose.map((job) => (
@@ -1144,6 +1223,7 @@ export function App() {
                       activeCompareJob={activeCompareJob}
                       onSnap={(sourceJob, target) => runSnap(sourceJob, target)}
                       onDelete={deleteJob}
+                      onCancel={cancelRunningJob}
                     />
                   ))}
                   {unparentedGeneratedLayers(kmlContainers.looseGenerated, kmlContainers.loose).map((job) => (
@@ -1153,6 +1233,7 @@ export function App() {
                       activeDemJob={activeDemJob}
                       activeCompareJob={activeCompareJob}
                       onDelete={deleteJob}
+                      onCancel={cancelRunningJob}
                     />
                   ))}
                 </div>
@@ -1174,7 +1255,13 @@ export function App() {
                   </div>
                   <div className="jobFooter">
                     <StatusBadge status={job.status} />
-                    {job.status === "failed" && (
+                    {(job.status === "queued" || job.status === "running") && (
+                      <button className="danger miniButton" onClick={() => cancelRunningJob(job)}>
+                        <Square size={12} />
+                        Cancel
+                      </button>
+                    )}
+                    {job.status !== "queued" && job.status !== "running" && (
                       <button className="danger miniButton" onClick={() => deleteJob(job)}>
                         <Trash2 size={12} />
                         Delete
@@ -1205,7 +1292,7 @@ export function App() {
                     <span>AOI</span>
                   </div>
                   <div className="mapToolMeta">{selectedAoiText}</div>
-                  <button className="primary" disabled={!bounds || buildMutation.isPending} onClick={runBuildDem}>
+                  <button className="primary" disabled={!bounds || buildMutation.isPending} onClick={openDemDialog}>
                     <Play size={14} />
                     DEM Mosaic
                   </button>
@@ -1239,7 +1326,12 @@ export function App() {
                     <Upload size={14} />
                     <span>KML</span>
                   </div>
-                  {activeDemJob && <div className="mapToolMeta">Container {activeDemJob.id}</div>}
+                  <div className="mapToolMeta">
+                    {activeDemJob ? `Container ${activeDemJob.id}` : "Import unassigned"}
+                  </div>
+                  {activeDemJob && (
+                    <button onClick={() => setActiveDemJob(undefined)}>Import outside container</button>
+                  )}
                   <div className="mapToolButtons">
                     <button disabled={uploadKmlMutation.isPending} onClick={() => fileInputRef.current?.click()}>
                       Upload
@@ -1277,6 +1369,54 @@ export function App() {
               )}
             </div>
           </div>
+          <dialog
+            ref={demDialogRef}
+            className="appDialog"
+          >
+            <form
+              method="dialog"
+              onSubmit={(event) => {
+                event.preventDefault();
+                runBuildDem();
+              }}
+            >
+              <div className="dialogHead">
+                <Layers size={16} />
+                <strong>Build DEM mosaic</strong>
+              </div>
+              <div className="mapToolMeta">{selectedAoiText}</div>
+              <label>
+                Container name
+                <input
+                  autoFocus
+                  value={name}
+                  onChange={(event) => setName(event.target.value)}
+                />
+              </label>
+              <label>
+                Buffer meters
+                <input
+                  type="number"
+                  min="0"
+                  step="1"
+                  value={bufferM}
+                  onChange={(event) => setBufferM(Number(event.target.value))}
+                />
+              </label>
+              <div className="dialogActions">
+                <button type="button" onClick={() => demDialogRef.current?.close()}>
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="primary"
+                  disabled={!bounds || buildMutation.isPending || !Number.isFinite(bufferM) || bufferM < 0}
+                >
+                  Build
+                </button>
+              </div>
+            </form>
+          </dialog>
           <dialog
             ref={ropewikiDialogRef}
             className="appDialog"

@@ -5,7 +5,7 @@ export type Bounds = {
   north: number;
 };
 
-export type JobStatus = "queued" | "running" | "succeeded" | "failed";
+export type JobStatus = "queued" | "running" | "succeeded" | "failed" | "canceled";
 
 export type Job = {
   id: string;
@@ -29,7 +29,18 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     headers
   });
   if (!res.ok) {
-    throw new Error(await res.text());
+    const text = await res.text();
+    let detail: unknown;
+    try {
+      const parsed = JSON.parse(text) as { detail?: unknown };
+      detail = parsed.detail;
+    } catch {
+      if (text) throw new Error(text);
+    }
+    if (Array.isArray(detail)) throw new Error(detail.map((item) => JSON.stringify(item)).join("\n"));
+    if (detail && typeof detail === "object") throw new Error(JSON.stringify(detail, null, 2));
+    if (detail) throw new Error(String(detail));
+    throw new Error(`${res.status} ${res.statusText}`);
   }
   return (await res.json()) as T;
 }
@@ -44,6 +55,10 @@ export async function deleteJobRecord(jobId: string): Promise<void> {
     `/api/jobs/${jobId}`,
     { method: "DELETE" }
   );
+}
+
+export async function cancelJob(jobId: string): Promise<Job> {
+  return request<Job>(`/api/jobs/${jobId}/cancel`, { method: "POST" });
 }
 
 export async function deleteGeneratedKmlLayer(jobId: string, layerKey: string): Promise<void> {

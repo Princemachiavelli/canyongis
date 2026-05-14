@@ -9,7 +9,7 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from ..rvt_preview import RVT_VIS_KEYS, RVT_VIS_LABELS, export_rvt_previews
-from .dem_jobs import DemJobSpec, OutputUrlFn, ProgressCb, Visualization, register
+from .dem_jobs import DemJobSpec, OutputUrlFn, ProgressCb, Visualization, _tile_payload, register
 
 
 class RvtRequest(BaseModel):
@@ -42,6 +42,7 @@ def _run_rvt(
     for key, art in artifacts.items():
         result[f"rvt_{key}_path"] = art.tif_path
         result[f"panel_rvt_{key}_url"] = output_url(Path(art.panel_path))
+        result.update(_tile_payload(f"panel_rvt_{key}", art.tile_archive, output_url))
         if "bounds_wgs84" not in result:
             result["bounds_wgs84"] = art.bounds_wgs84
     return result

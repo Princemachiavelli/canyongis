@@ -6,6 +6,9 @@ export type Overlay = {
   name: string;
   url: string;
   bounds: Bounds;
+  tileArchiveUrl?: string;
+  tileMinZoom?: number;
+  tileMaxZoom?: number;
 };
 
 export type Footprint = {

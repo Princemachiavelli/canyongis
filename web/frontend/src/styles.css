@@ -290,6 +290,10 @@ label {
   border-color: #c76b6b;
 }
 
+.job.canceled {
+  border-color: #a8b1b7;
+}
+
 .jobActions {
   display: flex;
   flex-wrap: wrap;
@@ -351,6 +355,10 @@ label {
 
 .kmlImport.queued {
   border-left-color: #b9c2c8;
+}
+
+.kmlImport.canceled {
+  border-left-color: #a8b1b7;
 }
 
 .area.active {
@@ -491,6 +499,10 @@ button.miniButton {
   border-left-color: #b9c2c8;
 }
 
+.derivedRow.canceled {
+  border-left-color: #a8b1b7;
+}
+
 .derivedRow.active {
   border-color: #0c6b58;
   box-shadow: 0 0 0 1px #0c6b58 inset;
@@ -592,6 +604,11 @@ button.miniButton {
 .statusBadge.failed {
   color: #8a3434;
   background: #f5d8d8;
+}
+
+.statusBadge.canceled {
+  color: #56656d;
+  background: #dde3e6;
 }
 
 .linkButton {

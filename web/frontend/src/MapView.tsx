@@ -1,7 +1,8 @@
-import { useEffect } from "react";
+import { useEffect, useRef } from "react";
 import "./leafletSetup";
 import L from "leaflet";
 import "@geoman-io/leaflet-geoman-free";
+import { PMTiles, leafletRasterLayer } from "pmtiles";
 import { GeoJSON, ImageOverlay, MapContainer, Rectangle, TileLayer, useMap } from "react-leaflet";
 import type { Bounds, Job } from "./api";
 import { useAppStore } from "./state";
@@ -27,7 +28,9 @@ function PanController() {
 
 function MapControls() {
   const map = useMap();
+  const bounds = useAppStore((state) => state.bounds);
   const setBounds = useAppStore((state) => state.setBounds);
+  const selectionLayer = useRef<L.Rectangle | L.Polygon | undefined>();
 
   useEffect(() => {
     map.pm.addControls({
@@ -36,7 +39,7 @@ function MapControls() {
       drawCircle: false,
       drawCircleMarker: false,
       drawPolyline: false,
-      drawPolygon: true,
+      drawPolygon: false,
       drawRectangle: true,
       editMode: true,
       dragMode: true,
@@ -57,15 +60,65 @@ function MapControls() {
       }
     };
 
-    map.on("pm:create", (event) => updateFromLayer(event.layer));
+    map.on("pm:create", (event) => {
+      if (selectionLayer.current && selectionLayer.current !== event.layer) {
+        selectionLayer.current.removeFrom(map);
+      }
+      selectionLayer.current = event.layer as L.Rectangle | L.Polygon;
+      updateFromLayer(event.layer);
+    });
     map.on("pm:edit", (event) => {
       event.layers.eachLayer((layer: L.Layer) => updateFromLayer(layer));
     });
-    map.on("pm:remove", () => setBounds(undefined));
+    map.on("pm:remove", (event) => {
+      if (!selectionLayer.current || selectionLayer.current === event.layer) {
+        selectionLayer.current = undefined;
+        setBounds(undefined);
+      }
+    });
     return () => {
       map.pm.removeControls();
+      selectionLayer.current?.removeFrom(map);
+      selectionLayer.current = undefined;
     };
   }, [map, setBounds]);
+
+  useEffect(() => {
+    if (selectionLayer.current) {
+      selectionLayer.current.removeFrom(map);
+      selectionLayer.current = undefined;
+    }
+    if (!bounds) return;
+    const layer = L.rectangle(leafletBounds(bounds), {
+      color: "#00bcd4",
+      weight: 2,
+      fillOpacity: 0.05
+    }).addTo(map);
+    layer.pm.enable();
+    selectionLayer.current = layer;
+  }, [bounds, map]);
+
+  return null;
+}
+
+function PmtilesOverlay() {
+  const map = useMap();
+  const overlay = useAppStore((state) => state.overlay);
+
+  useEffect(() => {
+    if (!overlay?.tileArchiveUrl) return;
+    const source = new PMTiles(overlay.tileArchiveUrl);
+    const layer = leafletRasterLayer(source, {
+      opacity: 0.72,
+      minZoom: overlay.tileMinZoom,
+      maxNativeZoom: overlay.tileMaxZoom,
+      maxZoom: 22
+    });
+    layer.addTo(map);
+    return () => {
+      layer.removeFrom(map);
+    };
+  }, [map, overlay?.id, overlay?.tileArchiveUrl, overlay?.tileMinZoom, overlay?.tileMaxZoom]);
 
   return null;
 }
@@ -314,8 +367,11 @@ export function MapView({ kmlImports = [], profileJob }: { kmlImports?: Job[]; p
           pathOptions={{ color: "#5b6e79", weight: 1, fillOpacity: 0.04, dashArray: "4 4" }}
         />
       ))}
-      {bounds && <Rectangle bounds={leafletBounds(bounds)} pathOptions={{ color: "#00bcd4", weight: 2 }} />}
-      {overlay && <ImageOverlay url={overlay.url} bounds={leafletBounds(overlay.bounds)} opacity={0.72} />}
+      {overlay?.tileArchiveUrl ? (
+        <PmtilesOverlay />
+      ) : (
+        overlay && <ImageOverlay url={overlay.url} bounds={leafletBounds(overlay.bounds)} opacity={0.72} />
+      )}
       {kmlImports
         .filter((job) => job.status === "succeeded" && visibleKmls[job.id])
         .map((job) => (

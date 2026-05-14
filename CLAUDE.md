@@ -49,6 +49,8 @@ Defined in `pyproject.toml [project.scripts]`:
 - **Format/lint:** `nix fmt` (nixfmt + ruff format + ruff check --fix + taplo)
 - **Test:** `pytest`; slow tests via `pytest -m slow`
 - **CI gate:** `nix flake check`
+- **Build:** use `nix build .#canyongis`; do not separately rebuild `.#canyongis-web-frontend` because it is already a dependency of `canyongis`.
+- **Webserver:** do not start the webserver for the user unless they explicitly ask.
 - **Ruff:** 100-char lines, py311+ target, rules `E,W,F,I,B,UP,SIM,RUF`
 
 ## Hardware notes
@@ -80,3 +82,5 @@ canyongis-ml-predict dem.tif runs/001/train/best.pt runs/001/pred \
 ```
 
 For a detailed how-to (flags, Python entry points, troubleshooting), see `.claude/skills/canyongis/SKILL.md`.
+
+For the planned multi-user architecture, required refactors, and migration path, see `MULIT_USER_FEATURE.md`.

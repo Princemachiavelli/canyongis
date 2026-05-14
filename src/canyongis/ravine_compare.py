@@ -28,6 +28,7 @@ from scipy import ndimage as ndi
 
 from .geomorphons import export_geomorphons
 from .io import log, read_dem
+from .preview_tiles import TileArchive, write_pmtiles_preview, write_wgs84_webp_preview
 from .terrain import fill_nans, meters_to_px
 from .validate import parse_kml
 
@@ -639,6 +640,7 @@ class PreviewArtifacts:
     panel_path: str
     tif_path: str
     meta: dict
+    tile_archive: TileArchive | None = None
 
 
 def _make_emit(log_callback: Callable[[str], None] | None) -> Callable[[str], None]:
@@ -657,14 +659,31 @@ def _open_dem(dem_path: Path):
     return elev, transform, crs, pixel_size, profile
 
 
-def _save_panel_webp(
-    panel: Image.Image, transform, crs, out_path: Path
-) -> tuple[float, float, float, float]:
-    overlay, bounds = _warp_rgb_image_to_wgs84(panel, src_transform=transform, src_crs=crs)
-    _downsample_by_factor(overlay, OVERLAY_DOWNSAMPLE_FACTOR).save(
-        out_path, quality=85, method=4
+def _save_panel_previews(
+    panel: Image.Image,
+    valid_mask: np.ndarray,
+    transform,
+    crs,
+    out_path: Path,
+) -> tuple[float, float, float, float, TileArchive]:
+    bounds = write_wgs84_webp_preview(
+        panel,
+        valid_mask,
+        transform,
+        crs,
+        out_path,
+        quality=85,
+        downsample_factor=OVERLAY_DOWNSAMPLE_FACTOR,
     )
-    return bounds
+    archive = write_pmtiles_preview(
+        panel,
+        valid_mask,
+        transform,
+        crs,
+        out_path.with_suffix(".pmtiles"),
+        quality=85,
+    )
+    return bounds, archive
 
 
 def _render_score_panel(
@@ -700,7 +719,9 @@ def export_hillshade_preview(
     _write_hillshade_geotiff(hs_tif, hillshade, profile)
     hs_panel = Image.fromarray(np.repeat(hillshade[..., None], 3, axis=2), mode="RGB")
     panel_path = out_dir / "panel_hillshade.webp"
-    bounds = _save_panel_webp(hs_panel, transform, crs, panel_path)
+    bounds, tile_archive = _save_panel_previews(
+        hs_panel, np.isfinite(elev), transform, crs, panel_path
+    )
     az_list = (
         [float(azimuths_deg)]
         if isinstance(azimuths_deg, int | float)
@@ -716,7 +737,11 @@ def export_hillshade_preview(
         "out_dir": str(out_dir),
         **meta,
         "preview_bounds_wgs84": list(bounds),
-        "outputs": {"hillshade_tif": str(hs_tif), "panel_hillshade_webp": str(panel_path)},
+        "outputs": {
+            "hillshade_tif": str(hs_tif),
+            "panel_hillshade_webp": str(panel_path),
+            "panel_hillshade_pmtiles": tile_archive.pmtiles_path,
+        },
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     return PreviewArtifacts(
@@ -725,6 +750,7 @@ def export_hillshade_preview(
         panel_path=str(panel_path),
         tif_path=str(hs_tif),
         meta=meta,
+        tile_archive=tile_archive,
     )
 
 
@@ -763,7 +789,9 @@ def export_geomorphon_ravine_preview(
         score, hillshade, display_pct=display_pct, alpha_gamma=alpha_gamma
     )
     panel_path = out_dir / "panel_a_geomorphon.webp"
-    bounds = _save_panel_webp(panel, transform, crs, panel_path)
+    bounds, tile_archive = _save_panel_previews(
+        panel, np.isfinite(elev), transform, crs, panel_path
+    )
     meta = {**geo_meta, "display_lo": lo, "display_hi": hi}
     summary = {
         "dem_path": str(dem_path),
@@ -772,7 +800,11 @@ def export_geomorphon_ravine_preview(
         "display_pct": list(display_pct),
         "preview_bounds_wgs84": list(bounds),
         **meta,
-        "outputs": {"a_geomorphon_tif": str(tif_path), "panel_a_geomorphon_webp": str(panel_path)},
+        "outputs": {
+            "a_geomorphon_tif": str(tif_path),
+            "panel_a_geomorphon_webp": str(panel_path),
+            "panel_a_geomorphon_pmtiles": tile_archive.pmtiles_path,
+        },
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     return PreviewArtifacts(
@@ -781,6 +813,7 @@ def export_geomorphon_ravine_preview(
         panel_path=str(panel_path),
         tif_path=str(tif_path),
         meta=meta,
+        tile_archive=tile_archive,
     )
 
 
@@ -812,7 +845,9 @@ def export_tpi_ravine_preview(
         score, hillshade, display_pct=display_pct, alpha_gamma=alpha_gamma
     )
     panel_path = out_dir / "panel_b_tpi.webp"
-    bounds = _save_panel_webp(panel, transform, crs, panel_path)
+    bounds, tile_archive = _save_panel_previews(
+        panel, np.isfinite(elev), transform, crs, panel_path
+    )
     meta = {**tpi_meta, "display_lo": lo, "display_hi": hi}
     summary = {
         "dem_path": str(dem_path),
@@ -824,7 +859,11 @@ def export_tpi_ravine_preview(
         "display_pct": list(display_pct),
         "preview_bounds_wgs84": list(bounds),
         **meta,
-        "outputs": {"b_tpi_tif": str(tif_path), "panel_b_tpi_webp": str(panel_path)},
+        "outputs": {
+            "b_tpi_tif": str(tif_path),
+            "panel_b_tpi_webp": str(panel_path),
+            "panel_b_tpi_pmtiles": tile_archive.pmtiles_path,
+        },
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     return PreviewArtifacts(
@@ -833,6 +872,7 @@ def export_tpi_ravine_preview(
         panel_path=str(panel_path),
         tif_path=str(tif_path),
         meta=meta,
+        tile_archive=tile_archive,
     )
 
 
@@ -859,7 +899,9 @@ def export_curvature_preview(
         score, hillshade, display_pct=display_pct, alpha_gamma=alpha_gamma
     )
     panel_path = out_dir / "panel_c_curvature.webp"
-    bounds = _save_panel_webp(panel, transform, crs, panel_path)
+    bounds, tile_archive = _save_panel_previews(
+        panel, np.isfinite(elev), transform, crs, panel_path
+    )
     meta = {**cur_meta, "display_lo": lo, "display_hi": hi}
     summary = {
         "dem_path": str(dem_path),
@@ -868,7 +910,11 @@ def export_curvature_preview(
         "display_pct": list(display_pct),
         "preview_bounds_wgs84": list(bounds),
         **meta,
-        "outputs": {"c_curvature_tif": str(tif_path), "panel_c_curvature_webp": str(panel_path)},
+        "outputs": {
+            "c_curvature_tif": str(tif_path),
+            "panel_c_curvature_webp": str(panel_path),
+            "panel_c_curvature_pmtiles": tile_archive.pmtiles_path,
+        },
     }
     (out_dir / "summary.json").write_text(json.dumps(summary, indent=2) + "\n")
     return PreviewArtifacts(
@@ -877,6 +923,7 @@ def export_curvature_preview(
         panel_path=str(panel_path),
         tif_path=str(tif_path),
         meta=meta,
+        tile_archive=tile_archive,
     )
 
 
