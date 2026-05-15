@@ -43,7 +43,7 @@ import { AssetLibrary } from "./AssetLibrary";
 import { Inspector, type InspectorTool } from "./Inspector";
 import { PipelineView } from "./PipelineView";
 import { useAppStore } from "./state";
-import { ToolDialog, type ToolDialogResult } from "./ToolDialog";
+import type { ToolDialogResult } from "./ToolDialog";
 import { descriptorsFromJob, type LayerDescriptor } from "./layers";
 
 function jobBoundsWgs84(job: Job): Bounds | undefined {
@@ -1159,10 +1159,6 @@ function OpacitySliders() {
 
 export function App() {
   const queryClient = useQueryClient();
-  const useAssetUi = useMemo(
-    () => new URLSearchParams(window.location.search).get("ui") !== "legacy",
-    [],
-  );
   const bounds = useAppStore((state) => state.bounds);
   const activeProjectId = useAppStore((state) => state.activeProjectId);
   const activeDemJob = useAppStore((state) => state.activeDemJob);
@@ -1300,14 +1296,6 @@ export function App() {
     onSuccess: invalidate,
   });
   const [pendingRunKey, setPendingRunKey] = useState<string | undefined>();
-  type ToolDialogContext = {
-    spec: JobSpec;
-    initialInputs?: Record<string, string | undefined>;
-    initialParams?: Record<string, unknown>;
-    extraParams?: Record<string, unknown>;
-    pendingKey?: string;
-  };
-  const [toolDialog, setToolDialog] = useState<ToolDialogContext | undefined>();
   const [selectedAssetId, setSelectedAssetId] = useState<string | undefined>();
   const [inspectorTool, setInspectorTool] = useState<InspectorTool | undefined>();
   const [pipelineOpen, setPipelineOpen] = useState(false);
@@ -1337,8 +1325,7 @@ export function App() {
       initialInputs: { dem: demJob.id },
       pendingKey: `${demJob.id}:${spec.key}`,
     };
-    if (useAssetUi) setInspectorTool(payload);
-    else setToolDialog(payload);
+    setInspectorTool(payload);
   };
   const onRunAssetTool = (
     spec: JobSpec,
@@ -1441,8 +1428,7 @@ export function App() {
       initialInputs,
       initialParams: { target },
     };
-    if (useAssetUi) setInspectorTool(payload);
-    else setToolDialog(payload);
+    setInspectorTool(payload);
   };
 
   const openSpineDialog = () => {
@@ -1458,8 +1444,7 @@ export function App() {
       initialInputs,
       extraParams,
     };
-    if (useAssetUi) setInspectorTool(payload);
-    else setToolDialog(payload);
+    setInspectorTool(payload);
   };
 
   const runBuildDem = () => {
@@ -1531,12 +1516,10 @@ export function App() {
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <ProjectPicker queryClient={queryClient} />
-          {useAssetUi && (
-            <button onClick={() => setPipelineOpen(true)}>
-              <GitBranch size={16} />
-              Pipeline
-            </button>
-          )}
+          <button onClick={() => setPipelineOpen(true)}>
+            <GitBranch size={16} />
+            Pipeline
+          </button>
           <UserMenu queryClient={queryClient} />
           <button onClick={() => jobsQuery.refetch()}>
             <RefreshCw size={16} />
@@ -1544,8 +1527,7 @@ export function App() {
         </div>
       </section>
 
-      <section className={`workspace ${useAssetUi ? "assetWorkspace" : ""}`}>
-        {useAssetUi ? (
+      <section className="workspace assetWorkspace">
           <AssetLibrary
             projectId={activeProjectId}
             jobs={jobs}
@@ -1557,230 +1539,6 @@ export function App() {
             }}
             onRunTool={onRunAssetTool}
           />
-        ) : (
-        <aside className="panel">
-          <div className="panelHeader">
-            <Layers size={16} />
-            <h1>Jobs & Layers</h1>
-          </div>
-
-          <TrackProfilePanel
-            selected={selectedKmlTrack}
-            activeDemJob={activeDemJob}
-            profileJob={selectedProfileJob}
-            isPending={trackProfileMutation.isPending}
-            onRun={() => trackProfileMutation.mutate()}
-          />
-
-          <div className="selection">
-            <div>
-              <span>AOI</span>
-              <strong>
-                {bounds
-                  ? `${bounds.west.toFixed(4)}, ${bounds.south.toFixed(4)}`
-                  : "none"}
-              </strong>
-            </div>
-            {bounds && (
-              <button onClick={() => setBounds(undefined)}>Clear AOI</button>
-            )}
-            <div>
-              <span>DEM job</span>
-              <strong>{activeDemJob?.id ?? "none"}</strong>
-            </div>
-            {activeDemJob && (
-              <button onClick={() => setActiveDemJob(undefined)}>
-                Clear active DEM/container
-              </button>
-            )}
-            <div>
-              <span>Hillshade base</span>
-              <strong>{baseLayerId ?? "off"}</strong>
-            </div>
-            {baseLayerId && (
-              <button onClick={() => setBaseLayer(undefined)}>
-                Clear hillshade
-              </button>
-            )}
-            <div>
-              <span>Overlay</span>
-              <strong>{overlayLayerId ?? "none"}</strong>
-            </div>
-            {overlayLayerId && (
-              <button onClick={() => setOverlayLayer(undefined)}>
-                Clear overlay
-              </button>
-            )}
-            {footprintCount > 0 && (
-              <button onClick={() => clearFootprints()}>
-                Hide all footprints ({footprintCount})
-              </button>
-            )}
-          </div>
-
-          {error && <pre className="error">{String(error)}</pre>}
-
-          <div className="areas">
-            <div className="jobsHeader">
-              <MapIcon size={16} />
-              <h2>Containers & KML</h2>
-            </div>
-            {areas.length === 0 && kmlImports.length === 0 && (
-              <div className="empty">No DEM containers or KMLs yet.</div>
-            )}
-            {kmlContainers.groups.map(({ area, kmls, generated }) => {
-              const unparentedGenerated = unparentedGeneratedLayers(
-                generated,
-                kmls,
-              );
-              return (
-                <details
-                  key={area.demJob.id}
-                  open={kmls.length > 0}
-                  className="derivedSection"
-                >
-                  <summary>
-                    DEM: {area.name} ({kmls.length} KML)
-                  </summary>
-                  <div className="derivedList">
-                      <AreaCard
-                        area={area}
-                        specs={containerSpecs}
-                      onRunJob={onRunJob}
-                      pendingKey={pendingRunKey}
-                      onDeleteJob={deleteJob}
-                      onCancelJob={cancelRunningJob}
-                      onTrimRuns={trimOldRuns}
-                    />
-                    {kmls.length === 0 && (
-                      <div className="empty">
-                        No KMLs in this DEM container.
-                      </div>
-                    )}
-                    {kmls.map((job) => (
-                      <KmlImportRow
-                        key={job.id}
-                        job={job}
-                        childLayers={childLayersFor(job, generated, kmls)}
-                        activeDemJob={area.demJob}
-                        onSnap={(sourceJob, target) =>
-                          openSnapDialog(sourceJob, target, area.demJob)
-                        }
-                        onDelete={deleteJob}
-                        onCancel={cancelRunningJob}
-                      />
-                    ))}
-                    {unparentedGenerated.length > 0 && (
-                      <details open className="derivedSection">
-                        <summary>
-                          Generated KML ({unparentedGenerated.length})
-                        </summary>
-                        <div className="derivedList">
-                          {unparentedGenerated.map((job) => (
-                            <KmlImportRow
-                              key={job.id}
-                              job={job}
-                              activeDemJob={area.demJob}
-                                    onDelete={deleteJob}
-                              onCancel={cancelRunningJob}
-                            />
-                          ))}
-                        </div>
-                      </details>
-                    )}
-                  </div>
-                </details>
-              );
-            })}
-            {(kmlContainers.loose.length > 0 ||
-              kmlContainers.looseGenerated.length > 0) && (
-              <details open className="derivedSection">
-                <summary>
-                  KML: unassigned (
-                  {kmlContainers.loose.length +
-                    kmlContainers.looseGenerated.length}
-                  )
-                </summary>
-                <div className="derivedList">
-                  {kmlContainers.loose.map((job) => (
-                    <KmlImportRow
-                      key={job.id}
-                      job={job}
-                      childLayers={childLayersFor(
-                        job,
-                        kmlContainers.looseGenerated,
-                        kmlContainers.loose,
-                      )}
-                      activeDemJob={activeDemJob}
-                      onSnap={(sourceJob, target) =>
-                        openSnapDialog(sourceJob, target)
-                      }
-                      onDelete={deleteJob}
-                      onCancel={cancelRunningJob}
-                    />
-                  ))}
-                  {unparentedGeneratedLayers(
-                    kmlContainers.looseGenerated,
-                    kmlContainers.loose,
-                  ).map((job) => (
-                    <KmlImportRow
-                      key={job.id}
-                      job={job}
-                      activeDemJob={activeDemJob}
-                      onDelete={deleteJob}
-                      onCancel={cancelRunningJob}
-                    />
-                  ))}
-                </div>
-              </details>
-            )}
-          </div>
-
-          <details className="allJobs">
-            <summary>
-              <Activity size={14} />
-              All jobs ({jobs.length})
-            </summary>
-            <div className="jobs">
-              {jobs.map((job) => (
-                <div key={job.id} className={`job ${job.status}`}>
-                  <div>
-                    <strong>{job.kind}</strong>
-                    <code>{job.id}</code>
-                  </div>
-                  <div className="jobFooter">
-                    <StatusBadge status={job.status} />
-                    {(job.status === "queued" || job.status === "running") && (
-                      <button
-                        className="danger miniButton"
-                        onClick={() => cancelRunningJob(job)}
-                      >
-                        <Square size={12} />
-                        Cancel
-                      </button>
-                    )}
-                    {job.status !== "queued" && job.status !== "running" && (
-                      <button
-                        className="danger miniButton"
-                        onClick={() => deleteJob(job)}
-                      >
-                        <Trash2 size={12} />
-                        Delete
-                      </button>
-                    )}
-                  </div>
-                  <ProgressTail
-                    job={job}
-                    onDelete={deleteJob}
-                    onCancel={cancelRunningJob}
-                  />
-                </div>
-              ))}
-            </div>
-          </details>
-        </aside>
-        )}
-
         <section className="mapFrame">
           <div className="mapToolDock">
             <div className="mapToolGroup">
@@ -2019,47 +1777,24 @@ export function App() {
           </dialog>
           <MapView layers={visibleLayers} />
         </section>
-        {useAssetUi && (
-          <Inspector
-            projectId={activeProjectId}
-            selectedAssetId={selectedAssetId}
-            tool={inspectorTool}
-            jobs={jobs}
-            specs={specs}
-            isRunningTool={runToolMutation.isPending}
-            onSelectAsset={(assetId) => {
-              setSelectedAssetId(assetId);
-              setInspectorTool(undefined);
-            }}
-            onClearSelection={() => setSelectedAssetId(undefined)}
-            onOpenTool={onRunAssetTool}
-            onCloseTool={() => setInspectorTool(undefined)}
-            onRunTool={runInspectorTool}
-          />
-        )}
-      </section>
-      {!useAssetUi && toolDialog && (
-        <ToolDialog
-          open={true}
-          spec={toolDialog.spec}
+        <Inspector
+          projectId={activeProjectId}
+          selectedAssetId={selectedAssetId}
+          tool={inspectorTool}
           jobs={jobs}
-          initialInputs={toolDialog.initialInputs}
-          initialParams={toolDialog.initialParams}
-          isPending={runToolMutation.isPending}
-          onClose={() => setToolDialog(undefined)}
-          onRun={(result) =>
-            runToolMutation.mutate(
-              {
-                spec: toolDialog.spec,
-                result,
-                extraParams: toolDialog.extraParams,
-              },
-              { onSuccess: () => setToolDialog(undefined) },
-            )
-          }
+          specs={specs}
+          isRunningTool={runToolMutation.isPending}
+          onSelectAsset={(assetId) => {
+            setSelectedAssetId(assetId);
+            setInspectorTool(undefined);
+          }}
+          onClearSelection={() => setSelectedAssetId(undefined)}
+          onOpenTool={onRunAssetTool}
+          onCloseTool={() => setInspectorTool(undefined)}
+          onRunTool={runInspectorTool}
         />
-      )}
-      {useAssetUi && pipelineOpen && (
+      </section>
+      {pipelineOpen && (
         <PipelineView
           projectId={activeProjectId}
           onClose={() => setPipelineOpen(false)}
