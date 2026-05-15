@@ -58,7 +58,14 @@ class InputSpec:
 
 @dataclass(frozen=True)
 class OutputSpec:
-    """One typed file output produced by a DEM-derived job."""
+    """One typed file output produced by a DEM-derived job.
+
+    ``asset_kind`` is the broad category ("raster" / "vector") used by the
+    frontend tool dialog for filtering. ``asset_type`` is the dotted
+    taxonomy (e.g. ``raster.score.ravine.tpi``) recorded on the resulting
+    ``canyongis_assets`` row; lineage queries and input pickers match
+    against this via prefix (see UI_DESIGN.md §2.2).
+    """
 
     key: str
     label: str
@@ -66,6 +73,7 @@ class OutputSpec:
     role: str
     asset_kind: str = "raster"
     url_field: str | None = None
+    asset_type: str | None = None
 
 
 @dataclass(frozen=True)
@@ -172,6 +180,8 @@ def _normalize_outputs(spec: DemJobSpec, result: dict[str, Any]) -> list[dict[st
             "path": path,
             "metadata": _output_metadata(result, out_spec),
         }
+        if out_spec.asset_type:
+            row["asset_type"] = out_spec.asset_type
         if out_spec.url_field:
             url = result.get(out_spec.url_field)
             if isinstance(url, str) and url:
@@ -439,6 +449,7 @@ register(
                 label="Hillshade raster",
                 path_field="hillshade_tif_path",
                 role="hillshade",
+                asset_type="raster.hillshade",
             ),
         ),
         layers=(
@@ -475,6 +486,7 @@ register(
                 label="Flow accumulation raster",
                 path_field="flow_accum_path",
                 role="flow-accumulation",
+                asset_type="raster.flow_accumulation",
             ),
         ),
         layers=(
@@ -520,6 +532,7 @@ register(
                 label="Geomorphon ravine score raster",
                 path_field="a_geomorphon_path",
                 role="ravine-score",
+                asset_type="raster.score.ravine.geomorphon",
             ),
         ),
         layers=(
@@ -554,6 +567,7 @@ register(
                 label="TPI ravine score raster",
                 path_field="b_tpi_path",
                 role="ravine-score",
+                asset_type="raster.score.ravine.tpi",
             ),
         ),
         layers=(
@@ -590,6 +604,7 @@ register(
                 label="Plan curvature raster",
                 path_field="c_curvature_path",
                 role="ravine-score",
+                asset_type="raster.score.ravine.curvature",
             ),
         ),
         layers=(

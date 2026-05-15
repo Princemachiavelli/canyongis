@@ -226,6 +226,7 @@ register(
                 role="dem",
                 asset_kind="raster",
                 url_field="dem_url",
+                asset_type="raster.dem",
             ),
         ),
         layers=(
@@ -259,6 +260,7 @@ register(
                 role="route",
                 asset_kind="vector",
                 url_field="kml_url",
+                asset_type="vector.kml.route",
             ),
         ),
         layers=(

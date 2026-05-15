@@ -40,6 +40,17 @@ JobStatus = Literal["queued", "running", "succeeded", "failed", "canceled"]
 DEFAULT_PROJECT_NAME = "Personal"
 
 
+def _coerce_job_id_str(raw: Any) -> str | None:
+    if isinstance(raw, str) and raw:
+        return raw
+    if isinstance(raw, dict):
+        for k in ("job_id", "id"):
+            v = raw.get(k)
+            if isinstance(v, str) and v:
+                return v
+    return None
+
+
 PROGRESS_CAP = 200
 
 
@@ -256,6 +267,66 @@ class JobStore:
                 new_ids.append(asset_id)
         return new_ids
 
+    def register_job_inputs(self, job: Job) -> int:
+        """Insert canyongis_job_inputs edges from ``params._inputs`` of ``job``.
+
+        Each entry of ``_inputs`` maps an input slot key (e.g. "dem", "score")
+        to a producing job id (or a dict containing one). We resolve that job
+        to its primary asset of the kind the spec's ``InputSpec`` accepts and
+        write an edge. Tools whose inputs are not assets (e.g. ``build-dem``
+        takes an AOI bounds object) record no edges.
+        """
+        spec = get_spec(job.kind)
+        if spec is None:
+            return 0
+        recorded = job.params.get("_inputs") if isinstance(job.params, dict) else None
+        if not isinstance(recorded, dict) or not recorded:
+            return 0
+        input_kinds = {ispec.key: ispec.kind for ispec in spec.inputs}
+        written = 0
+        with self.conn.cursor() as cur:
+            for input_key, raw in recorded.items():
+                producer_id = _coerce_job_id_str(raw)
+                if not producer_id:
+                    continue
+                accepted = input_kinds.get(input_key)
+                asset_id = self._pick_input_asset(cur, producer_id, accepted)
+                if not asset_id:
+                    continue
+                cur.execute(
+                    "INSERT INTO canyongis_job_inputs (job_id, input_key, asset_id) "
+                    "VALUES (%s, %s, %s) ON CONFLICT DO NOTHING",
+                    (job.id, input_key, asset_id),
+                )
+                written += cur.rowcount or 0
+        return written
+
+    @staticmethod
+    def _pick_input_asset(cur, producer_job_id: str, accepted_kind: str | None) -> str | None:
+        """Pick the best asset produced by ``producer_job_id`` for ``accepted_kind``.
+
+        Match by prefix: an InputSpec.kind of ``raster.score`` matches assets
+        with kind starting ``raster.score.``. Falls back to any asset from
+        the job when no prefix match is available (handles legacy
+        extension-kinded rows).
+        """
+        if accepted_kind:
+            cur.execute(
+                "SELECT id FROM canyongis_assets "
+                "WHERE job_id = %s AND (kind = %s OR kind LIKE %s) "
+                "ORDER BY created_at LIMIT 1",
+                (producer_job_id, accepted_kind, f"{accepted_kind}.%"),
+            )
+            row = cur.fetchone()
+            if row is not None:
+                return row[0]
+        cur.execute(
+            "SELECT id FROM canyongis_assets WHERE job_id = %s ORDER BY created_at LIMIT 1",
+            (producer_job_id,),
+        )
+        row = cur.fetchone()
+        return row[0] if row is not None else None
+
     def ensure_personal_project(self, user: User) -> str:
         """Return the project_id of ``user``'s Personal project, creating if absent."""
         with self.conn.cursor() as cur:
@@ -425,6 +496,7 @@ class WebContext:
                     project_id=job.project_id,
                     created_by_user_id=job.created_by_user_id,
                 )
+                self.store.register_job_inputs(job)
             except Exception:
                 traceback.print_exc()
 
@@ -778,18 +850,133 @@ def _active_project_id(request: Request, user: User = CurrentUserDep) -> str:
     ctx: WebContext = request.app.state.ctx
     project_id = request.headers.get("X-Project-Id")
     if project_id:
-        with ctx.store.conn.cursor() as cur:
-            cur.execute(
-                "SELECT 1 FROM canyongis_project_memberships WHERE project_id = %s AND user_id = %s",
-                (project_id, user.id),
-            )
-            if cur.fetchone() is None:
-                raise HTTPException(
-                    status_code=403,
-                    detail=f"User is not a member of project {project_id}",
-                )
+        _require_project_member(ctx, project_id, user)
         return project_id
     return ctx.store.ensure_personal_project(user)
+
+
+def _require_project_member(ctx: "WebContext", project_id: str, user: User) -> None:
+    with ctx.store.conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM canyongis_project_memberships "
+            "WHERE project_id = %s AND user_id = %s",
+            (project_id, user.id),
+        )
+        if cur.fetchone() is None:
+            raise HTTPException(
+                status_code=403,
+                detail=f"User is not a member of project {project_id}",
+            )
+
+
+def _load_asset_summary(cur, asset_id: str) -> dict[str, Any] | None:
+    cur.execute(
+        "SELECT id, kind, path, url, job_id, bounds_wgs84 "
+        "FROM canyongis_assets WHERE id = %s",
+        (asset_id,),
+    )
+    row = cur.fetchone()
+    if row is None:
+        return None
+    return {
+        "id": row[0],
+        "kind": row[1],
+        "path": row[2],
+        "url": row[3],
+        "job_id": row[4],
+        "bounds_wgs84": row[5],
+    }
+
+
+def _walk_lineage_upward(
+    cur, root_id: str, nodes: dict[str, dict[str, Any]], edges: list[dict[str, str]]
+) -> None:
+    queue: list[str] = [root_id]
+    while queue:
+        cur_id = queue.pop()
+        if cur_id in nodes:
+            continue
+        summary = _load_asset_summary(cur, cur_id)
+        if summary is None:
+            continue
+        nodes[cur_id] = summary
+        job_id = summary["job_id"]
+        if not job_id:
+            continue
+        cur.execute(
+            "SELECT input_key, asset_id FROM canyongis_job_inputs WHERE job_id = %s",
+            (job_id,),
+        )
+        for input_key, producer_asset_id in cur.fetchall():
+            edges.append(
+                {"consumer": cur_id, "input_key": input_key, "producer": producer_asset_id}
+            )
+            if producer_asset_id not in nodes:
+                queue.append(producer_asset_id)
+
+
+def _walk_lineage_downward(
+    cur, root_id: str, nodes: dict[str, dict[str, Any]], edges: list[dict[str, str]]
+) -> None:
+    queue: list[str] = [root_id]
+    seen_edges: set[tuple[str, str, str]] = {
+        (e["consumer"], e["input_key"], e["producer"]) for e in edges
+    }
+    while queue:
+        cur_id = queue.pop()
+        if cur_id not in nodes:
+            summary = _load_asset_summary(cur, cur_id)
+            if summary is None:
+                continue
+            nodes[cur_id] = summary
+        cur.execute(
+            """
+            SELECT i.input_key, i.job_id, a.id
+            FROM canyongis_job_inputs i
+            JOIN canyongis_assets a ON a.job_id = i.job_id
+            WHERE i.asset_id = %s
+            """,
+            (cur_id,),
+        )
+        for input_key, _consumer_job_id, consumer_asset_id in cur.fetchall():
+            edge_key = (consumer_asset_id, input_key, cur_id)
+            if edge_key in seen_edges:
+                continue
+            seen_edges.add(edge_key)
+            edges.append(
+                {"consumer": consumer_asset_id, "input_key": input_key, "producer": cur_id}
+            )
+            if consumer_asset_id not in nodes:
+                queue.append(consumer_asset_id)
+
+
+def _require_asset_access(ctx: "WebContext", asset_id: str, user: User) -> None:
+    """Raise 404 if the asset is invisible to ``user``.
+
+    Visible = the asset's owning project has the user as a member, OR the
+    asset is linked into some project the user is a member of.
+    """
+    with ctx.store.conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT 1 FROM canyongis_assets a
+            WHERE a.id = %s AND (
+                EXISTS (
+                    SELECT 1 FROM canyongis_project_memberships m
+                    WHERE m.project_id = a.project_id AND m.user_id = %s
+                )
+                OR EXISTS (
+                    SELECT 1 FROM canyongis_project_asset_links l
+                    JOIN canyongis_project_memberships m ON m.project_id = l.project_id
+                    WHERE l.asset_id = a.id AND m.user_id = %s
+                )
+            )
+            LIMIT 1
+            """,
+            (asset_id, user.id, user.id),
+        )
+        if cur.fetchone() is None:
+            raise HTTPException(status_code=404, detail=f"asset {asset_id} not found")
 
 
 ActiveProjectDep = Depends(_active_project_id)
@@ -872,6 +1059,83 @@ def create_app(
             )
             projects = [{"id": row[0], "name": row[1], "role": row[2]} for row in cur.fetchall()]
         return {"projects": projects}
+
+    @app.get("/api/projects/{project_id}/assets")
+    def list_project_assets(
+        project_id: str,
+        kind: str | None = None,
+        user: User = CurrentUserDep,
+    ) -> dict[str, Any]:
+        """Assets visible in the project: primary rows + linked rows.
+
+        ``kind`` is a prefix match against the typed taxonomy
+        (``raster.score`` matches ``raster.score.ravine.tpi`` etc.). Linked
+        rows are flagged with ``linked: true`` and carry the originating
+        project's name on the row.
+        """
+        _require_project_member(ctx, project_id, user)
+        params: list[Any] = [project_id, project_id]
+        sql = """
+            SELECT a.id, a.project_id, p.name, a.job_id, a.kind, a.path, a.url,
+                   a.bounds_wgs84, a.format, a.media_type, a.size_bytes,
+                   a.metadata, a.created_at, FALSE AS linked, NULL::text AS linked_at
+            FROM canyongis_assets a
+            JOIN canyongis_projects p ON p.id = a.project_id
+            WHERE a.project_id = %s AND a.deleted_at IS NULL
+            UNION ALL
+            SELECT a.id, a.project_id, p.name, a.job_id, a.kind, a.path, a.url,
+                   a.bounds_wgs84, a.format, a.media_type, a.size_bytes,
+                   a.metadata, a.created_at, TRUE AS linked, l.linked_at
+            FROM canyongis_assets a
+            JOIN canyongis_projects p ON p.id = a.project_id
+            JOIN canyongis_project_asset_links l ON l.asset_id = a.id
+            WHERE l.project_id = %s AND a.deleted_at IS NULL
+        """
+        if kind:
+            sql = f"SELECT * FROM ({sql}) sub WHERE kind = %s OR kind LIKE %s"
+            params.extend([kind, f"{kind}.%"])
+        sql += " ORDER BY created_at DESC"
+        with ctx.store.conn.cursor() as cur:
+            cur.execute(sql, params)
+            rows = cur.fetchall()
+        assets = [
+            {
+                "id": row[0],
+                "project_id": row[1],
+                "project_name": row[2],
+                "job_id": row[3],
+                "kind": row[4],
+                "path": row[5],
+                "url": row[6],
+                "bounds_wgs84": row[7],
+                "format": row[8],
+                "media_type": row[9],
+                "size_bytes": row[10],
+                "metadata": row[11] or {},
+                "created_at": row[12],
+                "linked": row[13],
+                "linked_at": row[14],
+            }
+            for row in rows
+        ]
+        return {"assets": assets}
+
+    @app.get("/api/assets/{asset_id}/lineage")
+    def asset_lineage(asset_id: str, user: User = CurrentUserDep) -> dict[str, Any]:
+        """Return the DAG of ancestors and descendants of ``asset_id``.
+
+        Shape matches UI_DESIGN.md §5.1: ``{root, nodes, edges}`` where
+        each edge is ``{consumer, input_key, producer}``. ``nodes`` is a
+        map of asset_id to summary; ``edges`` walks the graph in both
+        directions from the root.
+        """
+        _require_asset_access(ctx, asset_id, user)
+        nodes: dict[str, dict[str, Any]] = {}
+        edges: list[dict[str, str]] = []
+        with ctx.store.conn.cursor() as cur:
+            _walk_lineage_upward(cur, asset_id, nodes, edges)
+            _walk_lineage_downward(cur, asset_id, nodes, edges)
+        return {"root": asset_id, "nodes": nodes, "edges": edges}
 
     @app.get("/api/tools")
     def tools(user: User = CurrentUserDep) -> dict[str, Any]:

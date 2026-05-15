@@ -382,8 +382,23 @@ register(
             InputSpec(key="score", label="Score raster", kind="raster.score", required=False),
         ),
         outputs=(
-            OutputSpec("kml", "Snapped KML", "kml_path", "route", "vector", "kml_url"),
-            OutputSpec("gpkg", "Snapped GeoPackage", "snapped_gpkg_path", "route", "vector"),
+            OutputSpec(
+                "kml",
+                "Snapped KML",
+                "kml_path",
+                "route",
+                "vector",
+                "kml_url",
+                asset_type="vector.kml.route.snapped",
+            ),
+            OutputSpec(
+                "gpkg",
+                "Snapped GeoPackage",
+                "snapped_gpkg_path",
+                "route",
+                "vector",
+                asset_type="vector.gpkg.route.snapped",
+            ),
         ),
         layers=(LayerSpec("route", "Snapped route", "vector-kml", "kml_url", "route"),),
     )
@@ -424,7 +439,13 @@ register(
         ),
         outputs=(
             OutputSpec(
-                "spines", "Ravine spines KML", "spines_path", "route", "vector", "spines_kml_url"
+                "spines",
+                "Ravine spines KML",
+                "spines_path",
+                "route",
+                "vector",
+                "spines_kml_url",
+                asset_type="vector.kml.spine",
             ),
             OutputSpec(
                 "rappel_candidates",
@@ -433,6 +454,7 @@ register(
                 "rappel-candidates",
                 "vector",
                 "rappel_candidates_kml_url",
+                asset_type="vector.kml.rappel_candidates",
             ),
         ),
         layers=(),

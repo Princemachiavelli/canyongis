@@ -36,6 +36,24 @@ export type Job = {
   progress?: string[];
 };
 
+export type Asset = {
+  id: string;
+  project_id: string;
+  project_name: string;
+  job_id: string | null;
+  kind: string;
+  path: string | null;
+  url: string | null;
+  bounds_wgs84: number[] | null;
+  format: string | null;
+  media_type: string | null;
+  size_bytes: number | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+  linked: boolean;
+  linked_at: string | null;
+};
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   if (!(init?.body instanceof FormData) && !headers.has("content-type")) {
@@ -94,6 +112,19 @@ export async function logout(): Promise<void> {
 export async function listProjects(): Promise<Project[]> {
   const data = await request<{ projects: Project[] }>("/api/projects");
   return data.projects;
+}
+
+export async function listProjectAssets(
+  projectId: string,
+  kind?: string,
+): Promise<Asset[]> {
+  const params = new URLSearchParams();
+  if (kind) params.set("kind", kind);
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  const data = await request<{ assets: Asset[] }>(
+    `/api/projects/${projectId}/assets${suffix}`,
+  );
+  return data.assets;
 }
 
 export async function listJobs(): Promise<Job[]> {

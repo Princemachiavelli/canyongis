@@ -78,6 +78,7 @@ register(
                 label=f"{RVT_VIS_LABELS[k]} raster",
                 path_field=f"rvt_{k}_path",
                 role="relief-visualization",
+                asset_type=f"raster.relief.{k}",
             )
             for k in RVT_VIS_KEYS
         ),

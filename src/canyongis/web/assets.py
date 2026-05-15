@@ -137,11 +137,16 @@ def _explicit_output_candidates(
         )
         if item_bounds is not None:
             metadata["bounds_wgs84"] = item_bounds
+        # Prefer the typed taxonomy from OutputSpec.asset_type
+        # (e.g. "raster.score.ravine.tpi") over the broad asset_kind
+        # ("raster" / "vector") which is kept for frontend filtering.
+        typed_kind = item.get("asset_type") if isinstance(item.get("asset_type"), str) else None
+        broad_kind = item.get("asset_kind") if isinstance(item.get("asset_kind"), str) else None
         candidate = _candidate_for_path(
             path_value,
             output_root=output_root,
             require_inside_root=require_inside_root,
-            kind=item.get("asset_kind") if isinstance(item.get("asset_kind"), str) else None,
+            kind=typed_kind or broad_kind,
             url=item.get("url") if isinstance(item.get("url"), str) else None,
             metadata={k: v for k, v in metadata.items() if v is not None},
         )

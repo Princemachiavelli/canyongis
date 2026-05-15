@@ -1,4 +1,4 @@
-import { Fragment, useMemo, useRef, useState } from "react";
+import { Fragment, useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
@@ -38,6 +38,7 @@ import {
   listProjects,
 } from "./api";
 import { MapView } from "./MapView";
+import { AssetLibrary } from "./AssetLibrary";
 import { useAppStore } from "./state";
 import { ToolDialog, type ToolDialogResult } from "./ToolDialog";
 import { descriptorsFromJob, type LayerDescriptor } from "./layers";
@@ -1031,7 +1032,16 @@ function ProjectPicker({
     const id = e.target.value || undefined;
     setActiveProjectId(id);
     qc.invalidateQueries({ queryKey: ["jobs"] });
+    qc.invalidateQueries({ queryKey: ["project-assets"] });
   };
+
+  useEffect(() => {
+    if (!projects || projects.length === 0) return;
+    if (activeProjectId && projects.some((p) => p.id === activeProjectId)) return;
+    setActiveProjectId(projects[0].id);
+    qc.invalidateQueries({ queryKey: ["jobs"] });
+    qc.invalidateQueries({ queryKey: ["project-assets"] });
+  }, [activeProjectId, projects, qc, setActiveProjectId]);
 
   if (!projects || projects.length === 0) return null;
 
@@ -1146,7 +1156,12 @@ function OpacitySliders() {
 
 export function App() {
   const queryClient = useQueryClient();
+  const useAssetUi = useMemo(
+    () => new URLSearchParams(window.location.search).get("ui") === "v2",
+    [],
+  );
   const bounds = useAppStore((state) => state.bounds);
+  const activeProjectId = useAppStore((state) => state.activeProjectId);
   const activeDemJob = useAppStore((state) => state.activeDemJob);
   const selectedKmlTrack = useAppStore((state) => state.selectedKmlTrack);
   const baseLayerId = useAppStore((state) => state.baseLayerId);
@@ -1272,8 +1287,10 @@ export function App() {
     selectedProfileJob,
   ]);
 
-  const invalidate = () =>
+  const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["jobs"] });
+    queryClient.invalidateQueries({ queryKey: ["project-assets"] });
+  };
   const buildMutation = useMutation({
     mutationFn: (payload: { name: string; bounds: Bounds; bufferM: number }) =>
       buildDem(payload.name, payload.bounds, payload.bufferM),
@@ -1313,6 +1330,14 @@ export function App() {
       spec,
       initialInputs: { dem: demJob.id },
       pendingKey: `${demJob.id}:${spec.key}`,
+    });
+  const onRunAssetTool = (
+    spec: JobSpec,
+    initialInputs: Record<string, string | undefined>,
+  ) =>
+    setToolDialog({
+      spec,
+      initialInputs,
     });
   const uploadKmlMutation = useMutation({
     mutationFn: (file: File) => uploadKmlFile(file, activeDemJob?.id),
@@ -1490,6 +1515,14 @@ export function App() {
       </section>
 
       <section className="workspace">
+        {useAssetUi ? (
+          <AssetLibrary
+            projectId={activeProjectId}
+            jobs={jobs}
+            specs={specs}
+            onRunTool={onRunAssetTool}
+          />
+        ) : (
         <aside className="panel">
           <div className="panelHeader">
             <Layers size={16} />
@@ -1711,6 +1744,7 @@ export function App() {
             </div>
           </details>
         </aside>
+        )}
 
         <section className="mapFrame">
           <div className="mapToolDock">
