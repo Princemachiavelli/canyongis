@@ -210,7 +210,15 @@ export type JobSpec = {
   key: string;
   label: string;
   description: string;
+  runner_kind: "dem" | "context" | string;
   visualizations: JobSpecVisualization[];
+  inputs: Array<{
+    key: string;
+    label: string;
+    kind: string;
+    required: boolean;
+    default: string;
+  }>;
   request_defaults: Record<string, unknown>;
   request_schema: Record<string, unknown>;
   available: boolean;

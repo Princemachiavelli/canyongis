@@ -8,7 +8,7 @@ import pytest
 from pydantic import BaseModel
 
 from canyongis.aoi_mosaic import AOIMosaicResult
-from canyongis.web import source_jobs
+from canyongis.web import mcp_server, source_jobs
 from canyongis.web.dem_jobs import DemJobSpec, OutputSpec, get_spec, register
 from canyongis.web.server import Job, create_app
 
@@ -151,6 +151,22 @@ def test_generic_tool_endpoint_reports_missing_dem(
     assert "DEM input is required" in res.json()["detail"]
 
 
+def test_legacy_dem_run_endpoint_rejects_context_tools(
+    live_postgres, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("CANYONGIS_SINGLE_USER", "1")
+    app = create_app(output_root=tmp_path / "out", postgres=live_postgres)
+    client = TestClient(app)
+    dem = _insert_dem_job(
+        app.state.ctx, tmp_path, job_id="explicit-dem", created_at="2026-01-01T00:00:00+00:00"
+    )
+
+    res = client.post(f"/api/jobs/{dem.id}/run/kml-snap", json={"target": "dem"})
+
+    assert res.status_code == 400
+    assert "requires explicit inputs" in res.json()["detail"]
+
+
 def test_build_dem_tool_runs_through_dispatcher(live_postgres, tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("CANYONGIS_SINGLE_USER", "1")
 
@@ -202,5 +218,119 @@ def test_source_tools_are_exposed_in_specs_and_tools(
     tools = client.get("/api/tools").json()["tools"]
 
     assert specs["build-dem"]["outputs"][0]["role"] == "dem"
+    assert specs["tpi-ravine"]["runner_kind"] == "dem"
+    assert specs["build-dem"]["runner_kind"] == "context"
     assert specs["kml-import"]["layers"][0]["kind"] == "vector-kml"
+    assert specs["kml-snap"]["inputs"][0]["key"] == "kml"
+    assert specs["track-profile"]["inputs"][1]["kind"] == "raster.dem"
+    assert specs["ravine-spine"]["outputs"][0]["role"] == "route"
     assert sum(1 for tool in tools if tool["id"] == "build-dem") == 1
+
+
+def _patch_mcp_dispatch(monkeypatch) -> list[dict[str, Any]]:
+    calls: list[dict[str, Any]] = []
+
+    def fake_submit_tool_job(wc, tool_key, body, *, user, project_id, legacy_dem_job_id=None):
+        calls.append(
+            {
+                "wc": wc,
+                "tool_key": tool_key,
+                "body": body,
+                "user": user,
+                "project_id": project_id,
+                "legacy_dem_job_id": legacy_dem_job_id,
+            }
+        )
+        return Job(
+            id=f"{tool_key}-job",
+            kind=tool_key,
+            status="queued",
+            created_at="2026-01-01T00:00:00+00:00",
+            updated_at="2026-01-01T00:00:00+00:00",
+            params=body,
+            project_id=project_id,
+            created_by_user_id=user.id,
+        )
+
+    monkeypatch.setattr(mcp_server, "ctx", lambda: object())
+    monkeypatch.setattr(mcp_server, "_resolve_user", lambda: {"id": "u1", "username": "local"})
+    monkeypatch.setattr(mcp_server, "_project_id", lambda user_info: "p1")
+    monkeypatch.setattr(mcp_server, "submit_tool_job", fake_submit_tool_job)
+    return calls
+
+
+def test_mcp_snap_kml_uses_dispatcher(monkeypatch) -> None:
+    calls = _patch_mcp_dispatch(monkeypatch)
+
+    row = mcp_server.snap_kml.fn(
+        "kml-1",
+        dem_job_id="dem-1",
+        target="dem",
+        search_radius_m=12.0,
+        sample_step_m=3.0,
+    )
+
+    assert row["id"] == "kml-snap-job"
+    assert calls[0]["tool_key"] == "kml-snap"
+    assert calls[0]["body"]["inputs"] == {"kml": "kml-1", "dem": "dem-1"}
+    assert calls[0]["body"]["params"]["search_radius_m"] == 12.0
+
+
+def test_mcp_track_profile_uses_dispatcher(monkeypatch) -> None:
+    calls = _patch_mcp_dispatch(monkeypatch)
+
+    row = mcp_server.track_profile.fn("kml-1", "dem-1", category="approach", track_index=2)
+
+    assert row["id"] == "track-profile-job"
+    assert calls[0]["tool_key"] == "track-profile"
+    assert calls[0]["body"]["inputs"] == {"kml": "kml-1", "dem": "dem-1"}
+    assert calls[0]["body"]["params"]["category"] == "approach"
+    assert calls[0]["body"]["params"]["track_index"] == 2
+
+
+def test_mcp_ravine_spine_uses_dispatcher(monkeypatch) -> None:
+    calls = _patch_mcp_dispatch(monkeypatch)
+
+    row = mcp_server.ravine_spine.fn("tpi-1", threshold_pct=96.0, parent_kml_job_id="kml-1")
+
+    assert row["id"] == "ravine-spine-job"
+    assert calls[0]["tool_key"] == "ravine-spine"
+    assert calls[0]["body"]["inputs"] == {"score": "tpi-1"}
+    assert calls[0]["body"]["params"]["threshold_pct"] == 96.0
+    assert calls[0]["body"]["params"]["parent_kml_job_id"] == "kml-1"
+
+
+def test_legacy_analysis_wrappers_keep_path_ids(live_postgres, tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CANYONGIS_SINGLE_USER", "1")
+    calls: list[dict[str, Any]] = []
+
+    def fake_submit_tool_job(ctx, tool_key, body, *, user, project_id, legacy_dem_job_id=None):
+        calls.append({"tool_key": tool_key, "body": body})
+        return Job(
+            id=f"{tool_key}-job",
+            kind=tool_key,
+            status="queued",
+            created_at="2026-01-01T00:00:00+00:00",
+            updated_at="2026-01-01T00:00:00+00:00",
+            params=body,
+            project_id=project_id,
+            created_by_user_id=user.id,
+        )
+
+    monkeypatch.setattr("canyongis.web.server.submit_tool_job", fake_submit_tool_job)
+    app = create_app(output_root=tmp_path / "out", postgres=live_postgres)
+    client = TestClient(app)
+
+    snap = client.post("/api/jobs/kml-1/snap-kml", json={"target": "dem"})
+    profile = client.post(
+        "/api/jobs/kml-1/track-profile",
+        json={"dem_job_id": "dem-1", "category": "descent", "track_index": 0},
+    )
+    spine = client.post("/api/jobs/tpi-1/ravine-spine", json={"threshold_pct": 95})
+
+    assert snap.status_code == 200, snap.text
+    assert profile.status_code == 200, profile.text
+    assert spine.status_code == 200, spine.text
+    assert calls[0]["body"]["params"]["kml_job_id"] == "kml-1"
+    assert calls[1]["body"]["params"]["kml_job_id"] == "kml-1"
+    assert calls[2]["body"]["params"]["tpi_job_id"] == "tpi-1"

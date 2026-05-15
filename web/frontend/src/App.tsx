@@ -348,54 +348,52 @@ function ProgressTail({
   onDelete?: (job: Job) => void;
   onCancel?: (job: Job) => void;
 }) {
-  if (!["running", "queued", "failed", "canceled"].includes(job.status))
-    return null;
-  const tailCount = job.status === "failed" ? 20 : 4;
-  const tail = (job.progress ?? []).slice(-tailCount);
-  if (tail.length === 0 && !job.error) return null;
-  if (job.status === "failed" || job.status === "canceled") {
-    return (
-      <details className="jobLogDetails">
-        <summary>
-          {job.status === "failed" ? "Error log" : "Canceled job"}
-        </summary>
-        {job.status === "failed" && onDelete && (
-          <button className="danger miniButton" onClick={() => onDelete(job)}>
-            <Trash2 size={12} />
-            Delete failed job
-          </button>
-        )}
-        {job.status === "canceled" && onDelete && (
-          <button className="danger miniButton" onClick={() => onDelete(job)}>
-            <Trash2 size={12} />
-            Delete canceled job
-          </button>
-        )}
-        {tail.length > 0 && (
-          <pre className="progressTail failed">
-            {tail.map((line, i) => (
-              <div key={i}>{line}</div>
-            ))}
-          </pre>
-        )}
-        {job.error && <pre className="jobError">{job.error}</pre>}
-      </details>
-    );
+  const log = job.progress ?? [];
+  const hasLog = log.length > 0 || Boolean(job.error);
+  const canCancel = job.status === "running" || job.status === "queued";
+  const canDelete = job.status === "failed" || job.status === "canceled";
+  if (!hasLog && !canCancel && !canDelete) return null;
+  if (!hasLog && canCancel) {
+    return onCancel ? (
+      <button className="danger miniButton" onClick={() => onCancel(job)}>
+        <Square size={12} />
+        Cancel job
+      </button>
+    ) : null;
   }
+  const summary =
+    job.status === "failed"
+      ? "Error log"
+      : job.status === "canceled"
+        ? "Canceled job log"
+        : "Job log";
   return (
-    <>
-      {onCancel && (
+    <details className="jobLogDetails" open={canCancel || job.status === "failed"}>
+      <summary>
+        {summary}
+        {log.length > 0 && <span className="jobLogCount">{log.length}</span>}
+      </summary>
+      {canCancel && onCancel && (
         <button className="danger miniButton" onClick={() => onCancel(job)}>
           <Square size={12} />
           Cancel job
         </button>
       )}
-      <pre className="progressTail">
-        {tail.map((line, i) => (
-          <div key={i}>{line}</div>
-        ))}
-      </pre>
-    </>
+      {canDelete && onDelete && (
+        <button className="danger miniButton" onClick={() => onDelete(job)}>
+          <Trash2 size={12} />
+          Delete {job.status} job
+        </button>
+      )}
+      {log.length > 0 && (
+        <pre className={`progressTail ${job.status === "failed" ? "failed" : ""}`}>
+          {log.map((line, i) => (
+            <div key={i}>{line}</div>
+          ))}
+        </pre>
+      )}
+      {job.error && <pre className="jobError">{job.error}</pre>}
+    </details>
   );
 }
 
@@ -1193,6 +1191,10 @@ export function App() {
 
   const jobs = jobsQuery.data ?? [];
   const specs = useMemo(() => specsQuery.data ?? [], [specsQuery.data]);
+  const containerSpecs = useMemo(
+    () => specs.filter((spec) => spec.runner_kind === "dem"),
+    [specs],
+  );
   const areas = useMemo(() => groupAreas(jobs, specs), [jobs, specs]);
   const baseKmlJobs = useMemo(
     () => jobs.filter((j) => j.kind === "kml-import" || j.kind === "kml-snap"),
@@ -1551,9 +1553,9 @@ export function App() {
                     DEM: {area.name} ({kmls.length} KML)
                   </summary>
                   <div className="derivedList">
-                    <AreaCard
-                      area={area}
-                      specs={specs}
+                      <AreaCard
+                        area={area}
+                        specs={containerSpecs}
                       onRunJob={onRunJob}
                       pendingKey={pendingRunKey}
                       onDeleteJob={deleteJob}
@@ -1679,6 +1681,11 @@ export function App() {
                       </button>
                     )}
                   </div>
+                  <ProgressTail
+                    job={job}
+                    onDelete={deleteJob}
+                    onCancel={cancelRunningJob}
+                  />
                 </div>
               ))}
             </div>

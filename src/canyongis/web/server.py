@@ -16,18 +16,14 @@ from typing import Annotated, Any, Literal
 
 import geopandas as gpd
 import psycopg
-import rasterio
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field, ValidationError
-from rasterio.warp import transform_bounds
 
-from ..kml_snap import snap_kml_to_raster
-from ..ravine_spine import export_ravine_spines
-from ..track_profile import _rappels_geojson, analyze_track_profile
 from ..validate import parse_kml
+from .analysis_jobs import KmlSnapRequest, RavineSpineRequest, TrackProfileRequest
 from .assets import _is_path_key, extract_asset_candidates, new_asset_id
 from .auth import (
     AuthManager,
@@ -310,36 +306,9 @@ class BuildDemRequest(BaseModel):
     max_products: int = 24
 
 
-class RavineSpineRequest(BaseModel):
-    threshold_pct: float = 94.0
-    hysteresis_ratio: float = 0.75
-    branch_keep_ratio: float = 0.20
-    max_path_slope: float = 0.30
-    parent_kml_job_id: str | None = None
-
-
 class RopewikiImportRequest(BaseModel):
     source: str = Field(..., min_length=1)
     container_dem_job_id: str | None = None
-
-
-class KmlSnapRequest(BaseModel):
-    dem_job_id: str | None = None
-    compare_job_id: str | None = None
-    target: Literal["dem", "tpi", "geomorphon", "curvature"] = "dem"
-    search_radius_m: float = Field(default=30.0, gt=0)
-    sample_step_m: float = Field(default=10.0, gt=0)
-    high_threshold: float | None = None
-
-
-class TrackProfileRequest(BaseModel):
-    dem_job_id: str
-    category: Literal["descent", "approach", "unclassified"] = "descent"
-    track_index: int = Field(default=0, ge=0)
-    sample_step_m: float = Field(default=5.0, gt=0)
-    rappel_window_m: float = Field(default=10.0, gt=0)
-    min_rappel_drop_m: float = Field(default=3.0, gt=0)
-    min_rappel_slope: float = Field(default=0.45, gt=0)
 
 
 class WebContext:
@@ -553,17 +522,6 @@ def _safe_kml_name(value: str) -> str:
     return name
 
 
-def _raster_bounds_wgs84(path: str | Path) -> tuple[float, float, float, float]:
-    with rasterio.open(path) as src:
-        bounds = src.bounds
-        return tuple(
-            float(v)
-            for v in transform_bounds(
-                src.crs, "EPSG:4326", bounds.left, bounds.bottom, bounds.right, bounds.top
-            )
-        )
-
-
 def _gdf_to_geojson(gdf: gpd.GeoDataFrame) -> dict[str, Any]:
     if gdf.empty:
         return {"type": "FeatureCollection", "features": []}
@@ -724,48 +682,6 @@ def _job_response(ctx: WebContext, job: Job) -> dict[str, Any]:
 
 def _kml_import_path(ctx: WebContext, job_id: str, name: str) -> Path:
     return ctx.output_root / "kml" / job_id / _safe_kml_name(name)
-
-
-def _compare_raster_path(compare_job: Job, target: str) -> Path:
-    if not compare_job.result:
-        raise HTTPException(status_code=400, detail="ravine-compare job has no result")
-    if target == "tpi":
-        return Path(str(compare_job.result["b_tpi_path"]))
-    direct_field = {"geomorphon": "a_geomorphon_path", "curvature": "c_curvature_path"}.get(target)
-    if direct_field and compare_job.result.get(direct_field):
-        return Path(str(compare_job.result[direct_field]))
-    out_dir = Path(str(compare_job.result.get("out_dir", "")))
-    if not out_dir:
-        raise HTTPException(
-            status_code=400, detail="ravine-compare job is missing output directory"
-        )
-    if target == "geomorphon":
-        return out_dir / "a_geomorphon.tif"
-    if target == "curvature":
-        return out_dir / "c_curvature.tif"
-    raise HTTPException(status_code=400, detail=f"unsupported snap target: {target}")
-
-
-def _compare_display_high(compare_job: Job, target: str) -> float | None:
-    if not compare_job.result:
-        return None
-    out_dir = Path(str(compare_job.result.get("out_dir", "")))
-    summary_path = out_dir / "summary.json"
-    if not summary_path.exists():
-        return None
-    try:
-        summary = json.loads(summary_path.read_text())
-    except Exception:
-        return None
-    nested_key = {"tpi": "b_tpi", "geomorphon": "a_geomorphon", "curvature": "c_curvature"}.get(
-        target
-    )
-    if nested_key and isinstance(summary.get(nested_key), dict):
-        value = summary[nested_key].get("display_hi")
-        if isinstance(value, int | float):
-            return float(value)
-    value = summary.get("display_hi")
-    return float(value) if isinstance(value, int | float) else None
 
 
 def _path_is_within(path: Path, root: Path) -> bool:
@@ -982,6 +898,7 @@ def create_app(
                     "key": spec.key,
                     "label": spec.label,
                     "description": spec.description,
+                    "runner_kind": spec.runner_kind,
                     "visualizations": [
                         {"key": v.key, "label": v.label, "url_field": v.url_field}
                         for v in spec.visualizations
@@ -1157,6 +1074,12 @@ def create_app(
         user: User = CurrentUserDep,
         project_id: str = ActiveProjectDep,
     ) -> dict[str, Any]:
+        spec = get_spec(job_key)
+        if spec is not None and spec.runner_kind != "dem":
+            raise HTTPException(
+                status_code=400,
+                detail=f"{job_key} requires explicit inputs; use /api/jobs/{job_key}",
+            )
         try:
             job = submit_tool_job(
                 ctx,
@@ -1190,42 +1113,19 @@ def create_app(
         user: User = CurrentUserDep,
         project_id: str = ActiveProjectDep,
     ) -> dict[str, Any]:
-        tpi_job = ctx.job_or_404(tpi_job_id)
-        if tpi_job.status != "succeeded" or not tpi_job.result:
-            raise HTTPException(status_code=400, detail="upstream TPI job has not succeeded")
-        if "b_tpi_path" not in tpi_job.result or "dem_path" not in tpi_job.result:
-            raise HTTPException(
-                status_code=400,
-                detail="upstream job has no b_tpi_path / dem_path; run a TPI job first",
+        try:
+            job = submit_tool_job(
+                ctx,
+                "ravine-spine",
+                {
+                    "inputs": {"score": tpi_job_id},
+                    "params": {**req.model_dump(), "tpi_job_id": tpi_job_id},
+                },
+                user=user,
+                project_id=project_id,
             )
-        if req.parent_kml_job_id:
-            parent_kml_job = ctx.job_or_404(req.parent_kml_job_id)
-            if parent_kml_job.status != "succeeded" or not parent_kml_job.result:
-                raise HTTPException(status_code=400, detail="parent KML job has not succeeded")
-        params = {"tpi_job_id": tpi_job_id, **req.model_dump()}
-
-        def run(progress_cb) -> dict[str, Any]:
-            out_dir = ctx.output_root / "jobs" / f"ravine-spine-{uuid.uuid4().hex[:8]}"
-            progress_cb(f"ravine-spine → {out_dir}")
-            result = export_ravine_spines(
-                tpi_job.result["b_tpi_path"],
-                tpi_job.result["dem_path"],
-                out_dir,
-                score_closing_m=5.0,
-                auto_threshold="fixed",
-                threshold_pct=req.threshold_pct,
-                hysteresis_ratio=req.hysteresis_ratio,
-                branch_keep_ratio=req.branch_keep_ratio,
-                max_path_slope=req.max_path_slope,
-            )
-            return {
-                **asdict(result),
-                "bounds_wgs84": tpi_job.result.get("bounds_wgs84"),
-                "parent_kml_job_id": req.parent_kml_job_id,
-                **_ravine_spine_layers(ctx, asdict(result)),
-            }
-
-        job = ctx.submit("ravine-spine", params, run, user=user, project_id=project_id)
+        except DispatchError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
         return asdict(job)
 
     @app.post("/api/jobs/{dem_job_id}/trim-runs/{job_key}")
@@ -1272,107 +1172,19 @@ def create_app(
         user: User = CurrentUserDep,
         project_id: str = ActiveProjectDep,
     ) -> dict[str, Any]:
-        kml_job = ctx.job_or_404(kml_job_id)
-        if kml_job.status != "succeeded" or not kml_job.result:
-            raise HTTPException(status_code=400, detail="KML import job has not succeeded")
-        kml_path = Path(str(kml_job.result["kml_path"]))
-
-        dem_path: Path | None = None
-        raster_path: Path
-        snap_mode = "min" if req.target == "dem" else "max"
-        high_threshold = req.high_threshold
-        if req.target == "dem":
-            if not req.dem_job_id:
-                raise HTTPException(
-                    status_code=400, detail="dem_job_id is required for DEM snapping"
-                )
-            dem_job = ctx.job_or_404(req.dem_job_id)
-            if dem_job.status != "succeeded" or not dem_job.result:
-                raise HTTPException(status_code=400, detail="DEM job has not succeeded")
-            dem_path = Path(str(dem_job.result["dem_path"]))
-            raster_path = dem_path
-        else:
-            if not req.compare_job_id:
-                raise HTTPException(
-                    status_code=400, detail="compare_job_id is required for score-raster snapping"
-                )
-            compare_job = ctx.job_or_404(req.compare_job_id)
-            if compare_job.status != "succeeded" or not compare_job.result:
-                raise HTTPException(status_code=400, detail="ravine-compare job has not succeeded")
-            dem_path = Path(str(compare_job.result["dem_path"]))
-            raster_path = _compare_raster_path(compare_job, req.target)
-            if high_threshold is None:
-                high_threshold = _compare_display_high(compare_job, req.target)
-        if not raster_path.exists():
-            raise HTTPException(
-                status_code=400, detail=f"snap raster does not exist: {raster_path}"
-            )
-
-        params = {"kml_job_id": kml_job_id, **req.model_dump()}
-
-        def run(progress_cb) -> dict[str, Any]:
-            out_dir = ctx.output_root / "jobs" / f"kml-snap-{uuid.uuid4().hex[:8]}"
-            kml_name = Path(str(kml_job.result.get("name") or kml_path.name)).stem
-            name = f"{kml_name}-{req.target}-snapped.kml"
-            progress_cb(
-                f"kml-snap → {out_dir} "
-                f"(target={req.target}, radius={req.search_radius_m:g}m, "
-                f"high_threshold={high_threshold})"
-            )
-            result = snap_kml_to_raster(
-                kml_path,
-                raster_path,
-                out_dir,
-                snap_mode=snap_mode,
-                search_radius_m=req.search_radius_m,
-                sample_step_m=req.sample_step_m,
-                high_threshold=high_threshold,
-                output_name=_safe_kml_name(name),
-            )
-            snapped_gdf = gpd.read_file(result.snapped_gpkg_path)
-            geom_type = snapped_gdf.geometry.geom_type
-            line_gdf = snapped_gdf[geom_type.isin(["LineString", "MultiLineString"])].reset_index(
-                drop=True
-            )
-            point_gdf = snapped_gdf[geom_type.isin(["Point", "MultiPoint"])].reset_index(drop=True)
-            category = line_gdf["category"] if "category" in line_gdf.columns else None
-            descent = (
-                line_gdf[category == "descent"].reset_index(drop=True)
-                if category is not None
-                else line_gdf.iloc[0:0]
-            )
-            approach = (
-                line_gdf[category == "approach"].reset_index(drop=True)
-                if category is not None
-                else line_gdf.iloc[0:0]
-            )
-            unclassified = (
-                line_gdf[~category.isin(["descent", "approach"])].reset_index(drop=True)
-                if category is not None
-                else line_gdf
-            )
-            bounds = (
-                _raster_bounds_wgs84(dem_path) if dem_path else _raster_bounds_wgs84(raster_path)
-            )
-            return {
-                **asdict(result),
-                "name": Path(result.snapped_kml_path).name,
-                "kml_path": result.snapped_kml_path,
-                "kml_url": ctx.output_url(result.snapped_kml_path),
-                "bounds_wgs84": bounds,
-                "descent_geojson": _gdf_to_geojson(descent),
-                "approach_geojson": _gdf_to_geojson(approach),
-                "unclassified_geojson": _gdf_to_geojson(unclassified),
-                "points_geojson": _gdf_to_geojson(point_gdf),
-                "source": {
-                    "kind": "kml-snap",
-                    "input_kml_job_id": kml_job_id,
-                    "target": req.target,
-                    "raster_path": str(raster_path),
+        try:
+            job = submit_tool_job(
+                ctx,
+                "kml-snap",
+                {
+                    "inputs": {"kml": kml_job_id},
+                    "params": {**req.model_dump(), "kml_job_id": kml_job_id},
                 },
-            }
-
-        job = ctx.submit("kml-snap", params, run, user=user, project_id=project_id)
+                user=user,
+                project_id=project_id,
+            )
+        except DispatchError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
         return asdict(job)
 
     @app.post("/api/jobs/{kml_job_id}/track-profile")
@@ -1382,42 +1194,19 @@ def create_app(
         user: User = CurrentUserDep,
         project_id: str = ActiveProjectDep,
     ) -> dict[str, Any]:
-        kml_job = ctx.job_or_404(kml_job_id)
-        if kml_job.status != "succeeded" or not kml_job.result:
-            raise HTTPException(status_code=400, detail="KML job has not succeeded")
-        dem_job = ctx.job_or_404(req.dem_job_id)
-        if dem_job.status != "succeeded" or not dem_job.result:
-            raise HTTPException(status_code=400, detail="DEM job has not succeeded")
-
-        kml_path = Path(str(kml_job.result["kml_path"]))
-        dem_path = Path(str(dem_job.result["dem_path"]))
-        params = {"kml_job_id": kml_job_id, **req.model_dump()}
-
-        def run(progress_cb) -> dict[str, Any]:
-            progress_cb(
-                f"track-profile {req.category}[{req.track_index}] "
-                f"step={req.sample_step_m:g}m window={req.rappel_window_m:g}m"
+        try:
+            job = submit_tool_job(
+                ctx,
+                "track-profile",
+                {
+                    "inputs": {"kml": kml_job_id},
+                    "params": {**req.model_dump(), "kml_job_id": kml_job_id},
+                },
+                user=user,
+                project_id=project_id,
             )
-            result = analyze_track_profile(
-                kml_path,
-                dem_path,
-                category=req.category,
-                track_index=req.track_index,
-                sample_step_m=req.sample_step_m,
-                rappel_window_m=req.rappel_window_m,
-                min_rappel_drop_m=req.min_rappel_drop_m,
-                min_rappel_slope=req.min_rappel_slope,
-            )
-            payload = asdict(result)
-            payload["rappel_candidates_geojson"] = _rappels_geojson(result.rappel_candidates)
-            payload["source"] = {
-                "kind": "track-profile",
-                "kml_job_id": kml_job_id,
-                "dem_job_id": req.dem_job_id,
-            }
-            return payload
-
-        job = ctx.submit("track-profile", params, run, user=user, project_id=project_id)
+        except DispatchError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
         return asdict(job)
 
     if ctx.frontend_dist and ctx.frontend_dist.exists():

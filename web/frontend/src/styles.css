@@ -751,7 +751,19 @@ button.miniButton {
 .jobLogDetails summary {
     cursor: pointer;
     font-size: 11px;
+    color: #46535b;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+}
+
+.failed .jobLogDetails summary {
     color: #8a3434;
+}
+
+.jobLogCount {
+    color: #65737c;
+    font-variant-numeric: tabular-nums;
 }
 
 .jobLogDetails .miniButton {
