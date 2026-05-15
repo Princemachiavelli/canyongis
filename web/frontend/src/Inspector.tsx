@@ -1,13 +1,17 @@
-import { useMemo } from "react";
-import { useQuery } from "@tanstack/react-query";
+import { useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { GitBranch, Play, X } from "lucide-react";
 import {
   getAssetLineage,
+  linkProjectAsset,
+  listProjects,
   listProjectAssets,
+  unlinkProjectAsset,
   type Asset,
   type AssetLineageNode,
   type Job,
   type JobSpec,
+  type Project,
 } from "./api";
 import { assetName, compatibleSpecs } from "./assetUtils";
 import { ToolForm, type ToolDialogResult } from "./ToolDialog";
@@ -86,17 +90,41 @@ function LineageView({ assetId }: { assetId: string }) {
 }
 
 function AssetInspector({
+  projectId,
   asset,
   job,
   specs,
   onOpenTool,
 }: {
+  projectId?: string;
   asset: Asset;
   job?: Job;
   specs: JobSpec[];
   onOpenTool: InspectorProps["onOpenTool"];
 }) {
+  const queryClient = useQueryClient();
+  const [targetProjectId, setTargetProjectId] = useState("");
+  const projectsQuery = useQuery<Project[]>({
+    queryKey: ["projects"],
+    queryFn: listProjects,
+    staleTime: 60_000,
+  });
+  const linkMutation = useMutation({
+    mutationFn: () => {
+      if (!targetProjectId) throw new Error("Choose a target project");
+      return linkProjectAsset(targetProjectId, asset.id);
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["project-assets"] }),
+  });
+  const unlinkMutation = useMutation({
+    mutationFn: () => {
+      if (!projectId) throw new Error("No active project");
+      return unlinkProjectAsset(projectId, asset.id);
+    },
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["project-assets"] }),
+  });
   const tools = useMemo(() => compatibleSpecs(asset, specs), [asset, specs]);
+  const linkTargets = (projectsQuery.data ?? []).filter((project) => project.id !== asset.project_id);
   return (
     <div className="inspectorBody">
       <section className="inspectorSection">
@@ -131,6 +159,45 @@ function AssetInspector({
               </button>
             ))}
           </div>
+        )}
+      </section>
+
+      <section className="inspectorSection">
+        <h2>Sharing</h2>
+        {linkTargets.length === 0 ? (
+          <div className="empty">No other project is available.</div>
+        ) : (
+          <div className="assetLinkControls">
+            <select
+              value={targetProjectId}
+              onChange={(event) => setTargetProjectId(event.target.value)}
+            >
+              <option value="">Link to project...</option>
+              {linkTargets.map((project) => (
+                <option key={project.id} value={project.id}>
+                  {project.name}
+                </option>
+              ))}
+            </select>
+            <button
+              disabled={!targetProjectId || linkMutation.isPending}
+              onClick={() => linkMutation.mutate()}
+            >
+              Link
+            </button>
+          </div>
+        )}
+        {asset.linked && projectId && (
+          <button
+            className="danger"
+            disabled={unlinkMutation.isPending}
+            onClick={() => unlinkMutation.mutate()}
+          >
+            Unlink from this project
+          </button>
+        )}
+        {(linkMutation.error || unlinkMutation.error) && (
+          <pre className="error">{String(linkMutation.error ?? unlinkMutation.error)}</pre>
         )}
       </section>
 
@@ -196,7 +263,13 @@ export function Inspector({
           onRun={(result) => onRunTool(tool, result)}
         />
       ) : selectedAsset ? (
-        <AssetInspector asset={selectedAsset} job={job} specs={specs} onOpenTool={onOpenTool} />
+        <AssetInspector
+          projectId={projectId}
+          asset={selectedAsset}
+          job={job}
+          specs={specs}
+          onOpenTool={onOpenTool}
+        />
       ) : (
         <div className="inspectorEmpty">
           <strong>Select an asset or pick a tool.</strong>

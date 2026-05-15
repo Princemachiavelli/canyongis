@@ -987,6 +987,10 @@ class LoginRequest(BaseModel):
     password: str = Field(..., min_length=1)
 
 
+class AssetLinkRequest(BaseModel):
+    asset_id: str = Field(..., min_length=1)
+
+
 def create_app(
     *,
     output_root: str | Path = "runs/web",
@@ -1119,6 +1123,51 @@ def create_app(
             for row in rows
         ]
         return {"assets": assets}
+
+    @app.post("/api/projects/{project_id}/assets/link")
+    def link_project_asset(
+        project_id: str,
+        req: AssetLinkRequest,
+        user: User = CurrentUserDep,
+    ) -> dict[str, Any]:
+        _require_project_member(ctx, project_id, user)
+        _require_asset_access(ctx, req.asset_id, user)
+        with ctx.store.conn.cursor() as cur:
+            cur.execute(
+                "SELECT project_id FROM canyongis_assets WHERE id = %s AND deleted_at IS NULL",
+                (req.asset_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail=f"asset {req.asset_id} not found")
+            if row[0] == project_id:
+                return {"linked": False, "asset_id": req.asset_id, "project_id": project_id}
+            cur.execute(
+                """
+                INSERT INTO canyongis_project_asset_links
+                    (project_id, asset_id, linked_by_user_id)
+                VALUES (%s, %s, %s)
+                ON CONFLICT DO NOTHING
+                """,
+                (project_id, req.asset_id, user.id),
+            )
+            linked = (cur.rowcount or 0) > 0
+        return {"linked": linked, "asset_id": req.asset_id, "project_id": project_id}
+
+    @app.delete("/api/projects/{project_id}/assets/{asset_id}")
+    def unlink_project_asset(
+        project_id: str,
+        asset_id: str,
+        user: User = CurrentUserDep,
+    ) -> dict[str, Any]:
+        _require_project_member(ctx, project_id, user)
+        with ctx.store.conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM canyongis_project_asset_links WHERE project_id = %s AND asset_id = %s",
+                (project_id, asset_id),
+            )
+            deleted = (cur.rowcount or 0) > 0
+        return {"deleted": deleted, "asset_id": asset_id, "project_id": project_id}
 
     @app.get("/api/assets/{asset_id}/lineage")
     def asset_lineage(asset_id: str, user: User = CurrentUserDep) -> dict[str, Any]:

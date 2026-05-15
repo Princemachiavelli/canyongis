@@ -152,6 +152,25 @@ export async function getAssetLineage(assetId: string): Promise<AssetLineage> {
   return request<AssetLineage>(`/api/assets/${assetId}/lineage`);
 }
 
+export async function linkProjectAsset(
+  projectId: string,
+  assetId: string,
+): Promise<{ linked: boolean; asset_id: string; project_id: string }> {
+  return request(`/api/projects/${projectId}/assets/link`, {
+    method: "POST",
+    body: JSON.stringify({ asset_id: assetId }),
+  });
+}
+
+export async function unlinkProjectAsset(
+  projectId: string,
+  assetId: string,
+): Promise<{ deleted: boolean; asset_id: string; project_id: string }> {
+  return request(`/api/projects/${projectId}/assets/${assetId}`, {
+    method: "DELETE",
+  });
+}
+
 export async function listJobs(): Promise<Job[]> {
   const data = await request<{ jobs: Job[] }>("/api/jobs");
   return data.jobs;

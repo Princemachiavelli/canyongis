@@ -147,6 +147,23 @@ def _project_id(ctx) -> str:
     return ctx.store.ensure_personal_project(user)
 
 
+def _create_project(ctx, name: str) -> str:
+    user = ctx.auth.local_user()
+    assert user is not None
+    project_id = f"project-{name}"
+    with ctx.store.conn.cursor() as cur:
+        cur.execute(
+            "INSERT INTO canyongis_projects (id, name, created_by_user_id) VALUES (%s, %s, %s)",
+            (project_id, name, user.id),
+        )
+        cur.execute(
+            "INSERT INTO canyongis_project_memberships (project_id, user_id, role) "
+            "VALUES (%s, %s, 'owner')",
+            (project_id, user.id),
+        )
+    return project_id
+
+
 def test_migration_creates_asset_graph_tables(live_postgres) -> None:
     from canyongis.web.db import apply_migrations
 
@@ -302,3 +319,35 @@ def test_asset_lineage_returns_full_chain(
     assert "raster.dem" in kinds
     input_keys = {edge["input_key"] for edge in lineage["edges"]}
     assert {"dem", "score"}.issubset(input_keys)
+
+
+def test_project_asset_link_and_unlink(live_postgres, tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CANYONGIS_SINGLE_USER", "1")
+    app = create_app(output_root=tmp_path / "out", postgres=live_postgres)
+    client = TestClient(app)
+    ctx = app.state.ctx
+    source_project_id = _project_id(ctx)
+    target_project_id = _create_project(ctx, "linked")
+    dem = _insert_dem_job(ctx, job_id="dem-link")
+
+    with ctx.store.conn.cursor() as cur:
+        cur.execute("SELECT id FROM canyongis_assets WHERE job_id = %s", (dem.id,))
+        asset_id = cur.fetchone()[0]
+
+    link = client.post(
+        f"/api/projects/{target_project_id}/assets/link",
+        json={"asset_id": asset_id},
+    )
+    assert link.status_code == 200, link.text
+    assert link.json()["linked"] is True
+
+    source_assets = client.get(f"/api/projects/{source_project_id}/assets").json()["assets"]
+    target_assets = client.get(f"/api/projects/{target_project_id}/assets").json()["assets"]
+    assert any(a["id"] == asset_id and not a["linked"] for a in source_assets)
+    assert any(a["id"] == asset_id and a["linked"] for a in target_assets)
+
+    unlink = client.delete(f"/api/projects/{target_project_id}/assets/{asset_id}")
+    assert unlink.status_code == 200, unlink.text
+    assert unlink.json()["deleted"] is True
+    target_assets = client.get(f"/api/projects/{target_project_id}/assets").json()["assets"]
+    assert all(a["id"] != asset_id for a in target_assets)

@@ -988,9 +988,24 @@ button.miniButton {
 }
 
 .inspectorTools,
-.lineageList {
+.lineageList,
+.assetLinkControls {
     display: grid;
     gap: 6px;
+}
+
+.assetLinkControls {
+    grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.assetLinkControls select {
+    min-width: 0;
+    border: 1px solid #b9c2c8;
+    border-radius: 6px;
+    padding: 0 8px;
+    color: #172026;
+    background: #ffffff;
+    font: inherit;
 }
 
 .lineageEdge {
