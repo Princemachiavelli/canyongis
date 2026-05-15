@@ -1386,3 +1386,84 @@ button.miniButton {
     border-top: 1px solid #eef2f4;
     padding-top: 6px;
 }
+
+.pipelineOverlay {
+    position: fixed;
+    inset: 58px 18px 18px;
+    z-index: 1200;
+    display: grid;
+    grid-template-rows: auto minmax(0, 1fr);
+    gap: 12px;
+    border: 1px solid #b9c2c8;
+    border-radius: 12px;
+    padding: 14px;
+    background: rgba(248, 250, 251, 0.97);
+    box-shadow: 0 18px 60px rgba(15, 23, 42, 0.24);
+}
+
+.pipelineHead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.pipelineHead > div {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.pipelineHead span {
+    color: #65737c;
+    font-size: 12px;
+}
+
+.pipelineCanvas {
+    min-height: 0;
+    overflow: auto;
+    display: grid;
+    grid-auto-rows: max-content;
+    align-content: start;
+    gap: 12px 18px;
+    padding: 4px;
+}
+
+.pipelineNode {
+    min-height: 0;
+    justify-content: stretch;
+    display: grid;
+    gap: 4px;
+    border: 1px solid #d6dde1;
+    border-left: 4px solid #0c6b58;
+    border-radius: 8px;
+    padding: 9px;
+    background: #ffffff;
+    text-align: left;
+}
+
+.pipelineNode strong,
+.pipelineNode span,
+.pipelineNode code {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.pipelineNode span,
+.pipelineNode code {
+    color: #65737c;
+    font-size: 11px;
+}
+
+.pipelineInputs {
+    display: grid;
+    gap: 3px;
+    border-top: 1px solid #eef2f4;
+    padding-top: 5px;
+}
+
+.pipelineInputs span {
+    color: #46535b;
+}

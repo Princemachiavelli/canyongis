@@ -4,6 +4,7 @@ import {
   Activity,
   ExternalLink,
   Eye,
+  GitBranch,
   Layers,
   LineChart,
   LocateFixed,
@@ -40,6 +41,7 @@ import {
 import { MapView } from "./MapView";
 import { AssetLibrary } from "./AssetLibrary";
 import { Inspector, type InspectorTool } from "./Inspector";
+import { PipelineView } from "./PipelineView";
 import { useAppStore } from "./state";
 import { ToolDialog, type ToolDialogResult } from "./ToolDialog";
 import { descriptorsFromJob, type LayerDescriptor } from "./layers";
@@ -1308,6 +1310,7 @@ export function App() {
   const [toolDialog, setToolDialog] = useState<ToolDialogContext | undefined>();
   const [selectedAssetId, setSelectedAssetId] = useState<string | undefined>();
   const [inspectorTool, setInspectorTool] = useState<InspectorTool | undefined>();
+  const [pipelineOpen, setPipelineOpen] = useState(false);
   const runToolMutation = useMutation({
     mutationFn: (payload: {
       spec: JobSpec;
@@ -1528,6 +1531,12 @@ export function App() {
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <ProjectPicker queryClient={queryClient} />
+          {useAssetUi && (
+            <button onClick={() => setPipelineOpen(true)}>
+              <GitBranch size={16} />
+              Pipeline
+            </button>
+          )}
           <UserMenu queryClient={queryClient} />
           <button onClick={() => jobsQuery.refetch()}>
             <RefreshCw size={16} />
@@ -2048,6 +2057,17 @@ export function App() {
               { onSuccess: () => setToolDialog(undefined) },
             )
           }
+        />
+      )}
+      {useAssetUi && pipelineOpen && (
+        <PipelineView
+          projectId={activeProjectId}
+          onClose={() => setPipelineOpen(false)}
+          onSelectAsset={(assetId) => {
+            setSelectedAssetId(assetId);
+            setInspectorTool(undefined);
+            setPipelineOpen(false);
+          }}
         />
       )}
     </main>

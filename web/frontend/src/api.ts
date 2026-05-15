@@ -75,6 +75,21 @@ export type AssetLineage = {
   edges: AssetLineageEdge[];
 };
 
+export type ProjectPipelineAsset = {
+  id: string;
+  job_id: string | null;
+  kind: string;
+  path: string | null;
+  url: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+};
+
+export type ProjectPipeline = {
+  assets: ProjectPipelineAsset[];
+  edges: AssetLineageEdge[];
+};
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   if (!(init?.body instanceof FormData) && !headers.has("content-type")) {
@@ -169,6 +184,10 @@ export async function unlinkProjectAsset(
   return request(`/api/projects/${projectId}/assets/${assetId}`, {
     method: "DELETE",
   });
+}
+
+export async function getProjectPipeline(projectId: string): Promise<ProjectPipeline> {
+  return request<ProjectPipeline>(`/api/projects/${projectId}/pipeline`);
 }
 
 export async function listJobs(): Promise<Job[]> {

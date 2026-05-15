@@ -1169,6 +1169,64 @@ def create_app(
             deleted = (cur.rowcount or 0) > 0
         return {"deleted": deleted, "asset_id": asset_id, "project_id": project_id}
 
+    @app.get("/api/projects/{project_id}/pipeline")
+    def project_pipeline(project_id: str, user: User = CurrentUserDep) -> dict[str, Any]:
+        _require_project_member(ctx, project_id, user)
+        with ctx.store.conn.cursor() as cur:
+            cur.execute(
+                """
+                WITH visible_assets AS (
+                    SELECT a.id, a.job_id, a.kind, a.path, a.url, a.metadata, a.created_at
+                    FROM canyongis_assets a
+                    WHERE a.project_id = %s AND a.deleted_at IS NULL
+                    UNION
+                    SELECT a.id, a.job_id, a.kind, a.path, a.url, a.metadata, a.created_at
+                    FROM canyongis_assets a
+                    JOIN canyongis_project_asset_links l ON l.asset_id = a.id
+                    WHERE l.project_id = %s AND a.deleted_at IS NULL
+                )
+                SELECT id, job_id, kind, path, url, metadata, created_at
+                FROM visible_assets
+                ORDER BY created_at
+                """,
+                (project_id, project_id),
+            )
+            assets = [
+                {
+                    "id": row[0],
+                    "job_id": row[1],
+                    "kind": row[2],
+                    "path": row[3],
+                    "url": row[4],
+                    "metadata": row[5] or {},
+                    "created_at": row[6],
+                }
+                for row in cur.fetchall()
+            ]
+            cur.execute(
+                """
+                WITH visible_assets AS (
+                    SELECT a.id, a.job_id FROM canyongis_assets a
+                    WHERE a.project_id = %s AND a.deleted_at IS NULL
+                    UNION
+                    SELECT a.id, a.job_id FROM canyongis_assets a
+                    JOIN canyongis_project_asset_links l ON l.asset_id = a.id
+                    WHERE l.project_id = %s AND a.deleted_at IS NULL
+                )
+                SELECT DISTINCT consumer.id, i.input_key, producer.id
+                FROM canyongis_job_inputs i
+                JOIN visible_assets producer ON producer.id = i.asset_id
+                JOIN visible_assets consumer ON consumer.job_id = i.job_id
+                ORDER BY consumer.id, i.input_key, producer.id
+                """,
+                (project_id, project_id),
+            )
+            edges = [
+                {"consumer": row[0], "input_key": row[1], "producer": row[2]}
+                for row in cur.fetchall()
+            ]
+        return {"assets": assets, "edges": edges}
+
     @app.get("/api/assets/{asset_id}/lineage")
     def asset_lineage(asset_id: str, user: User = CurrentUserDep) -> dict[str, Any]:
         """Return the DAG of ancestors and descendants of ``asset_id``.

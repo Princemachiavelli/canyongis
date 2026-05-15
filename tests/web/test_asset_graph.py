@@ -351,3 +351,27 @@ def test_project_asset_link_and_unlink(live_postgres, tmp_path: Path, monkeypatc
     assert unlink.json()["deleted"] is True
     target_assets = client.get(f"/api/projects/{target_project_id}/assets").json()["assets"]
     assert all(a["id"] != asset_id for a in target_assets)
+
+
+def test_project_pipeline_returns_visible_asset_dag(
+    live_postgres, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("CANYONGIS_SINGLE_USER", "1")
+    app = create_app(output_root=tmp_path / "out", postgres=live_postgres)
+    client = TestClient(app)
+    ctx = app.state.ctx
+    project_id = _project_id(ctx)
+    dem = _insert_dem_job(ctx, job_id="dem-pipeline")
+
+    producer = client.post(
+        f"/api/jobs/{PRODUCER_KEY}",
+        json={"inputs": {"dem": dem.id}, "params": {"tag": "pipe"}},
+    )
+    producer_row = _wait_for_job(client, producer.json()["id"])
+    assert producer_row["status"] == "succeeded", producer_row.get("error")
+
+    pipeline = client.get(f"/api/projects/{project_id}/pipeline").json()
+    kinds = {asset["kind"] for asset in pipeline["assets"]}
+    assert "raster.dem" in kinds
+    assert "raster.score.ravine.tpi" in kinds
+    assert any(edge["input_key"] == "dem" for edge in pipeline["edges"])
