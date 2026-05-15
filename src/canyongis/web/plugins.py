@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from . import source_jobs as _source_jobs  # noqa: F401
 from .dem_jobs import (
     DemJobSpec,
     InputSpec,

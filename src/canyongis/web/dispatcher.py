@@ -97,6 +97,24 @@ def submit_tool_job(
     except ValidationError as exc:
         raise DispatchError(400, exc.errors()) from exc
 
+    if spec.runner_kind == "context":
+        params = req.model_dump()
+
+        def run_context(progress_cb, job_id: str) -> dict[str, Any]:
+            result = spec.runner(
+                ctx=ctx,
+                req=req,
+                inputs=inputs,
+                progress_cb=progress_cb,
+                output_url=ctx.output_url,
+                job_id=job_id,
+            )
+            return normalize_result(spec, result)
+
+        return ctx.submit(
+            spec.key, params, run_context, user=user, project_id=project_id, include_job_id=True
+        )
+
     dem_job = resolve_dem_job(ctx, inputs, project_id)
     dem_path = dem_job.result["dem_path"]
     params = {"dem_job_id": dem_job.id, "job_key": spec.key, **req.model_dump()}

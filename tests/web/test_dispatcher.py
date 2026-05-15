@@ -7,6 +7,8 @@ from typing import Any
 import pytest
 from pydantic import BaseModel
 
+from canyongis.aoi_mosaic import AOIMosaicResult
+from canyongis.web import source_jobs
 from canyongis.web.dem_jobs import DemJobSpec, OutputSpec, get_spec, register
 from canyongis.web.server import Job, create_app
 
@@ -147,3 +149,58 @@ def test_generic_tool_endpoint_reports_missing_dem(
 
     assert res.status_code == 400
     assert "DEM input is required" in res.json()["detail"]
+
+
+def test_build_dem_tool_runs_through_dispatcher(live_postgres, tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CANYONGIS_SINGLE_USER", "1")
+
+    def fake_build(bounds, out_path, *, cache_dir, buffer_m, max_products):
+        path = Path(out_path)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"fake-dem")
+        return AOIMosaicResult(
+            dem_path=str(path),
+            source_paths=[],
+            bounds_wgs84=bounds,
+            crs="EPSG:32612",
+            pixel_size_m=1.0,
+            width=4,
+            height=4,
+        )
+
+    monkeypatch.setattr(source_jobs, "build_aoi_dem_mosaic", fake_build)
+    app = create_app(output_root=tmp_path / "out", postgres=live_postgres)
+    client = TestClient(app)
+
+    res = client.post(
+        "/api/jobs/build-dem",
+        json={
+            "params": {
+                "name": "dispatcher-aoi",
+                "bounds": {"west": -113.0, "south": 37.0, "east": -112.0, "north": 38.0},
+                "buffer_m": 0,
+            }
+        },
+    )
+
+    assert res.status_code == 200, res.text
+    row = _wait_for_job(client, res.json()["id"])
+    assert row["status"] == "succeeded", row.get("error")
+    assert row["kind"] == "build-dem"
+    assert row["result"]["outputs"][0]["role"] == "dem"
+    assert row["result"]["layers"][0]["kind"] == "footprint"
+
+
+def test_source_tools_are_exposed_in_specs_and_tools(
+    live_postgres, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("CANYONGIS_SINGLE_USER", "1")
+    app = create_app(output_root=tmp_path / "out", postgres=live_postgres)
+    client = TestClient(app)
+
+    specs = {spec["key"]: spec for spec in client.get("/api/job-specs").json()["specs"]}
+    tools = client.get("/api/tools").json()["tools"]
+
+    assert specs["build-dem"]["outputs"][0]["role"] == "dem"
+    assert specs["kml-import"]["layers"][0]["kind"] == "vector-kml"
+    assert sum(1 for tool in tools if tool["id"] == "build-dem") == 1

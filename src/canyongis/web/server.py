@@ -24,14 +24,6 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field, ValidationError
 from rasterio.warp import transform_bounds
 
-from ..aoi_mosaic import build_aoi_dem_mosaic
-from ..ingest import (
-    ROPEWIKI_PAGE_URL,
-    _download_file,
-    _find_kml_file_title,
-    _get_kml_download_url,
-    parse_ropewiki_ref,
-)
 from ..kml_snap import snap_kml_to_raster
 from ..ravine_spine import export_ravine_spines
 from ..track_profile import _rappels_geojson, analyze_track_profile
@@ -969,13 +961,13 @@ def create_app(
     @app.get("/api/tools")
     def tools(user: User = CurrentUserDep) -> dict[str, Any]:
         builtins = [
-            {"id": "build-dem", "label": "Build DEM mosaic"},
             {"id": "ravine-spine", "label": "Ravine spine from TPI"},
             {"id": "kml-snap", "label": "Snap KML to terrain"},
             {"id": "track-profile", "label": "Track elevation profile"},
         ]
         registered = [{"id": s.key, "label": s.label} for s in list_specs()]
-        return {"tools": [*builtins, *registered]}
+        seen = {tool["id"] for tool in registered}
+        return {"tools": [*registered, *(tool for tool in builtins if tool["id"] not in seen)]}
 
     @app.get("/api/job-specs")
     def job_specs(user: User = CurrentUserDep) -> dict[str, Any]:
@@ -1127,81 +1119,34 @@ def create_app(
     def import_kml_ropewiki(
         req: RopewikiImportRequest, user: User = CurrentUserDep, project_id: str = ActiveProjectDep
     ) -> dict[str, Any]:
-        source = req.source.strip()
-        if not source:
-            raise HTTPException(status_code=400, detail="source is required")
-        params = {"source": source, "container_dem_job_id": req.container_dem_job_id}
-
-        def run(progress_cb, job_id: str) -> dict[str, Any]:
-            ref = parse_ropewiki_ref(source)
-            file_title, page_title = _find_kml_file_title(ref)
-            if file_title is None:
-                raise ValueError(f"Ropewiki page has no KML attachment: {source}")
-            download_url = _get_kml_download_url(file_title)
-            if download_url is None:
-                raise ValueError(f"Ropewiki KML has no download URL: {file_title}")
-
-            name = _safe_kml_name(file_title.removeprefix("File:"))
-            kml_path = _kml_import_path(ctx, job_id, name)
-            kml_path.parent.mkdir(parents=True, exist_ok=True)
-            progress_cb(f"download Ropewiki KML {file_title} -> {kml_path}")
-            _download_file(download_url, kml_path)
-            page_url = (
-                ROPEWIKI_PAGE_URL.format(title=page_title.replace(" ", "_"))
-                if page_title
-                else source
-            )
-            result = _build_kml_import_result(
+        try:
+            job = submit_tool_job(
                 ctx,
-                kml_path,
-                Path(name).stem,
-                source={
-                    "type": "ropewiki",
-                    "source": source,
-                    "page_title": page_title,
-                    "page_url": page_url,
-                    "file_title": file_title,
-                    "download_url": download_url,
-                },
-                container_dem_job_id=req.container_dem_job_id,
+                "kml-import",
+                {"params": req.model_dump()},
+                user=user,
+                project_id=project_id,
             )
-            try:
-                _validate_kml_container(ctx, req.container_dem_job_id, result["bounds_wgs84"])
-            except Exception:
-                kml_path.unlink(missing_ok=True)
-                raise
-            return result
-
-        job = ctx.submit(
-            "kml-import", params, run, user=user, project_id=project_id, include_job_id=True
-        )
+        except DispatchError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
         return asdict(job)
 
     @app.post("/api/jobs/build-dem")
     def build_dem(
-        req: BuildDemRequest, user: User = CurrentUserDep, project_id: str = ActiveProjectDep
+        body: Annotated[dict[str, Any] | None, Body()] = None,
+        user: User = CurrentUserDep,
+        project_id: str = ActiveProjectDep,
     ) -> dict[str, Any]:
-        name = _safe_name(req.name)
-        params = req.model_dump()
-
-        def run(progress_cb) -> dict[str, Any]:
-            out_dir = ctx.output_root / "areas" / name
-            dem_path = out_dir / "dem.tif"
-            progress_cb(f"build-dem → {dem_path} (buffer_m={req.buffer_m})")
-            result = build_aoi_dem_mosaic(
-                req.bounds.tuple(),
-                dem_path,
-                cache_dir=ctx.dem_cache,
-                buffer_m=req.buffer_m,
-                max_products=req.max_products,
+        try:
+            job = submit_tool_job(
+                ctx,
+                "build-dem",
+                body,
+                user=user,
+                project_id=project_id,
             )
-            return {
-                **asdict(result),
-                "dem_url": ctx.output_url(result.dem_path),
-                "bounds_wgs84": result.bounds_wgs84,
-            }
-
-        job = ctx.submit("build-dem", params, run, user=user, project_id=project_id)
+        except DispatchError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
         return asdict(job)
 
     @app.post("/api/jobs/{dem_job_id}/run/{job_key}")

@@ -75,7 +75,7 @@ class LayerSpec:
     key: str
     label: str
     kind: str
-    url_field: str
+    url_field: str | None = None
     role: str | None = None
     tile_prefix: str | None = None
     bounds_field: str = "bounds_wgs84"
@@ -93,6 +93,7 @@ class DemJobSpec:
     request_model: type[BaseModel]
     visualizations: tuple[Visualization, ...]
     runner: JobRunner
+    runner_kind: str = "dem"
     inputs: tuple[InputSpec, ...] = field(
         default_factory=lambda: (
             InputSpec(key="dem", label="DEM", kind="raster.dem", default="upstream"),
@@ -184,10 +185,14 @@ def _normalize_outputs(spec: DemJobSpec, result: dict[str, Any]) -> list[dict[st
 def _normalize_layers(spec: DemJobSpec, result: dict[str, Any]) -> list[dict[str, Any]]:
     layers: list[dict[str, Any]] = []
     for layer_spec in spec.layers:
-        url = result.get(layer_spec.url_field)
-        if not isinstance(url, str) or not url:
+        url = result.get(layer_spec.url_field) if layer_spec.url_field else None
+        if layer_spec.url_field and (not isinstance(url, str) or not url):
             continue
-        prefix = layer_spec.tile_prefix or layer_spec.url_field.removesuffix("_url")
+        prefix = (
+            layer_spec.tile_prefix or layer_spec.url_field.removesuffix("_url")
+            if layer_spec.url_field
+            else layer_spec.key
+        )
         tile_url = result.get(f"{prefix}_pmtiles_url")
         tile_path = result.get(f"{prefix}_pmtiles_path")
         bounds = _as_bounds(result.get(f"{prefix}_tile_bounds_wgs84")) or _as_bounds(
@@ -204,8 +209,10 @@ def _normalize_layers(spec: DemJobSpec, result: dict[str, Any]) -> list[dict[str
                 source["min_zoom"] = min_zoom
             if isinstance(max_zoom, int):
                 source["max_zoom"] = max_zoom
-        else:
+        elif isinstance(url, str) and url:
             source = {"type": "image", "url": url}
+        else:
+            source = {"type": "metadata"}
         layer: dict[str, Any] = {
             "id": layer_spec.key,
             "key": layer_spec.key,
@@ -220,6 +227,15 @@ def _normalize_layers(spec: DemJobSpec, result: dict[str, Any]) -> list[dict[str
             layer["bounds_wgs84"] = bounds
         if layer_spec.blend:
             layer["blend"] = layer_spec.blend
+        if layer_spec.kind == "vector-kml":
+            for field in (
+                "descent_geojson",
+                "approach_geojson",
+                "unclassified_geojson",
+                "points_geojson",
+            ):
+                if field in result:
+                    layer[field] = result[field]
         layers.append(layer)
     return layers
 

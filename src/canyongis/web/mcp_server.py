@@ -12,14 +12,6 @@ from typing import Any
 import geopandas as gpd
 from fastmcp import FastMCP
 
-from ..aoi_mosaic import build_aoi_dem_mosaic
-from ..ingest import (
-    ROPEWIKI_PAGE_URL,
-    _download_file,
-    _find_kml_file_title,
-    _get_kml_download_url,
-    parse_ropewiki_ref,
-)
 from ..kml_snap import snap_kml_to_raster
 from ..ravine_spine import export_ravine_spines
 from ..track_profile import _rappels_geojson, analyze_track_profile
@@ -29,7 +21,6 @@ from .dem_jobs import list_specs
 from .dispatcher import DispatchError, submit_tool_job
 from .server import (
     WebContext,
-    _build_kml_import_result,
     _compare_display_high,
     _compare_raster_path,
     _gdf_to_geojson,
@@ -37,8 +28,6 @@ from .server import (
     _raster_bounds_wgs84,
     _ravine_spine_layers,
     _safe_kml_name,
-    _safe_name,
-    _validate_kml_container,
 )
 
 mcp = FastMCP("canyongis")
@@ -148,49 +137,16 @@ def import_kml_ropewiki(source: str, container_dem_job_id: str | None = None) ->
     user_info = _resolve_user()
     wc = ctx()
     pid = _project_id(user_info)
-    params = {"source": source, "container_dem_job_id": container_dem_job_id}
-
-    def run(progress_cb, job_id: str) -> dict[str, Any]:
-        ref = parse_ropewiki_ref(source)
-        file_title, page_title = _find_kml_file_title(ref)
-        if file_title is None:
-            raise ValueError(f"Ropewiki page has no KML attachment: {source}")
-        download_url = _get_kml_download_url(file_title)
-        if download_url is None:
-            raise ValueError(f"Ropewiki KML has no download URL: {file_title}")
-        name = _safe_kml_name(file_title.removeprefix("File:"))
-        kml_path = wc.output_root / "kml" / job_id / _safe_kml_name(name)
-        kml_path.parent.mkdir(parents=True, exist_ok=True)
-        progress_cb(f"download Ropewiki KML {file_title} -> {kml_path}")
-        _download_file(download_url, kml_path)
-        result = _build_kml_import_result(
+    try:
+        job = submit_tool_job(
             wc,
-            kml_path,
-            Path(name).stem,
-            source={
-                "type": "ropewiki",
-                "source": source,
-                "page_title": page_title,
-                "page_url": (
-                    ROPEWIKI_PAGE_URL.format(title=page_title.replace(" ", "_"))
-                    if page_title
-                    else source
-                ),
-                "file_title": file_title,
-                "download_url": download_url,
-            },
-            container_dem_job_id=container_dem_job_id,
+            "kml-import",
+            {"params": {"source": source, "container_dem_job_id": container_dem_job_id}},
+            user=_user_obj(user_info),
+            project_id=pid,
         )
-        try:
-            _validate_kml_container(wc, container_dem_job_id, result["bounds_wgs84"])
-        except Exception:
-            kml_path.unlink(missing_ok=True)
-            raise
-        return result
-
-    job = wc.submit(
-        "kml-import", params, run, user=_user_obj(user_info), project_id=pid, include_job_id=True
-    )
+    except DispatchError as exc:
+        raise ValueError(str(exc.detail)) from exc
     return asdict(job)
 
 
@@ -212,32 +168,22 @@ def build_dem(
     user_info = _resolve_user()
     wc = ctx()
     pid = _project_id(user_info)
-    safe_name = _safe_name(name)
     params = {
-        "name": safe_name,
+        "name": name,
         "bounds": {"west": west, "south": south, "east": east, "north": north},
         "buffer_m": buffer_m,
         "max_products": max_products,
     }
-
-    def run(progress_cb) -> dict[str, Any]:
-        out_dir = wc.output_root / "areas" / safe_name
-        dem_path = out_dir / "dem.tif"
-        progress_cb(f"build-dem -> {dem_path} (buffer_m={buffer_m})")
-        result = build_aoi_dem_mosaic(
-            (west, south, east, north),
-            dem_path,
-            cache_dir=wc.dem_cache,
-            buffer_m=buffer_m,
-            max_products=max_products,
+    try:
+        job = submit_tool_job(
+            wc,
+            "build-dem",
+            {"params": params},
+            user=_user_obj(user_info),
+            project_id=pid,
         )
-        return {
-            **asdict(result),
-            "dem_url": wc.output_url(result.dem_path),
-            "bounds_wgs84": result.bounds_wgs84,
-        }
-
-    job = wc.submit("build-dem", params, run, user=_user_obj(user_info), project_id=pid)
+    except DispatchError as exc:
+        raise ValueError(str(exc.detail)) from exc
     return asdict(job)
 
 
