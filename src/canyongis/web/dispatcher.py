@@ -80,7 +80,6 @@ def submit_tool_job(
     *,
     user: Any,
     project_id: str,
-    legacy_dem_job_id: str | None = None,
 ) -> Any:
     spec = get_spec(tool_key)
     if spec is None:
@@ -89,8 +88,6 @@ def submit_tool_job(
         raise DispatchError(400, spec.unavailable_reason or f"{spec.label} is unavailable")
 
     inputs, params_body = _parse_payload(body)
-    if legacy_dem_job_id:
-        inputs = {**inputs, "dem": legacy_dem_job_id}
 
     try:
         req = spec.request_model.model_validate(params_body)
@@ -98,7 +95,7 @@ def submit_tool_job(
         raise DispatchError(400, exc.errors()) from exc
 
     if spec.runner_kind == "context":
-        params = req.model_dump()
+        params = {**req.model_dump(), "_inputs": dict(inputs)}
 
         def run_context(progress_cb, job_id: str) -> dict[str, Any]:
             result = spec.runner(
@@ -117,7 +114,13 @@ def submit_tool_job(
 
     dem_job = resolve_dem_job(ctx, inputs, project_id)
     dem_path = dem_job.result["dem_path"]
-    params = {"dem_job_id": dem_job.id, "job_key": spec.key, **req.model_dump()}
+    resolved_inputs = {**inputs, "dem": dem_job.id}
+    params = {
+        "dem_job_id": dem_job.id,
+        "job_key": spec.key,
+        "_inputs": resolved_inputs,
+        **req.model_dump(),
+    }
 
     def run(progress_cb) -> dict[str, Any]:
         out_dir = ctx.output_root / "jobs" / f"{spec.key}-{uuid.uuid4().hex[:8]}"

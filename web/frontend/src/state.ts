@@ -1,16 +1,6 @@
 import { create } from "zustand";
 import type { Bounds, Job, User } from "./api";
 
-export type Overlay = {
-  id: string;
-  name: string;
-  url: string;
-  bounds: Bounds;
-  tileArchiveUrl?: string;
-  tileMinZoom?: number;
-  tileMaxZoom?: number;
-};
-
 export type Footprint = {
   id: string;
   name: string;
@@ -32,11 +22,11 @@ export type SelectedKmlTrack = {
 type AppState = {
   bounds?: Bounds;
   activeDemJob?: Job;
-  activeHillshade?: Overlay;
-  overlay?: Overlay;
   footprints: Record<string, Footprint>;
-  visibleKmls: Record<string, boolean>;
-  kmlLabels: Record<string, boolean>;
+  visibleLayerIds: Record<string, boolean>;
+  labelLayerIds: Record<string, boolean>;
+  baseLayerId?: string;
+  overlayLayerId?: string;
   selectedKmlTrack?: SelectedKmlTrack;
   panRequest?: PanRequest;
   activeProjectId?: string;
@@ -47,12 +37,13 @@ type AppState = {
   overlayOpacity: number;
   setBounds: (bounds?: Bounds) => void;
   setActiveDemJob: (job?: Job) => void;
-  setActiveHillshade: (overlay?: Overlay) => void;
-  setOverlay: (overlay?: Overlay) => void;
   toggleFootprint: (footprint: Footprint) => void;
   clearFootprints: () => void;
-  toggleKml: (jobId: string) => void;
-  toggleKmlLabels: (jobId: string) => void;
+  toggleLayer: (layerId: string) => void;
+  setLayerVisible: (layerId: string, visible: boolean) => void;
+  toggleLayerLabels: (layerId: string) => void;
+  setBaseLayer: (layerId?: string) => void;
+  setOverlayLayer: (layerId?: string) => void;
   setSelectedKmlTrack: (track?: SelectedKmlTrack) => void;
   requestPan: (bounds: Bounds) => void;
   setActiveProjectId: (id?: string) => void;
@@ -70,8 +61,8 @@ const storedProjectId =
 
 export const useAppStore = create<AppState>((set) => ({
   footprints: {},
-  visibleKmls: {},
-  kmlLabels: {},
+  visibleLayerIds: {},
+  labelLayerIds: {},
   activeProjectId: storedProjectId,
   osmOpacity: 1,
   esriOpacity: 0.35,
@@ -83,8 +74,6 @@ export const useAppStore = create<AppState>((set) => ({
   setOverlayOpacity: (overlayOpacity) => set({ overlayOpacity }),
   setBounds: (bounds) => set({ bounds }),
   setActiveDemJob: (activeDemJob) => set({ activeDemJob }),
-  setActiveHillshade: (activeHillshade) => set({ activeHillshade }),
-  setOverlay: (overlay) => set({ overlay }),
   toggleFootprint: (footprint) =>
     set((state) => {
       const next = { ...state.footprints };
@@ -96,20 +85,29 @@ export const useAppStore = create<AppState>((set) => ({
       return { footprints: next };
     }),
   clearFootprints: () => set({ footprints: {} }),
-  toggleKml: (jobId) =>
+  toggleLayer: (layerId) =>
     set((state) => ({
-      visibleKmls: {
-        ...state.visibleKmls,
-        [jobId]: !state.visibleKmls[jobId],
+      visibleLayerIds: {
+        ...state.visibleLayerIds,
+        [layerId]: !state.visibleLayerIds[layerId],
       },
     })),
-  toggleKmlLabels: (jobId) =>
+  setLayerVisible: (layerId, visible) =>
     set((state) => ({
-      kmlLabels: {
-        ...state.kmlLabels,
-        [jobId]: !state.kmlLabels[jobId],
+      visibleLayerIds: {
+        ...state.visibleLayerIds,
+        [layerId]: visible,
       },
     })),
+  toggleLayerLabels: (layerId) =>
+    set((state) => ({
+      labelLayerIds: {
+        ...state.labelLayerIds,
+        [layerId]: !state.labelLayerIds[layerId],
+      },
+    })),
+  setBaseLayer: (baseLayerId) => set({ baseLayerId }),
+  setOverlayLayer: (overlayLayerId) => set({ overlayLayerId }),
   setSelectedKmlTrack: (selectedKmlTrack) => set({ selectedKmlTrack }),
   requestPan: (bounds) => set({ panRequest: { bounds, nonce: Date.now() } }),
   setActiveProjectId: (id) => {

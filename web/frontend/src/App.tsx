@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState } from "react";
+import { Fragment, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
@@ -25,7 +25,6 @@ import {
   listJobSpecs,
   listJobs,
   runTool,
-  runTrackProfile,
   trimJobRuns,
   uploadKmlFile,
   type Bounds,
@@ -41,44 +40,12 @@ import {
 import { MapView } from "./MapView";
 import { useAppStore } from "./state";
 import { ToolDialog, type ToolDialogResult } from "./ToolDialog";
+import { descriptorsFromJob, type LayerDescriptor } from "./layers";
 
 function jobBoundsWgs84(job: Job): Bounds | undefined {
   const arr = job.result?.bounds_wgs84 as number[] | undefined;
   if (!arr || arr.length !== 4) return undefined;
   return { west: arr[0], south: arr[1], east: arr[2], north: arr[3] };
-}
-
-type PreviewLink = {
-  key: string;
-  label: string;
-  url: string;
-  tileArchiveUrl?: string;
-  tileMinZoom?: number;
-  tileMaxZoom?: number;
-};
-
-function previewsFor(job: Job, spec: JobSpec): PreviewLink[] {
-  const result = (job.result ?? {}) as Record<string, unknown>;
-  const out: PreviewLink[] = [];
-  for (const vis of spec.visualizations) {
-    const url = result[vis.url_field];
-    if (typeof url === "string") {
-      const tilePrefix = vis.url_field.replace(/_url$/, "");
-      const tileArchiveUrl = result[`${tilePrefix}_pmtiles_url`];
-      const tileMinZoom = result[`${tilePrefix}_tile_min_zoom`];
-      const tileMaxZoom = result[`${tilePrefix}_tile_max_zoom`];
-      out.push({
-        key: vis.key,
-        label: vis.label,
-        url,
-        tileArchiveUrl:
-          typeof tileArchiveUrl === "string" ? tileArchiveUrl : undefined,
-        tileMinZoom: typeof tileMinZoom === "number" ? tileMinZoom : undefined,
-        tileMaxZoom: typeof tileMaxZoom === "number" ? tileMaxZoom : undefined,
-      });
-    }
-  }
-  return out;
 }
 
 type Area = {
@@ -89,9 +56,26 @@ type Area = {
   spineJobsByTpi: Map<string, Job[]>;
 };
 
+function recordedInputs(job: Job): Record<string, unknown> | undefined {
+  const value = (job.params as { _inputs?: unknown })._inputs;
+  return value && typeof value === "object" && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : undefined;
+}
+
 function tpiJobIdFromSpine(job: Job): string | undefined {
   const params = job.params as { tpi_job_id?: string; compare_job_id?: string };
-  return params.tpi_job_id ?? params.compare_job_id;
+  if (typeof params.tpi_job_id === "string" && params.tpi_job_id)
+    return params.tpi_job_id;
+  if (typeof params.compare_job_id === "string" && params.compare_job_id)
+    return params.compare_job_id;
+  const inputs = recordedInputs(job);
+  for (const key of ["score", "compare", "tpi"] as const) {
+    const value = inputs?.[key];
+    if (typeof value === "string" && value) return value;
+  }
+  const result = job.result as { tpi_job_id?: string } | undefined;
+  return typeof result?.tpi_job_id === "string" ? result.tpi_job_id : undefined;
 }
 
 function groupAreas(jobs: Job[], specs: JobSpec[]): Area[] {
@@ -149,6 +133,7 @@ function ravineSpineLayerJobs(jobs: Job[]): Job[] {
       const layer = job.result[key];
       if (!layer || typeof layer !== "object") continue;
       const result = layer as Record<string, unknown>;
+      const sourceLabel = tpiJobId ?? job.id;
       layers.push({
         id: `${job.id}:${key}`,
         kind: "kml-layer",
@@ -156,14 +141,16 @@ function ravineSpineLayerJobs(jobs: Job[]): Job[] {
         created_at: job.created_at,
         updated_at: job.updated_at,
         params: {
+          ...job.params,
           source_job_id: job.id,
           layer: key,
           parent_kml_job_id: parentKmlJobId,
           container_dem_job_id: containerDemJobId,
+          score_job_id: tpiJobId,
         },
         result: {
           ...result,
-          name: `${label} ${job.id}`,
+          name: `${label} (from ${sourceLabel})`,
           bounds_wgs84: result.bounds_wgs84 ?? fallbackBounds,
           parent_kml_job_id: parentKmlJobId,
           container_dem_job_id: containerDemJobId,
@@ -172,6 +159,7 @@ function ravineSpineLayerJobs(jobs: Job[]): Job[] {
             job_id: job.id,
             layer: key,
             parent_kml_job_id: parentKmlJobId,
+            score_job_id: tpiJobId,
           },
         },
       });
@@ -338,6 +326,84 @@ function StatusBadge({ status }: { status: Job["status"] }) {
   return <span className={`statusBadge ${status}`}>{status}</span>;
 }
 
+const HIDDEN_PARAM_KEYS = new Set([
+  "_inputs",
+  "job_key",
+  "source_job_id",
+  "layer",
+]);
+
+function formatParamValue(value: unknown): string {
+  if (value === null || value === undefined) return "—";
+  if (typeof value === "string") return value;
+  if (typeof value === "number" || typeof value === "boolean") return String(value);
+  if (Array.isArray(value)) {
+    return `[${value.map((v) => formatParamValue(v)).join(", ")}]`;
+  }
+  if (typeof value === "object") {
+    try {
+      return JSON.stringify(value);
+    } catch {
+      return String(value);
+    }
+  }
+  return String(value);
+}
+
+function JobParamsDetails({ job }: { job: Job }) {
+  const inputs = useMemo(() => {
+    const raw = (job.params as { _inputs?: unknown })._inputs;
+    if (!raw || typeof raw !== "object" || Array.isArray(raw))
+      return {} as Record<string, unknown>;
+    return raw as Record<string, unknown>;
+  }, [job.params]);
+  const params = useMemo(() => {
+    const entries = Object.entries(job.params as Record<string, unknown>)
+      .filter(([k, v]) => !HIDDEN_PARAM_KEYS.has(k) && v !== null && v !== undefined)
+      .sort(([a], [b]) => a.localeCompare(b));
+    return entries;
+  }, [job.params]);
+  const inputEntries = Object.entries(inputs).filter(
+    ([, v]) => v !== null && v !== undefined && v !== "",
+  );
+  if (params.length === 0 && inputEntries.length === 0) return null;
+  return (
+    <details className="jobParams">
+      <summary>Parameters</summary>
+      {inputEntries.length > 0 && (
+        <dl className="jobParamsList">
+          <dt className="jobParamsHeader">Inputs</dt>
+          <dd />
+          {inputEntries.map(([k, v]) => (
+            <Fragment key={`in-${k}`}>
+              <dt>{k}</dt>
+              <dd>
+                <code>{formatParamValue(v)}</code>
+              </dd>
+            </Fragment>
+          ))}
+        </dl>
+      )}
+      {params.length > 0 && (
+        <dl className="jobParamsList">
+          {inputEntries.length > 0 && (
+            <>
+              <dt className="jobParamsHeader">Params</dt>
+              <dd />
+            </>
+          )}
+          {params.map(([k, v]) => (
+            <Fragment key={`p-${k}`}>
+              <dt>{k}</dt>
+              <dd>{formatParamValue(v)}</dd>
+            </Fragment>
+          ))}
+        </dl>
+      )}
+    </details>
+  );
+}
+
 function ProgressTail({
   job,
   onDelete,
@@ -398,8 +464,6 @@ function ProgressTail({
 
 function DerivedRow({
   job,
-  spec,
-  demJob,
   onDelete,
   onCancel,
 }: {
@@ -409,73 +473,51 @@ function DerivedRow({
   onDelete?: (job: Job) => void;
   onCancel?: (job: Job) => void;
 }) {
-  const setActiveHillshade = useAppStore((s) => s.setActiveHillshade);
-  const setOverlay = useAppStore((s) => s.setOverlay);
-  const overlay = useAppStore((s) => s.overlay);
-  const activeHillshade = useAppStore((s) => s.activeHillshade);
-  const previews = spec ? previewsFor(job, spec) : [];
-  const bounds =
-    jobBoundsWgs84(job) ?? (demJob ? jobBoundsWgs84(demJob) : undefined);
-  const isHillshade = spec?.key === "hillshade";
-  const activeHillshadeId = activeHillshade?.id;
+  const setBaseLayer = useAppStore((s) => s.setBaseLayer);
+  const setOverlayLayer = useAppStore((s) => s.setOverlayLayer);
+  const baseLayerId = useAppStore((s) => s.baseLayerId);
+  const overlayLayerId = useAppStore((s) => s.overlayLayerId);
+  const descriptors = useMemo(() => descriptorsFromJob(job), [job]);
+  const renderable = descriptors.filter(
+    (d) => d.kind === "base-raster" || d.kind === "raster-overlay",
+  );
+  const isActiveBase = renderable.some(
+    (d) => d.kind === "base-raster" && d.id === baseLayerId,
+  );
   return (
-    <div className={`derivedRow ${job.status} ${activeHillshadeId === job.id ? "active" : ""}`}>
+    <div className={`derivedRow ${job.status} ${isActiveBase ? "active" : ""}`}>
       <div className="derivedRowHead">
         <code>{job.id}</code>
         <StatusBadge status={job.status} />
       </div>
       <div className="derivedRowActions">
-        {isHillshade && job.status === "succeeded" && bounds && (
-          <button
-            className={activeHillshadeId === job.id ? "toggled" : ""}
-            onClick={() =>
-              setActiveHillshade(
-                activeHillshadeId === job.id ? undefined : {
-                  id: job.id,
-                  name: "Hillshade",
-                  url: "",
-                  bounds,
-                  tileArchiveUrl: previews[0]?.tileArchiveUrl,
-                  tileMinZoom: previews[0]?.tileMinZoom,
-                  tileMaxZoom: previews[0]?.tileMaxZoom,
-                }
-              )
-            }
-          >
-            <Eye size={12} />
-            {activeHillshadeId === job.id ? "Hillshade base" : "Use as base"}
-          </button>
-        )}
-        {bounds &&
-          job.status === "succeeded" &&
-          !isHillshade &&
-          previews.map((preview) => {
-            const overlayId = `${job.id}:${preview.key}`;
-            const isActive = overlay?.id === overlayId;
+        {job.status === "succeeded" &&
+          renderable.map((descriptor) => {
+            const isBase = descriptor.kind === "base-raster";
+            const active = isBase
+              ? baseLayerId === descriptor.id
+              : overlayLayerId === descriptor.id;
+            const label = isBase
+              ? active
+                ? "Hillshade base"
+                : "Use as base"
+              : descriptor.label;
             return (
               <button
-                key={preview.key}
-                className={isActive ? "toggled" : ""}
-                onClick={() =>
-                  isActive
-                    ? setOverlay(undefined)
-                    : setOverlay({
-                        id: overlayId,
-                        name: preview.label,
-                        url: preview.url,
-                        bounds,
-                        tileArchiveUrl: preview.tileArchiveUrl,
-                        tileMinZoom: preview.tileMinZoom,
-                        tileMaxZoom: preview.tileMaxZoom,
-                      })
-                }
+                key={descriptor.id}
+                className={active ? "toggled" : ""}
+                onClick={() => {
+                  if (isBase) setBaseLayer(active ? undefined : descriptor.id);
+                  else setOverlayLayer(active ? undefined : descriptor.id);
+                }}
               >
                 <Eye size={12} />
-                {preview.label}
+                {label}
               </button>
             );
           })}
       </div>
+      <JobParamsDetails job={job} />
       <ProgressTail job={job} onDelete={onDelete} onCancel={onCancel} />
     </div>
   );
@@ -502,8 +544,6 @@ function JobSpecSection({
   onTrimRuns?: (demJobId: string, jobKey: string) => void;
   isPending: boolean;
 }) {
-  const setOverlay = useAppStore((s) => s.setOverlay);
-  const overlay = useAppStore((s) => s.overlay);
   const hasRuns = runs.length > 0;
   const unavailable = !spec.available;
   const runButtonLabel = hasRuns ? "Run again" : "Run";
@@ -693,10 +733,11 @@ function KmlImportRow({
   const bounds = jobBoundsWgs84(job);
   const setBounds = useAppStore((s) => s.setBounds);
   const requestPan = useAppStore((s) => s.requestPan);
-  const toggleKml = useAppStore((s) => s.toggleKml);
-  const toggleKmlLabels = useAppStore((s) => s.toggleKmlLabels);
-  const visible = useAppStore((s) => Boolean(s.visibleKmls[job.id]));
-  const labelsVisible = useAppStore((s) => Boolean(s.kmlLabels[job.id]));
+  const toggleLayer = useAppStore((s) => s.toggleLayer);
+  const toggleLayerLabels = useAppStore((s) => s.toggleLayerLabels);
+  const layerId = job.kind === "kml-layer" ? job.id : `${job.id}:route`;
+  const visible = useAppStore((s) => Boolean(s.visibleLayerIds[layerId]));
+  const labelsVisible = useAppStore((s) => Boolean(s.labelLayerIds[layerId]));
   const name =
     (job.result?.name as string | undefined) ??
     (job.params.name as string | undefined) ??
@@ -722,7 +763,7 @@ function KmlImportRow({
           <>
             <button
               className={visible ? "toggled" : ""}
-              onClick={() => toggleKml(job.id)}
+              onClick={() => toggleLayer(layerId)}
             >
               <Eye size={12} />
               {visible ? "Hide" : "Show"}
@@ -730,7 +771,7 @@ function KmlImportRow({
             <button
               className={labelsVisible ? "toggled" : ""}
               disabled={!visible}
-              onClick={() => toggleKmlLabels(job.id)}
+              onClick={() => toggleLayerLabels(layerId)}
             >
               <Tags size={12} />
               Labels
@@ -793,6 +834,7 @@ function KmlImportRow({
           ))}
         </div>
       )}
+      <JobParamsDetails job={job} />
       <ProgressTail job={job} onDelete={onDelete} onCancel={onCancel} />
     </div>
   );
@@ -1080,8 +1122,8 @@ function OpacitySliders() {
   const setEsriOpacity = useAppStore((s) => s.setEsriOpacity);
   const setHillshadeOpacity = useAppStore((s) => s.setHillshadeOpacity);
   const setOverlayOpacity = useAppStore((s) => s.setOverlayOpacity);
-  const hasHillshade = Boolean(useAppStore((s) => s.activeHillshade));
-  const hasOverlay = Boolean(useAppStore((s) => s.overlay));
+  const hasHillshade = Boolean(useAppStore((s) => s.baseLayerId));
+  const hasOverlay = Boolean(useAppStore((s) => s.overlayLayerId));
   return (
     <>
       <OpacitySlider label="OpenStreetMap" value={osmOpacity} onChange={setOsmOpacity} />
@@ -1107,12 +1149,15 @@ export function App() {
   const bounds = useAppStore((state) => state.bounds);
   const activeDemJob = useAppStore((state) => state.activeDemJob);
   const selectedKmlTrack = useAppStore((state) => state.selectedKmlTrack);
-  const overlay = useAppStore((state) => state.overlay);
-  const activeHillshade = useAppStore((state) => state.activeHillshade);
+  const baseLayerId = useAppStore((state) => state.baseLayerId);
+  const overlayLayerId = useAppStore((state) => state.overlayLayerId);
+  const visibleLayerIds = useAppStore((state) => state.visibleLayerIds);
+  const labelLayerIds = useAppStore((state) => state.labelLayerIds);
+  const footprints = useAppStore((state) => state.footprints);
   const setBounds = useAppStore((state) => state.setBounds);
   const setActiveDemJob = useAppStore((state) => state.setActiveDemJob);
-  const setActiveHillshade = useAppStore((state) => state.setActiveHillshade);
-  const setOverlay = useAppStore((state) => state.setOverlay);
+  const setBaseLayer = useAppStore((state) => state.setBaseLayer);
+  const setOverlayLayer = useAppStore((state) => state.setOverlayLayer);
   const clearFootprints = useAppStore((state) => state.clearFootprints);
   const footprintCount = useAppStore(
     (state) => Object.keys(state.footprints).length,
@@ -1186,6 +1231,47 @@ export function App() {
     [activeDemJob, profileJobs, selectedKmlTrack],
   );
 
+  const visibleLayers = useMemo<LayerDescriptor[]>(() => {
+    const out: LayerDescriptor[] = [];
+    for (const fp of Object.values(footprints)) {
+      out.push({
+        id: `footprint:${fp.id}`,
+        label: fp.name,
+        kind: "footprint",
+        opacity: 0.04,
+        bounds_wgs84: [fp.bounds.west, fp.bounds.south, fp.bounds.east, fp.bounds.north],
+      });
+    }
+    const profileLayerJobId = selectedProfileJob?.status === "succeeded" ? selectedProfileJob.id : undefined;
+    for (const job of jobs) {
+      for (const desc of descriptorsFromJob(job)) {
+        let visible = false;
+        if (desc.kind === "base-raster") visible = baseLayerId === desc.id;
+        else if (desc.kind === "raster-overlay") visible = overlayLayerId === desc.id;
+        else if (desc.kind === "vector-kml") visible = Boolean(visibleLayerIds[desc.id]);
+        else if (desc.kind === "point-events" || desc.kind === "vector-geojson") {
+          visible =
+            Boolean(visibleLayerIds[desc.id]) ||
+            (profileLayerJobId !== undefined && job.id === profileLayerJobId);
+        }
+        if (!visible) continue;
+        out.push({
+          ...desc,
+          showLabels: desc.kind === "vector-kml" ? Boolean(labelLayerIds[desc.id]) : undefined,
+        });
+      }
+    }
+    return out;
+  }, [
+    jobs,
+    footprints,
+    baseLayerId,
+    overlayLayerId,
+    visibleLayerIds,
+    labelLayerIds,
+    selectedProfileJob,
+  ]);
+
   const invalidate = () =>
     queryClient.invalidateQueries({ queryKey: ["jobs"] });
   const buildMutation = useMutation({
@@ -1245,10 +1331,15 @@ export function App() {
     mutationFn: () => {
       if (!selectedKmlTrack) throw new Error("Click a visible KML track first");
       if (!activeDemJob) throw new Error("Select a completed DEM job first");
-      return runTrackProfile(selectedKmlTrack.kmlJobId, {
-        dem_job_id: activeDemJob.id,
-        category: selectedKmlTrack.category,
-        track_index: selectedKmlTrack.trackIndex,
+      return runTool("track-profile", {
+        inputs: {
+          kml: selectedKmlTrack.kmlJobId,
+          dem: activeDemJob.id,
+        },
+        params: {
+          category: selectedKmlTrack.category,
+          track_index: selectedKmlTrack.trackIndex,
+        },
       });
     },
     onSuccess: invalidate,
@@ -1436,19 +1527,19 @@ export function App() {
             )}
             <div>
               <span>Hillshade base</span>
-              <strong>{activeHillshade?.id ?? "off"}</strong>
+              <strong>{baseLayerId ?? "off"}</strong>
             </div>
-            {activeHillshade && (
-              <button onClick={() => setActiveHillshade(undefined)}>
+            {baseLayerId && (
+              <button onClick={() => setBaseLayer(undefined)}>
                 Clear hillshade
               </button>
             )}
             <div>
               <span>Overlay</span>
-              <strong>{overlay?.name ?? "none"}</strong>
+              <strong>{overlayLayerId ?? "none"}</strong>
             </div>
-            {overlay && (
-              <button onClick={() => setOverlay(undefined)}>
+            {overlayLayerId && (
+              <button onClick={() => setOverlayLayer(undefined)}>
                 Clear overlay
               </button>
             )}
@@ -1857,7 +1948,7 @@ export function App() {
               </div>
             </form>
           </dialog>
-          <MapView kmlImports={kmlImports} profileJob={selectedProfileJob} />
+          <MapView layers={visibleLayers} />
         </section>
       </section>
       {toolDialog && (

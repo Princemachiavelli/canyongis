@@ -161,44 +161,7 @@ export async function importRopewikiKml(
 
 export type KmlSnapTarget = "dem" | "tpi" | "geomorphon" | "curvature";
 
-export async function snapKml(
-  kmlJobId: string,
-  payload: {
-    target: KmlSnapTarget;
-    dem_job_id?: string;
-    compare_job_id?: string;
-    search_radius_m?: number;
-    sample_step_m?: number;
-    high_threshold?: number;
-  },
-): Promise<Job> {
-  return request<Job>(`/api/jobs/${kmlJobId}/snap-kml`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-}
-
 export type TrackCategory = "descent" | "approach" | "unclassified";
-
-export type TrackProfilePayload = {
-  dem_job_id: string;
-  category: TrackCategory;
-  track_index: number;
-  sample_step_m?: number;
-  rappel_window_m?: number;
-  min_rappel_drop_m?: number;
-  min_rappel_slope?: number;
-};
-
-export async function runTrackProfile(
-  kmlJobId: string,
-  payload: TrackProfilePayload,
-): Promise<Job> {
-  return request<Job>(`/api/jobs/${kmlJobId}/track-profile`, {
-    method: "POST",
-    body: JSON.stringify(payload),
-  });
-}
 
 export type JobSpecVisualization = {
   key: string;
@@ -230,17 +193,6 @@ export async function listJobSpecs(): Promise<JobSpec[]> {
   return data.specs;
 }
 
-export async function runDemJob(
-  demJobId: string,
-  jobKey: string,
-  body: Record<string, unknown> = {},
-): Promise<Job> {
-  return request<Job>(`/api/jobs/${demJobId}/run/${jobKey}`, {
-    method: "POST",
-    body: JSON.stringify(body),
-  });
-}
-
 export async function runTool(
   toolKey: string,
   payload: {
@@ -267,21 +219,5 @@ export async function trimJobRuns(
 }> {
   return request(`/api/jobs/${demJobId}/trim-runs/${jobKey}`, {
     method: "POST",
-  });
-}
-
-export async function runRavineSpine(
-  jobId: string,
-  parentKmlJobId?: string,
-): Promise<Job> {
-  return request<Job>(`/api/jobs/${jobId}/ravine-spine`, {
-    method: "POST",
-    body: JSON.stringify({
-      threshold_pct: 94,
-      hysteresis_ratio: 0.75,
-      branch_keep_ratio: 0.2,
-      max_path_slope: 0.3,
-      parent_kml_job_id: parentKmlJobId,
-    }),
   });
 }

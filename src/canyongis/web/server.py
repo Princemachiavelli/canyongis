@@ -23,7 +23,6 @@ from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field, ValidationError
 
 from ..validate import parse_kml
-from .analysis_jobs import KmlSnapRequest, RavineSpineRequest, TrackProfileRequest
 from .assets import _is_path_key, extract_asset_candidates, new_asset_id
 from .auth import (
     AuthManager,
@@ -1066,33 +1065,6 @@ def create_app(
             raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
         return asdict(job)
 
-    @app.post("/api/jobs/{dem_job_id}/run/{job_key}")
-    def run_dem_job(
-        dem_job_id: str,
-        job_key: str,
-        body: Annotated[dict[str, Any] | None, Body()] = None,
-        user: User = CurrentUserDep,
-        project_id: str = ActiveProjectDep,
-    ) -> dict[str, Any]:
-        spec = get_spec(job_key)
-        if spec is not None and spec.runner_kind != "dem":
-            raise HTTPException(
-                status_code=400,
-                detail=f"{job_key} requires explicit inputs; use /api/jobs/{job_key}",
-            )
-        try:
-            job = submit_tool_job(
-                ctx,
-                job_key,
-                body,
-                user=user,
-                project_id=project_id,
-                legacy_dem_job_id=dem_job_id,
-            )
-        except DispatchError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-        return asdict(job)
-
     @app.post("/api/jobs/{tool_key}")
     def run_tool_job(
         tool_key: str,
@@ -1102,28 +1074,6 @@ def create_app(
     ) -> dict[str, Any]:
         try:
             job = submit_tool_job(ctx, tool_key, body, user=user, project_id=project_id)
-        except DispatchError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-        return asdict(job)
-
-    @app.post("/api/jobs/{tpi_job_id}/ravine-spine")
-    def ravine_spine(
-        tpi_job_id: str,
-        req: RavineSpineRequest,
-        user: User = CurrentUserDep,
-        project_id: str = ActiveProjectDep,
-    ) -> dict[str, Any]:
-        try:
-            job = submit_tool_job(
-                ctx,
-                "ravine-spine",
-                {
-                    "inputs": {"score": tpi_job_id},
-                    "params": {**req.model_dump(), "tpi_job_id": tpi_job_id},
-                },
-                user=user,
-                project_id=project_id,
-            )
         except DispatchError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
         return asdict(job)
@@ -1164,50 +1114,6 @@ def create_app(
                 "deleted_jobs": deleted_ids,
                 "deleted_outputs": deleted_outputs,
             }
-
-    @app.post("/api/jobs/{kml_job_id}/snap-kml")
-    def snap_kml(
-        kml_job_id: str,
-        req: KmlSnapRequest,
-        user: User = CurrentUserDep,
-        project_id: str = ActiveProjectDep,
-    ) -> dict[str, Any]:
-        try:
-            job = submit_tool_job(
-                ctx,
-                "kml-snap",
-                {
-                    "inputs": {"kml": kml_job_id},
-                    "params": {**req.model_dump(), "kml_job_id": kml_job_id},
-                },
-                user=user,
-                project_id=project_id,
-            )
-        except DispatchError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-        return asdict(job)
-
-    @app.post("/api/jobs/{kml_job_id}/track-profile")
-    def track_profile(
-        kml_job_id: str,
-        req: TrackProfileRequest,
-        user: User = CurrentUserDep,
-        project_id: str = ActiveProjectDep,
-    ) -> dict[str, Any]:
-        try:
-            job = submit_tool_job(
-                ctx,
-                "track-profile",
-                {
-                    "inputs": {"kml": kml_job_id},
-                    "params": {**req.model_dump(), "kml_job_id": kml_job_id},
-                },
-                user=user,
-                project_id=project_id,
-            )
-        except DispatchError as exc:
-            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
-        return asdict(job)
 
     if ctx.frontend_dist and ctx.frontend_dist.exists():
         app.mount("/", StaticFiles(directory=ctx.frontend_dist, html=True), name="frontend")

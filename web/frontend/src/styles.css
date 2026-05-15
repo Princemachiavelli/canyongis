@@ -980,6 +980,61 @@ button.miniButton {
     font-size: 12px;
 }
 
+.jobParams {
+    margin-top: 4px;
+    font-size: 11px;
+    color: #4b5b66;
+}
+
+.jobParams > summary {
+    cursor: pointer;
+    color: #6b7886;
+    padding: 2px 4px;
+    border-radius: 3px;
+    user-select: none;
+}
+
+.jobParams > summary:hover {
+    background: #eef2f5;
+}
+
+.jobParamsList {
+    display: grid;
+    grid-template-columns: minmax(0, max-content) minmax(0, 1fr);
+    gap: 2px 8px;
+    margin: 4px 0 0 0;
+    padding: 4px 6px;
+    background: #f6f8fa;
+    border-radius: 4px;
+}
+
+.jobParamsList dt {
+    color: #6b7886;
+    font-weight: 500;
+}
+
+.jobParamsList dd {
+    margin: 0;
+    color: #172026;
+    word-break: break-word;
+}
+
+.jobParamsList dd code {
+    font-size: 10px;
+    background: #e9eef2;
+    padding: 1px 4px;
+    border-radius: 3px;
+}
+
+.jobParamsHeader {
+    grid-column: 1 / -1;
+    color: #93a0aa !important;
+    font-size: 10px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    margin-top: 2px;
+}
+
 .iconButton {
     background: transparent;
     border: none;

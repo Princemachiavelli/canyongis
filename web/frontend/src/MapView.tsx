@@ -3,14 +3,22 @@ import "./leafletSetup";
 import L from "leaflet";
 import "@geoman-io/leaflet-geoman-free";
 import { PMTiles, leafletRasterLayer } from "pmtiles";
-import { GeoJSON, ImageOverlay, MapContainer, Rectangle, TileLayer, useMap } from "react-leaflet";
-import type { Bounds, Job } from "./api";
+import { GeoJSON, MapContainer, Rectangle, TileLayer, useMap } from "react-leaflet";
+import type { Bounds } from "./api";
+import type { LayerDescriptor } from "./layers";
 import { useAppStore } from "./state";
 
-function leafletBounds(bounds: Bounds): L.LatLngBoundsExpression {
+function leafletBounds(bounds: [number, number, number, number]): L.LatLngBoundsExpression {
   return [
-    [bounds.south, bounds.west],
-    [bounds.north, bounds.east]
+    [bounds[1], bounds[0]],
+    [bounds[3], bounds[2]],
+  ];
+}
+
+function toLeafletBounds(b: Bounds): L.LatLngBoundsExpression {
+  return [
+    [b.south, b.west],
+    [b.north, b.east],
   ];
 }
 
@@ -20,7 +28,7 @@ function PanController() {
 
   useEffect(() => {
     if (!panRequest) return;
-    map.fitBounds(leafletBounds(panRequest.bounds), { padding: [24, 24] });
+    map.fitBounds(toLeafletBounds(panRequest.bounds), { padding: [24, 24] });
   }, [map, panRequest]);
 
   return null;
@@ -45,7 +53,7 @@ function MapControls() {
       dragMode: true,
       cutPolygon: false,
       removalMode: true,
-      rotateMode: false
+      rotateMode: false,
     });
 
     const updateFromLayer = (layer: L.Layer) => {
@@ -55,7 +63,7 @@ function MapControls() {
           west: b.getWest(),
           south: b.getSouth(),
           east: b.getEast(),
-          north: b.getNorth()
+          north: b.getNorth(),
         });
       }
     };
@@ -89,10 +97,10 @@ function MapControls() {
       selectionLayer.current = undefined;
     }
     if (!bounds) return;
-    const layer = L.rectangle(leafletBounds(bounds), {
+    const layer = L.rectangle(toLeafletBounds(bounds), {
       color: "#00bcd4",
       weight: 2,
-      fillOpacity: 0.05
+      fillOpacity: 0.05,
     }).addTo(map);
     layer.pm.enable();
     selectionLayer.current = layer;
@@ -101,103 +109,69 @@ function MapControls() {
   return null;
 }
 
-function HillshadeBaseLayer() {
+function RasterLayer({ descriptor, opacity }: { descriptor: LayerDescriptor; opacity: number }) {
   const map = useMap();
-  const hillshade = useAppStore((state) => state.activeHillshade);
-  const hillshadeOpacity = useAppStore((state) => state.hillshadeOpacity);
   const layerRef = useRef<L.Layer | undefined>();
+  const blend = descriptor.blend;
+  const sourceType = descriptor.source?.type;
+  const sourceUrl = descriptor.source?.url;
+  const minZoom = descriptor.source?.min_zoom;
+  const maxZoom = descriptor.source?.max_zoom;
+  const boundsKey = descriptor.bounds_wgs84?.join(",");
 
   useEffect(() => {
-    if (!hillshade) return;
-    if (hillshade.tileArchiveUrl) {
-      const source = new PMTiles(hillshade.tileArchiveUrl);
-      const layer = leafletRasterLayer(source, {
-        opacity: 1,
-        minZoom: hillshade.tileMinZoom,
-        maxNativeZoom: hillshade.tileMaxZoom,
+    if (!sourceUrl) return;
+    let layer: L.Layer;
+    if (sourceType === "pmtiles") {
+      const source = new PMTiles(sourceUrl);
+      const tileLayer = leafletRasterLayer(source, {
+        opacity,
+        minZoom,
+        maxNativeZoom: maxZoom,
         maxZoom: 22,
       });
-      layer.on("add", () => {
-        const el = layer.getContainer();
+      tileLayer.on("add", () => {
+        const el = tileLayer.getContainer();
         if (el) {
-          el.style.mixBlendMode = "multiply";
-          el.style.opacity = String(useAppStore.getState().hillshadeOpacity);
+          if (blend) el.style.mixBlendMode = blend;
+          el.style.opacity = String(opacity);
         }
       });
-      layer.addTo(map);
-      layerRef.current = layer;
-      return () => {
-        layerRef.current = undefined;
-        layer.removeFrom(map);
-      };
+      layer = tileLayer;
+    } else if (sourceType === "image" && descriptor.bounds_wgs84) {
+      const imgLayer = L.imageOverlay(sourceUrl, leafletBounds(descriptor.bounds_wgs84), {
+        opacity,
+      });
+      if (blend) {
+        imgLayer.on("add", () => {
+          const el = imgLayer.getElement();
+          if (el) el.style.mixBlendMode = blend;
+        });
+      }
+      layer = imgLayer;
+    } else {
+      return;
     }
-    const layer = L.imageOverlay(hillshade.url, leafletBounds(hillshade.bounds), {
-      opacity: useAppStore.getState().hillshadeOpacity,
-    });
     layer.addTo(map);
     layerRef.current = layer;
     return () => {
       layerRef.current = undefined;
       layer.removeFrom(map);
     };
-  }, [map, hillshade?.id, hillshade?.url, hillshade?.tileArchiveUrl,
-      hillshade?.tileMinZoom, hillshade?.tileMaxZoom, hillshade?.bounds]);
+  }, [map, sourceType, sourceUrl, minZoom, maxZoom, blend, boundsKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     const layer = layerRef.current;
     if (!layer) return;
-    if (hillshade?.tileArchiveUrl) {
+    if (sourceType === "pmtiles") {
       const el = (layer as L.GridLayer).getContainer?.();
-      if (el) el.style.opacity = String(hillshadeOpacity);
+      if (el) el.style.opacity = String(opacity);
     } else if ("setOpacity" in layer) {
-      (layer as L.ImageOverlay).setOpacity(hillshadeOpacity);
+      (layer as L.ImageOverlay).setOpacity(opacity);
     }
-  }, [hillshadeOpacity, hillshade?.tileArchiveUrl]);
+  }, [opacity, sourceType]);
 
   return null;
-}
-
-function PmtilesOverlay({ multiply }: { multiply?: boolean }) {
-  const map = useMap();
-  const overlay = useAppStore((state) => state.overlay);
-  const overlayOpacity = useAppStore((state) => state.overlayOpacity);
-  const layerRef = useRef<L.GridLayer | undefined>();
-
-  useEffect(() => {
-    if (!overlay?.tileArchiveUrl) return;
-    const source = new PMTiles(overlay.tileArchiveUrl);
-    const layer = leafletRasterLayer(source, {
-      opacity: useAppStore.getState().overlayOpacity,
-      minZoom: overlay.tileMinZoom,
-      maxNativeZoom: overlay.tileMaxZoom,
-      maxZoom: 22
-    });
-    layer.addTo(map);
-    layerRef.current = layer;
-    if (multiply) {
-      layer.on("add", () => {
-        const el = layer.getContainer();
-        if (el) el.style.mixBlendMode = "multiply";
-      });
-    }
-    return () => {
-      layerRef.current = undefined;
-      layer.removeFrom(map);
-    };
-  }, [map, overlay?.id, overlay?.tileArchiveUrl, overlay?.tileMinZoom, overlay?.tileMaxZoom, multiply]);
-
-  useEffect(() => {
-    const layer = layerRef.current;
-    if (layer) layer.setOpacity(overlayOpacity);
-  }, [overlayOpacity]);
-
-  return null;
-}
-
-function geojsonResult(job: Job, field: string) {
-  const value = job.result?.[field];
-  if (!value || typeof value !== "object") return undefined;
-  return value as GeoJSON.GeoJsonObject;
 }
 
 type KmlFeature = {
@@ -248,7 +222,6 @@ function formatLength(meters?: number): string | undefined {
 function lineLengthMeters(feature: KmlFeature): number | undefined {
   const geometry = feature.geometry;
   if (!geometry) return undefined;
-
   const segmentLength = (coords: unknown): number => {
     if (!Array.isArray(coords)) return 0;
     let total = 0;
@@ -270,7 +243,6 @@ function lineLengthMeters(feature: KmlFeature): number | undefined {
     }
     return total;
   };
-
   if (geometry.type === "LineString") return segmentLength(geometry.coordinates);
   if (geometry.type === "MultiLineString" && Array.isArray(geometry.coordinates)) {
     return geometry.coordinates.reduce<number>((sum, coords) => sum + segmentLength(coords), 0);
@@ -278,29 +250,37 @@ function lineLengthMeters(feature: KmlFeature): number | undefined {
   return undefined;
 }
 
-function kmlFeatureLabel(feature: KmlFeature, fallbackName: string, fallbackCategory: string): string {
+function kmlFeatureLabel(
+  feature: KmlFeature,
+  fallbackName: string,
+  fallbackCategory: string,
+): string {
   const name = featureName(feature, fallbackName);
   const category = featureCategory(feature, fallbackCategory);
   const length = formatLength(lineLengthMeters(feature));
   return [name, length, category].filter(Boolean).join(" - ");
 }
 
-function kmlFeaturePopup(feature: KmlFeature, fallbackName: string, fallbackCategory: string): string {
+function kmlFeaturePopup(
+  feature: KmlFeature,
+  fallbackName: string,
+  fallbackCategory: string,
+): string {
   const name = escapeHtml(featureName(feature, fallbackName));
   const category = escapeHtml(featureCategory(feature, fallbackCategory));
   const length = formatLength(lineLengthMeters(feature));
   return [
     `<strong>${name}</strong>`,
     length ? `<div>Length: ${escapeHtml(length)}</div>` : "",
-    `<div>Type: ${category}</div>`
+    `<div>Type: ${category}</div>`,
   ].join("");
 }
 
 function bindKmlFeature(
-  jobId: string,
+  sourceJobId: string,
   fallbackName: string,
   fallbackCategory: string,
-  showLabels: boolean
+  showLabels: boolean,
 ): (feature: KmlFeature, layer: L.Layer) => void {
   const setSelectedKmlTrack = useAppStore.getState().setSelectedKmlTrack;
   return (feature, layer) => {
@@ -310,68 +290,65 @@ function bindKmlFeature(
       className: showLabels ? "kmlLabel" : "kmlHoverLabel",
       direction: "top",
       permanent: showLabels,
-      sticky: !showLabels
+      sticky: !showLabels,
     });
     if (fallbackCategory !== "point") {
       layer.on("click", () => {
         const rawId = feature.id ?? feature.properties?.id ?? 0;
         const trackIndex = Number.isFinite(Number(rawId)) ? Number(rawId) : 0;
         setSelectedKmlTrack({
-          kmlJobId: jobId,
+          kmlJobId: sourceJobId,
           category: fallbackCategory as "descent" | "approach" | "unclassified",
           trackIndex,
-          name: featureName(feature, fallbackName)
+          name: featureName(feature, fallbackName),
         });
       });
     }
   };
 }
 
-function KmlImportLayer({ job, showLabels }: { job: Job; showLabels: boolean }) {
-  const descent = geojsonResult(job, "descent_geojson");
-  const approach = geojsonResult(job, "approach_geojson");
-  const unclassified = geojsonResult(job, "unclassified_geojson");
-  const points = geojsonResult(job, "points_geojson");
-  const name = (job.result?.name as string | undefined) ?? (job.params.name as string | undefined) ?? job.id;
-
+function VectorKmlLayer({ descriptor }: { descriptor: LayerDescriptor }) {
+  const showLabels = Boolean(descriptor.showLabels);
+  const sourceJobId = descriptor.sourceJobId ?? descriptor.id;
+  const name = descriptor.fallbackName ?? descriptor.label;
   return (
     <>
-      {unclassified && (
+      {descriptor.unclassified_geojson && (
         <GeoJSON
-          key={`${job.id}:unclassified:${showLabels}`}
-          data={unclassified}
+          key={`${descriptor.id}:unclassified:${showLabels}`}
+          data={descriptor.unclassified_geojson}
           style={{ color: "#59656d", weight: 3, opacity: 0.85, dashArray: "4 4" }}
-          onEachFeature={bindKmlFeature(job.id, name, "unclassified", showLabels)}
+          onEachFeature={bindKmlFeature(sourceJobId, name, "unclassified", showLabels)}
         />
       )}
-      {approach && (
+      {descriptor.approach_geojson && (
         <GeoJSON
-          key={`${job.id}:approach:${showLabels}`}
-          data={approach}
+          key={`${descriptor.id}:approach:${showLabels}`}
+          data={descriptor.approach_geojson}
           style={{ color: "#2563eb", weight: 3, opacity: 0.9, dashArray: "8 4" }}
-          onEachFeature={bindKmlFeature(job.id, name, "approach", showLabels)}
+          onEachFeature={bindKmlFeature(sourceJobId, name, "approach", showLabels)}
         />
       )}
-      {descent && (
+      {descriptor.descent_geojson && (
         <GeoJSON
-          key={`${job.id}:descent:${showLabels}`}
-          data={descent}
+          key={`${descriptor.id}:descent:${showLabels}`}
+          data={descriptor.descent_geojson}
           style={{ color: "#d33f2f", weight: 4, opacity: 0.95 }}
-          onEachFeature={bindKmlFeature(job.id, name, "descent", showLabels)}
+          onEachFeature={bindKmlFeature(sourceJobId, name, "descent", showLabels)}
         />
       )}
-      {points && (
+      {descriptor.points_geojson && (
         <GeoJSON
-          key={`${job.id}:points:${showLabels}`}
-          data={points}
-          onEachFeature={bindKmlFeature(job.id, name, "point", showLabels)}
+          key={`${descriptor.id}:points:${showLabels}`}
+          data={descriptor.points_geojson}
+          onEachFeature={bindKmlFeature(sourceJobId, name, "point", showLabels)}
           pointToLayer={(_feature, latlng) =>
             L.circleMarker(latlng, {
               radius: 5,
               color: "#5d3b00",
               weight: 1,
               fillColor: "#f5b82e",
-              fillOpacity: 0.95
+              fillOpacity: 0.95,
             })
           }
         />
@@ -380,22 +357,25 @@ function KmlImportLayer({ job, showLabels }: { job: Job; showLabels: boolean }) 
   );
 }
 
-function ProfileRappelsLayer({ job }: { job: Job }) {
-  const points = geojsonResult(job, "rappel_candidates_geojson");
-  if (!points) return null;
+function PointEventsLayer({ descriptor }: { descriptor: LayerDescriptor }) {
+  const data = descriptor.geojson;
+  if (!data) return null;
   return (
     <GeoJSON
-      key={`${job.id}:profile-rappels`}
-      data={points}
+      key={`${descriptor.id}:point-events`}
+      data={data}
       onEachFeature={(feature: KmlFeature, layer) => {
         const props = feature.properties ?? {};
         const drop = typeof props.drop_m === "number" ? `${props.drop_m.toFixed(1)} m` : "unknown";
-        const slope = typeof props.slope === "number" ? `${Math.round(props.slope * 100)}%` : "unknown";
-        layer.bindPopup(`<strong>Rappel candidate</strong><div>Drop: ${drop}</div><div>Slope: ${slope}</div>`);
-        layer.bindTooltip(`rappel ${drop}`, {
+        const slope =
+          typeof props.slope === "number" ? `${Math.round(props.slope * 100)}%` : "unknown";
+        layer.bindPopup(
+          `<strong>${escapeHtml(descriptor.label)}</strong><div>Drop: ${drop}</div><div>Slope: ${slope}</div>`,
+        );
+        layer.bindTooltip(`${descriptor.label} ${drop}`, {
           className: "kmlHoverLabel",
           direction: "top",
-          sticky: true
+          sticky: true,
         });
       }}
       pointToLayer={(_feature, latlng) =>
@@ -404,23 +384,64 @@ function ProfileRappelsLayer({ job }: { job: Job }) {
           color: "#111827",
           weight: 2,
           fillColor: "#ffcc00",
-          fillOpacity: 0.95
+          fillOpacity: 0.95,
         })
       }
     />
   );
 }
 
-export function MapView({ kmlImports = [], profileJob }: { kmlImports?: Job[]; profileJob?: Job }) {
-  const bounds = useAppStore((state) => state.bounds);
-  const overlay = useAppStore((state) => state.overlay);
-  const hillshade = useAppStore((state) => state.activeHillshade);
-  const footprints = useAppStore((state) => state.footprints);
-  const visibleKmls = useAppStore((state) => state.visibleKmls);
-  const kmlLabels = useAppStore((state) => state.kmlLabels);
+function VectorGeoJsonLayer({ descriptor }: { descriptor: LayerDescriptor }) {
+  const data = descriptor.geojson;
+  if (!data) return null;
+  return (
+    <GeoJSON
+      key={`${descriptor.id}:vector-geojson`}
+      data={data}
+      style={{ color: "#2563eb", weight: 3, opacity: descriptor.opacity ?? 0.9 }}
+    />
+  );
+}
+
+function FootprintLayer({ descriptor }: { descriptor: LayerDescriptor }) {
+  if (!descriptor.bounds_wgs84) return null;
+  return (
+    <Rectangle
+      bounds={leafletBounds(descriptor.bounds_wgs84)}
+      pathOptions={{
+        color: "#5b6e79",
+        weight: 1,
+        fillOpacity: descriptor.opacity ?? 0.04,
+        dashArray: "4 4",
+      }}
+    />
+  );
+}
+
+function LayerRenderer({ descriptor }: { descriptor: LayerDescriptor }) {
+  const hillshadeOpacity = useAppStore((s) => s.hillshadeOpacity);
+  const overlayOpacity = useAppStore((s) => s.overlayOpacity);
+  switch (descriptor.kind) {
+    case "base-raster":
+      return <RasterLayer descriptor={descriptor} opacity={hillshadeOpacity} />;
+    case "raster-overlay":
+      return <RasterLayer descriptor={descriptor} opacity={overlayOpacity} />;
+    case "vector-kml":
+      return <VectorKmlLayer descriptor={descriptor} />;
+    case "point-events":
+      return <PointEventsLayer descriptor={descriptor} />;
+    case "vector-geojson":
+      return <VectorGeoJsonLayer descriptor={descriptor} />;
+    case "footprint":
+      return <FootprintLayer descriptor={descriptor} />;
+    default:
+      return null;
+  }
+}
+
+export function MapView({ layers = [] }: { layers?: LayerDescriptor[] }) {
   const osmOpacity = useAppStore((state) => state.osmOpacity);
   const esriOpacity = useAppStore((state) => state.esriOpacity);
-  const overlayOpacity = useAppStore((state) => state.overlayOpacity);
 
   return (
     <MapContainer center={[37.3, -112.9]} zoom={10} maxZoom={22} className="map">
@@ -440,30 +461,9 @@ export function MapView({ kmlImports = [], profileJob }: { kmlImports?: Job[]; p
       />
       <MapControls />
       <PanController />
-      <HillshadeBaseLayer />
-      {Object.values(footprints).map((fp) => (
-        <Rectangle
-          key={fp.id}
-          bounds={leafletBounds(fp.bounds)}
-          pathOptions={{ color: "#5b6e79", weight: 1, fillOpacity: 0.04, dashArray: "4 4" }}
-        />
+      {layers.map((descriptor) => (
+        <LayerRenderer key={descriptor.id} descriptor={descriptor} />
       ))}
-      {overlay?.tileArchiveUrl ? (
-        <PmtilesOverlay multiply={!!hillshade} />
-      ) : (
-        overlay && <ImageOverlay
-          url={overlay.url}
-          bounds={leafletBounds(overlay.bounds)}
-          opacity={overlayOpacity}
-          className={hillshade ? "multiplyBlend" : undefined}
-        />
-      )}
-      {kmlImports
-        .filter((job) => job.status === "succeeded" && visibleKmls[job.id])
-        .map((job) => (
-          <KmlImportLayer key={job.id} job={job} showLabels={Boolean(kmlLabels[job.id])} />
-        ))}
-      {profileJob?.status === "succeeded" && <ProfileRappelsLayer job={profileJob} />}
     </MapContainer>
   );
 }

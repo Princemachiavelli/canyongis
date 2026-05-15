@@ -118,7 +118,7 @@ def test_generic_tool_endpoint_defaults_to_latest_dem(
     assert row["result"]["outputs"][0]["role"] == "test-output"
 
 
-def test_legacy_dem_run_endpoint_uses_shared_dispatcher(
+def test_generic_tool_endpoint_with_explicit_dem(
     live_postgres, tmp_path: Path, monkeypatch
 ) -> None:
     monkeypatch.setenv("CANYONGIS_SINGLE_USER", "1")
@@ -128,14 +128,17 @@ def test_legacy_dem_run_endpoint_uses_shared_dispatcher(
         app.state.ctx, tmp_path, job_id="explicit-dem", created_at="2026-01-01T00:00:00+00:00"
     )
 
-    res = client.post(f"/api/jobs/{dem.id}/run/{TEST_TOOL_KEY}", json={"tag": "legacy"})
+    res = client.post(
+        f"/api/jobs/{TEST_TOOL_KEY}",
+        json={"inputs": {"dem": dem.id}, "params": {"tag": "explicit"}},
+    )
 
     assert res.status_code == 200, res.text
     row = _wait_for_job(client, res.json()["id"])
     assert row["status"] == "succeeded", row.get("error")
     assert row["params"]["dem_job_id"] == dem.id
     assert row["params"]["job_key"] == TEST_TOOL_KEY
-    assert row["result"]["fake_url"].endswith("/legacy.txt")
+    assert row["result"]["fake_url"].endswith("/explicit.txt")
 
 
 def test_generic_tool_endpoint_reports_missing_dem(
@@ -149,22 +152,6 @@ def test_generic_tool_endpoint_reports_missing_dem(
 
     assert res.status_code == 400
     assert "DEM input is required" in res.json()["detail"]
-
-
-def test_legacy_dem_run_endpoint_rejects_context_tools(
-    live_postgres, tmp_path: Path, monkeypatch
-) -> None:
-    monkeypatch.setenv("CANYONGIS_SINGLE_USER", "1")
-    app = create_app(output_root=tmp_path / "out", postgres=live_postgres)
-    client = TestClient(app)
-    dem = _insert_dem_job(
-        app.state.ctx, tmp_path, job_id="explicit-dem", created_at="2026-01-01T00:00:00+00:00"
-    )
-
-    res = client.post(f"/api/jobs/{dem.id}/run/kml-snap", json={"target": "dem"})
-
-    assert res.status_code == 400
-    assert "requires explicit inputs" in res.json()["detail"]
 
 
 def test_build_dem_tool_runs_through_dispatcher(live_postgres, tmp_path: Path, monkeypatch) -> None:
@@ -300,11 +287,11 @@ def test_mcp_ravine_spine_uses_dispatcher(monkeypatch) -> None:
     assert calls[0]["body"]["params"]["parent_kml_job_id"] == "kml-1"
 
 
-def test_legacy_analysis_wrappers_keep_path_ids(live_postgres, tmp_path: Path, monkeypatch) -> None:
+def test_generic_analysis_dispatch(live_postgres, tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("CANYONGIS_SINGLE_USER", "1")
     calls: list[dict[str, Any]] = []
 
-    def fake_submit_tool_job(ctx, tool_key, body, *, user, project_id, legacy_dem_job_id=None):
+    def fake_submit_tool_job(ctx, tool_key, body, *, user, project_id):
         calls.append({"tool_key": tool_key, "body": body})
         return Job(
             id=f"{tool_key}-job",
@@ -321,16 +308,28 @@ def test_legacy_analysis_wrappers_keep_path_ids(live_postgres, tmp_path: Path, m
     app = create_app(output_root=tmp_path / "out", postgres=live_postgres)
     client = TestClient(app)
 
-    snap = client.post("/api/jobs/kml-1/snap-kml", json={"target": "dem"})
-    profile = client.post(
-        "/api/jobs/kml-1/track-profile",
-        json={"dem_job_id": "dem-1", "category": "descent", "track_index": 0},
+    snap = client.post(
+        "/api/jobs/kml-snap",
+        json={"inputs": {"kml": "kml-1"}, "params": {"target": "dem"}},
     )
-    spine = client.post("/api/jobs/tpi-1/ravine-spine", json={"threshold_pct": 95})
+    profile = client.post(
+        "/api/jobs/track-profile",
+        json={
+            "inputs": {"kml": "kml-1", "dem": "dem-1"},
+            "params": {"category": "descent", "track_index": 0},
+        },
+    )
+    spine = client.post(
+        "/api/jobs/ravine-spine",
+        json={"inputs": {"score": "tpi-1"}, "params": {"threshold_pct": 95}},
+    )
 
     assert snap.status_code == 200, snap.text
     assert profile.status_code == 200, profile.text
     assert spine.status_code == 200, spine.text
-    assert calls[0]["body"]["params"]["kml_job_id"] == "kml-1"
-    assert calls[1]["body"]["params"]["kml_job_id"] == "kml-1"
-    assert calls[2]["body"]["params"]["tpi_job_id"] == "tpi-1"
+    assert calls[0]["tool_key"] == "kml-snap"
+    assert calls[0]["body"]["inputs"] == {"kml": "kml-1"}
+    assert calls[1]["tool_key"] == "track-profile"
+    assert calls[1]["body"]["inputs"] == {"kml": "kml-1", "dem": "dem-1"}
+    assert calls[2]["tool_key"] == "ravine-spine"
+    assert calls[2]["body"]["inputs"] == {"score": "tpi-1"}
