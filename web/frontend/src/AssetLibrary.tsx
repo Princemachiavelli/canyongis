@@ -4,17 +4,25 @@ import { Eye, LocateFixed, Play, Search, Tags } from "lucide-react";
 import {
   listProjectAssets,
   type Asset,
-  type Bounds,
   type Job,
   type JobSpec,
 } from "./api";
 import { useAppStore } from "./state";
 import { descriptorsFromJob } from "./layers";
+import {
+  ASSET_GROUP_ORDER,
+  assetBounds,
+  assetGroup,
+  assetName,
+  compatibleSpecs,
+} from "./assetUtils";
 
 type AssetLibraryProps = {
   projectId?: string;
   jobs: Job[];
   specs: JobSpec[];
+  selectedAssetId?: string;
+  onSelectAsset: (assetId: string) => void;
   onRunTool: (
     spec: JobSpec,
     initialInputs: Record<string, string | undefined>,
@@ -27,44 +35,6 @@ type AssetGroup = {
   assets: Asset[];
 };
 
-const GROUP_ORDER = [
-  "aoi",
-  "dem",
-  "route",
-  "score",
-  "spine",
-  "event",
-  "raster",
-  "other",
-];
-
-function assetGroup(kind: string): { key: string; label: string } {
-  if (kind === "geom.bounds") return { key: "aoi", label: "AOIs" };
-  if (kind === "raster.dem" || kind === "raster.hillshade") {
-    return { key: "dem", label: "DEMs" };
-  }
-  if (kind.startsWith("vector.kml.route")) return { key: "route", label: "Routes" };
-  if (kind.startsWith("raster.score")) return { key: "score", label: "Scores" };
-  if (kind.startsWith("vector.kml.spine")) return { key: "spine", label: "Spines" };
-  if (kind.includes("rappel") || kind.startsWith("vector.geojson.points")) {
-    return { key: "event", label: "Events" };
-  }
-  if (kind.startsWith("raster.")) return { key: "raster", label: "Rasters" };
-  return { key: "other", label: "Other" };
-}
-
-function assetName(asset: Asset, job?: Job): string {
-  const label = asset.metadata.label;
-  if (typeof label === "string" && label) return label;
-  const outputKey = asset.metadata.output_key;
-  const jobName =
-    (job?.result?.name as string | undefined) ?? (job?.params.name as string | undefined);
-  if (jobName && typeof outputKey === "string") return `${jobName} ${outputKey}`;
-  if (jobName) return jobName;
-  if (asset.path) return asset.path.split("/").pop() ?? asset.id;
-  return asset.id;
-}
-
 function formatBytes(value: number | null): string | undefined {
   if (value == null) return undefined;
   if (value < 1024) return `${value} B`;
@@ -73,37 +43,19 @@ function formatBytes(value: number | null): string | undefined {
   return `${(value / 1024).toFixed(1)} KB`;
 }
 
-function assetBounds(asset: Asset): Bounds | undefined {
-  const arr = asset.bounds_wgs84;
-  if (!arr || arr.length !== 4) return undefined;
-  return { west: arr[0], south: arr[1], east: arr[2], north: arr[3] };
-}
-
-function matchesInput(assetKind: string, inputKind: string): boolean {
-  return assetKind === inputKind || assetKind.startsWith(`${inputKind}.`);
-}
-
-function compatibleSpecs(
-  asset: Asset,
-  specs: JobSpec[],
-): Array<{ spec: JobSpec; inputKey: string }> {
-  const matches: Array<{ spec: JobSpec; inputKey: string }> = [];
-  for (const spec of specs) {
-    const input = spec.inputs.find((inp) => matchesInput(asset.kind, inp.kind));
-    if (input) matches.push({ spec, inputKey: input.key });
-  }
-  return matches;
-}
-
 function AssetRow({
   asset,
   job,
   specs,
+  selected,
+  onSelectAsset,
   onRunTool,
 }: {
   asset: Asset;
   job?: Job;
   specs: JobSpec[];
+  selected: boolean;
+  onSelectAsset: (assetId: string) => void;
   onRunTool: AssetLibraryProps["onRunTool"];
 }) {
   const setActiveDemJob = useAppStore((s) => s.setActiveDemJob);
@@ -127,13 +79,14 @@ function AssetRow({
   const size = formatBytes(asset.size_bytes);
 
   return (
-    <div className="assetRow">
+    <div className={`assetRow ${selected ? "selected" : ""}`}>
       <div className="assetRowHead">
         <button
           type="button"
           className="assetNameButton"
           title={asset.path ?? asset.id}
           onClick={() => {
+            onSelectAsset(asset.id);
             if (asset.kind === "raster.dem" && job) setActiveDemJob(job);
             if (bounds) requestPan(bounds);
           }}
@@ -255,7 +208,14 @@ function AssetRow({
   );
 }
 
-export function AssetLibrary({ projectId, jobs, specs, onRunTool }: AssetLibraryProps) {
+export function AssetLibrary({
+  projectId,
+  jobs,
+  specs,
+  selectedAssetId,
+  onSelectAsset,
+  onRunTool,
+}: AssetLibraryProps) {
   const [search, setSearch] = useState("");
   const assetsQuery = useQuery({
     queryKey: ["project-assets", projectId],
@@ -279,7 +239,7 @@ export function AssetLibrary({ projectId, jobs, specs, onRunTool }: AssetLibrary
       byKey.set(group.key, group);
     }
     return [...byKey.values()].sort(
-      (a, b) => GROUP_ORDER.indexOf(a.key) - GROUP_ORDER.indexOf(b.key),
+      (a, b) => ASSET_GROUP_ORDER.indexOf(a.key) - ASSET_GROUP_ORDER.indexOf(b.key),
     );
   }, [assetsQuery.data, jobsById, search]);
 
@@ -317,6 +277,8 @@ export function AssetLibrary({ projectId, jobs, specs, onRunTool }: AssetLibrary
                   asset={asset}
                   job={asset.job_id ? jobsById.get(asset.job_id) : undefined}
                   specs={specs}
+                  selected={asset.id === selectedAssetId}
+                  onSelectAsset={onSelectAsset}
                   onRunTool={onRunTool}
                 />
               ))}

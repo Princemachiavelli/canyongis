@@ -316,29 +316,29 @@ function SchemaField({
   return <StringField name={name} schema={schema} value={value} onChange={onChange} />;
 }
 
-export function ToolDialog({
-  open,
-  spec,
-  jobs,
-  initialInputs,
-  initialParams,
-  onClose,
-  onRun,
-  isPending,
-  title,
-}: {
-  open: boolean;
+type ToolFormProps = {
   spec: JobSpec;
   jobs: Job[];
   initialInputs?: ToolDialogInputDefaults;
   initialParams?: Record<string, unknown>;
-  onClose: () => void;
+  onCancel?: () => void;
   onRun: (payload: ToolDialogResult) => void;
   isPending?: boolean;
   title?: string;
-}) {
-  const dialogRef = useRef<HTMLDialogElement>(null);
+  showClose?: boolean;
+};
 
+export function ToolForm({
+  spec,
+  jobs,
+  initialInputs,
+  initialParams,
+  onCancel,
+  onRun,
+  isPending,
+  title,
+  showClose = true,
+}: ToolFormProps) {
   const schema = (spec.request_schema ?? {}) as JsonSchema;
   const props = (schema.properties ?? {}) as Record<string, JsonSchema>;
   const defaults = (spec.request_defaults ?? {}) as Record<string, unknown>;
@@ -377,7 +377,6 @@ export function ToolDialog({
   }, [jobInputs, jobs, demInputKey, selectedDem]);
 
   useEffect(() => {
-    if (!open) return;
     const initParams: Record<string, unknown> = {};
     for (const k of paramKeys) {
       if (initialParams && k in initialParams) {
@@ -419,10 +418,10 @@ export function ToolDialog({
           : (matching[0]?.id ?? "");
     }
     setInputState(initInputs);
-  }, [open, spec.key]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [spec.key, initialInputs, initialParams]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!open || !demInputKey) return;
+    if (!demInputKey) return;
     setInputState((prev) => {
       let next = prev;
       for (const inp of jobInputs) {
@@ -436,16 +435,7 @@ export function ToolDialog({
       }
       return next;
     });
-  }, [selectedDem, open, demInputKey, jobInputs, compatibleJobsByKey]);
-
-  useEffect(() => {
-    const dialog = dialogRef.current;
-    if (!dialog) return;
-    if (open && !dialog.open) dialog.showModal();
-    if (!open && dialog.open) dialog.close();
-  }, [open]);
-
-  if (!open) return null;
+  }, [selectedDem, demInputKey, jobInputs, compatibleJobsByKey]);
 
   const missingRequired = jobInputs.find(
     (inp) => inp.required && !inputState[inp.key],
@@ -468,20 +458,21 @@ export function ToolDialog({
   };
 
   return (
-    <dialog ref={dialogRef} className="appDialog toolDialog" onClose={onClose}>
-      <form onSubmit={handleSubmit}>
+      <form className="toolForm" onSubmit={handleSubmit}>
         <div className="dialogHead">
           <Play size={16} />
           <strong>{title ?? spec.label}</strong>
-          <button
-            type="button"
-            className="iconButton"
-            aria-label="Close"
-            style={{ marginLeft: "auto" }}
-            onClick={onClose}
-          >
-            <X size={14} />
-          </button>
+          {showClose && onCancel && (
+            <button
+              type="button"
+              className="iconButton"
+              aria-label="Close"
+              style={{ marginLeft: "auto" }}
+              onClick={onCancel}
+            >
+              <X size={14} />
+            </button>
+          )}
         </div>
         {spec.description && <div className="toolDescription">{spec.description}</div>}
 
@@ -539,7 +530,7 @@ export function ToolDialog({
         )}
 
         <div className="dialogActions">
-          <button type="button" onClick={onClose}>
+          <button type="button" onClick={onCancel} disabled={!onCancel}>
             Cancel
           </button>
           <button
@@ -551,6 +542,28 @@ export function ToolDialog({
           </button>
         </div>
       </form>
+  );
+}
+
+export function ToolDialog({
+  open,
+  onClose,
+  ...props
+}: ToolFormProps & { open: boolean; onClose: () => void }) {
+  const dialogRef = useRef<HTMLDialogElement>(null);
+
+  useEffect(() => {
+    const dialog = dialogRef.current;
+    if (!dialog) return;
+    if (open && !dialog.open) dialog.showModal();
+    if (!open && dialog.open) dialog.close();
+  }, [open]);
+
+  if (!open) return null;
+
+  return (
+    <dialog ref={dialogRef} className="appDialog toolDialog" onClose={onClose}>
+      <ToolForm {...props} onCancel={onClose} />
     </dialog>
   );
 }

@@ -54,6 +54,27 @@ export type Asset = {
   linked_at: string | null;
 };
 
+export type AssetLineageNode = {
+  id: string;
+  kind: string;
+  path: string | null;
+  url: string | null;
+  job_id: string | null;
+  bounds_wgs84: number[] | null;
+};
+
+export type AssetLineageEdge = {
+  consumer: string;
+  input_key: string;
+  producer: string;
+};
+
+export type AssetLineage = {
+  root: string;
+  nodes: Record<string, AssetLineageNode>;
+  edges: AssetLineageEdge[];
+};
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const headers = new Headers(init?.headers);
   if (!(init?.body instanceof FormData) && !headers.has("content-type")) {
@@ -125,6 +146,10 @@ export async function listProjectAssets(
     `/api/projects/${projectId}/assets${suffix}`,
   );
   return data.assets;
+}
+
+export async function getAssetLineage(assetId: string): Promise<AssetLineage> {
+  return request<AssetLineage>(`/api/assets/${assetId}/lineage`);
 }
 
 export async function listJobs(): Promise<Job[]> {

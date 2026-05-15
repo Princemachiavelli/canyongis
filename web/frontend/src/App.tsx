@@ -39,6 +39,7 @@ import {
 } from "./api";
 import { MapView } from "./MapView";
 import { AssetLibrary } from "./AssetLibrary";
+import { Inspector, type InspectorTool } from "./Inspector";
 import { useAppStore } from "./state";
 import { ToolDialog, type ToolDialogResult } from "./ToolDialog";
 import { descriptorsFromJob, type LayerDescriptor } from "./layers";
@@ -1157,7 +1158,7 @@ function OpacitySliders() {
 export function App() {
   const queryClient = useQueryClient();
   const useAssetUi = useMemo(
-    () => new URLSearchParams(window.location.search).get("ui") === "v2",
+    () => new URLSearchParams(window.location.search).get("ui") !== "legacy",
     [],
   );
   const bounds = useAppStore((state) => state.bounds);
@@ -1305,6 +1306,8 @@ export function App() {
     pendingKey?: string;
   };
   const [toolDialog, setToolDialog] = useState<ToolDialogContext | undefined>();
+  const [selectedAssetId, setSelectedAssetId] = useState<string | undefined>();
+  const [inspectorTool, setInspectorTool] = useState<InspectorTool | undefined>();
   const runToolMutation = useMutation({
     mutationFn: (payload: {
       spec: JobSpec;
@@ -1325,20 +1328,34 @@ export function App() {
       invalidate();
     },
   });
-  const onRunJob = (demJob: Job, spec: JobSpec) =>
-    setToolDialog({
+  const onRunJob = (demJob: Job, spec: JobSpec) => {
+    const payload = {
       spec,
       initialInputs: { dem: demJob.id },
       pendingKey: `${demJob.id}:${spec.key}`,
-    });
+    };
+    if (useAssetUi) setInspectorTool(payload);
+    else setToolDialog(payload);
+  };
   const onRunAssetTool = (
     spec: JobSpec,
     initialInputs: Record<string, string | undefined>,
-  ) =>
-    setToolDialog({
+  ) => {
+    setInspectorTool({
       spec,
       initialInputs,
     });
+  };
+  const runInspectorTool = (tool: InspectorTool, result: ToolDialogResult) => {
+    runToolMutation.mutate(
+      {
+        spec: tool.spec,
+        result,
+        extraParams: tool.extraParams,
+      },
+      { onSuccess: () => setInspectorTool(undefined) },
+    );
+  };
   const uploadKmlMutation = useMutation({
     mutationFn: (file: File) => uploadKmlFile(file, activeDemJob?.id),
     onSuccess: () => {
@@ -1416,11 +1433,13 @@ export function App() {
     const initialInputs: Record<string, string | undefined> = { kml: job.id };
     const targetDem = demJob ?? activeDemJob;
     if (targetDem) initialInputs.dem = targetDem.id;
-    setToolDialog({
+    const payload = {
       spec: snapSpec,
       initialInputs,
       initialParams: { target },
-    });
+    };
+    if (useAssetUi) setInspectorTool(payload);
+    else setToolDialog(payload);
   };
 
   const openSpineDialog = () => {
@@ -1431,11 +1450,13 @@ export function App() {
     if (selectedKmlTrack?.kmlJobId) {
       extraParams.parent_kml_job_id = selectedKmlTrack.kmlJobId;
     }
-    setToolDialog({
+    const payload = {
       spec: spineSpec,
       initialInputs,
       extraParams,
-    });
+    };
+    if (useAssetUi) setInspectorTool(payload);
+    else setToolDialog(payload);
   };
 
   const runBuildDem = () => {
@@ -1514,12 +1535,17 @@ export function App() {
         </div>
       </section>
 
-      <section className="workspace">
+      <section className={`workspace ${useAssetUi ? "assetWorkspace" : ""}`}>
         {useAssetUi ? (
           <AssetLibrary
             projectId={activeProjectId}
             jobs={jobs}
             specs={specs}
+            selectedAssetId={selectedAssetId}
+            onSelectAsset={(assetId) => {
+              setSelectedAssetId(assetId);
+              setInspectorTool(undefined);
+            }}
             onRunTool={onRunAssetTool}
           />
         ) : (
@@ -1984,8 +2010,26 @@ export function App() {
           </dialog>
           <MapView layers={visibleLayers} />
         </section>
+        {useAssetUi && (
+          <Inspector
+            projectId={activeProjectId}
+            selectedAssetId={selectedAssetId}
+            tool={inspectorTool}
+            jobs={jobs}
+            specs={specs}
+            isRunningTool={runToolMutation.isPending}
+            onSelectAsset={(assetId) => {
+              setSelectedAssetId(assetId);
+              setInspectorTool(undefined);
+            }}
+            onClearSelection={() => setSelectedAssetId(undefined)}
+            onOpenTool={onRunAssetTool}
+            onCloseTool={() => setInspectorTool(undefined)}
+            onRunTool={runInspectorTool}
+          />
+        )}
       </section>
-      {toolDialog && (
+      {!useAssetUi && toolDialog && (
         <ToolDialog
           open={true}
           spec={toolDialog.spec}

@@ -98,6 +98,10 @@ input {
     overflow: hidden;
 }
 
+.workspace.assetWorkspace {
+    grid-template-columns: 340px minmax(0, 1fr) 360px;
+}
+
 .panel {
     min-height: 0;
     height: calc(100vh - 44px);
@@ -903,10 +907,135 @@ button.miniButton {
     background: rgba(15, 23, 42, 0.22);
 }
 
-.appDialog form {
+.appDialog form,
+.toolForm {
     display: grid;
     gap: 12px;
     padding: 14px;
+}
+
+.inspectorPanel {
+    min-height: 0;
+    height: calc(100vh - 44px);
+    overflow: auto;
+    overscroll-behavior: contain;
+    background: #fbfcfd;
+    border-left: 1px solid #cbd3d8;
+    display: flex;
+    flex-direction: column;
+}
+
+.inspectorHead {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    border-bottom: 1px solid #d6dde1;
+    background: rgba(251, 252, 253, 0.96);
+    padding: 12px 14px;
+}
+
+.inspectorHead div {
+    display: grid;
+    gap: 2px;
+}
+
+.inspectorHead span {
+    color: #65737c;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.08em;
+}
+
+.inspectorHead strong {
+    color: #172026;
+    font-size: 15px;
+}
+
+.inspectorBody,
+.inspectorEmpty {
+    display: grid;
+    gap: 14px;
+    padding: 14px;
+}
+
+.inspectorEmpty span {
+    color: #65737c;
+    font-size: 12px;
+}
+
+.inspectorSection {
+    display: grid;
+    gap: 8px;
+}
+
+.inspectorSection h2 {
+    color: #2c3a42;
+    font-size: 13px;
+}
+
+.inspectorMeta {
+    font-size: 11px;
+}
+
+.inspectorId {
+    color: #65737c;
+    font-size: 11px;
+    word-break: break-all;
+}
+
+.inspectorTools,
+.lineageList {
+    display: grid;
+    gap: 6px;
+}
+
+.lineageEdge {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto minmax(0, 1fr);
+    align-items: center;
+    gap: 6px;
+    border: 1px solid #e1e7eb;
+    border-radius: 6px;
+    padding: 6px;
+    background: #ffffff;
+    font-size: 11px;
+}
+
+.lineageEdge span {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.lineageEdge code {
+    border-radius: 999px;
+    padding: 1px 6px;
+    color: #0c6b58;
+    background: #d9ece7;
+}
+
+.inspectorJson {
+    margin: 0;
+    max-height: 220px;
+    overflow: auto;
+    border: 1px solid #e1e7eb;
+    border-radius: 6px;
+    padding: 8px;
+    color: #46535b;
+    background: #ffffff;
+    font-size: 11px;
+    white-space: pre-wrap;
+    word-break: break-word;
+}
+
+.assetRow.selected {
+    border-color: #0c6b58;
+    box-shadow: 0 0 0 1px #0c6b58 inset;
 }
 
 .dialogHead {
