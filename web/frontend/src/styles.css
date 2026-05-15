@@ -926,6 +926,68 @@ button.miniButton {
     width: auto;
 }
 
+.toolDialog {
+    width: min(440px, calc(100vw - 32px));
+}
+
+.toolDescription {
+    font-size: 12px;
+    color: #4b5b66;
+}
+
+.toolInputs,
+.toolParams {
+    display: grid;
+    gap: 8px;
+    border-top: 1px solid #e1e6ea;
+    padding-top: 10px;
+}
+
+.toolField {
+    display: grid;
+    gap: 4px;
+    font-size: 12px;
+}
+
+.toolField > span {
+    color: #4b5b66;
+}
+
+.toolField input[type="text"],
+.toolField input[type="number"],
+.toolField select {
+    padding: 6px 8px;
+    border: 1px solid #b9c2c8;
+    border-radius: 4px;
+    font: inherit;
+    color: #172026;
+    background: #ffffff;
+}
+
+.toolFieldCheckbox {
+    grid-template-columns: auto 1fr;
+    align-items: center;
+    gap: 6px;
+}
+
+.toolFieldHint {
+    color: #8a96a0;
+    font-weight: normal;
+}
+
+.toolWarning {
+    color: #b3261e;
+    font-size: 12px;
+}
+
+.iconButton {
+    background: transparent;
+    border: none;
+    padding: 2px;
+    cursor: pointer;
+    color: #4b5b66;
+}
+
 .leaflet-container {
     background: #d9e0e4;
 }

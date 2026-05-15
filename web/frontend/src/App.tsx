@@ -24,10 +24,8 @@ import {
   importRopewikiKml,
   listJobSpecs,
   listJobs,
-  runDemJob,
-  runRavineSpine,
+  runTool,
   runTrackProfile,
-  snapKml,
   trimJobRuns,
   uploadKmlFile,
   type Bounds,
@@ -42,6 +40,7 @@ import {
 } from "./api";
 import { MapView } from "./MapView";
 import { useAppStore } from "./state";
+import { ToolDialog, type ToolDialogResult } from "./ToolDialog";
 
 function jobBoundsWgs84(job: Job): Bounds | undefined {
   const arr = job.result?.bounds_wgs84 as number[] | undefined;
@@ -397,13 +396,6 @@ function ProgressTail({
   );
 }
 
-function isTpiProducer(job: Job): boolean {
-  return (
-    typeof (job.result as Record<string, unknown> | undefined)?.b_tpi_path ===
-    "string"
-  );
-}
-
 function DerivedRow({
   job,
   spec,
@@ -417,40 +409,22 @@ function DerivedRow({
   onDelete?: (job: Job) => void;
   onCancel?: (job: Job) => void;
 }) {
-  const setActiveDemJob = useAppStore((s) => s.setActiveDemJob);
-  const setActiveCompareJob = useAppStore((s) => s.setActiveCompareJob);
   const setActiveHillshade = useAppStore((s) => s.setActiveHillshade);
   const setOverlay = useAppStore((s) => s.setOverlay);
   const overlay = useAppStore((s) => s.overlay);
   const activeHillshade = useAppStore((s) => s.activeHillshade);
-  const activeCompareId = useAppStore((s) => s.activeCompareJob?.id);
   const previews = spec ? previewsFor(job, spec) : [];
   const bounds =
     jobBoundsWgs84(job) ?? (demJob ? jobBoundsWgs84(demJob) : undefined);
-  const canBeTpi = isTpiProducer(job);
-  const isActiveTpi = canBeTpi && activeCompareId === job.id;
   const isHillshade = spec?.key === "hillshade";
   const activeHillshadeId = activeHillshade?.id;
-  const useAsTpi = () => {
-    if (demJob) setActiveDemJob(demJob);
-    setActiveCompareJob(job);
-  };
   return (
-    <div className={`derivedRow ${job.status} ${isActiveTpi ? "active" : ""} ${activeHillshadeId === job.id ? "active" : ""}`}>
+    <div className={`derivedRow ${job.status} ${activeHillshadeId === job.id ? "active" : ""}`}>
       <div className="derivedRowHead">
         <code>{job.id}</code>
         <StatusBadge status={job.status} />
       </div>
       <div className="derivedRowActions">
-        {canBeTpi && job.status === "succeeded" && (
-          <button
-            className={isActiveTpi ? "toggled" : ""}
-            disabled={isActiveTpi}
-            onClick={useAsTpi}
-          >
-            {isActiveTpi ? "Active TPI" : "Use as TPI"}
-          </button>
-        )}
         {isHillshade && job.status === "succeeded" && bounds && (
           <button
             className={activeHillshadeId === job.id ? "toggled" : ""}
@@ -583,8 +557,7 @@ function JobSpecSection({
           </ul>
         )}
         {runs.map((job) => {
-          const isTpi = isTpiProducer(job);
-          const spineJobs = isTpi ? (spineJobsByTpi.get(job.id) ?? []) : [];
+          const spineJobs = spineJobsByTpi.get(job.id) ?? [];
           return (
             <div key={job.id} className="jobRunGroup">
               <DerivedRow
@@ -705,7 +678,6 @@ function AreaCard({
 function KmlImportRow({
   job,
   activeDemJob,
-  activeCompareJob,
   childLayers = [],
   onSnap,
   onDelete,
@@ -713,7 +685,6 @@ function KmlImportRow({
 }: {
   job: Job;
   activeDemJob?: Job;
-  activeCompareJob?: Job;
   childLayers?: Job[];
   onSnap?: (job: Job, target: KmlSnapTarget) => void;
   onDelete?: (job: Job) => void;
@@ -773,28 +744,12 @@ function KmlImportRow({
             </button>
             {onSnap && job.kind === "kml-import" && (
               <>
-                <button
-                  disabled={!activeDemJob}
-                  onClick={() => onSnap(job, "dem")}
-                >
-                  Snap DEM
-                </button>
-                <button
-                  disabled={!activeCompareJob}
-                  onClick={() => onSnap(job, "tpi")}
-                >
-                  Snap TPI
-                </button>
-                <button
-                  disabled={!activeCompareJob}
-                  onClick={() => onSnap(job, "geomorphon")}
-                >
+                <button onClick={() => onSnap(job, "dem")}>Snap DEM</button>
+                <button onClick={() => onSnap(job, "tpi")}>Snap TPI</button>
+                <button onClick={() => onSnap(job, "geomorphon")}>
                   Snap Geom
                 </button>
-                <button
-                  disabled={!activeCompareJob}
-                  onClick={() => onSnap(job, "curvature")}
-                >
+                <button onClick={() => onSnap(job, "curvature")}>
                   Snap Curv
                 </button>
               </>
@@ -832,7 +787,6 @@ function KmlImportRow({
               key={child.id}
               job={child}
               activeDemJob={activeDemJob}
-              activeCompareJob={activeCompareJob}
               onDelete={onDelete}
               onCancel={onCancel}
             />
@@ -1152,7 +1106,6 @@ export function App() {
   const queryClient = useQueryClient();
   const bounds = useAppStore((state) => state.bounds);
   const activeDemJob = useAppStore((state) => state.activeDemJob);
-  const activeCompareJob = useAppStore((state) => state.activeCompareJob);
   const selectedKmlTrack = useAppStore((state) => state.selectedKmlTrack);
   const overlay = useAppStore((state) => state.overlay);
   const activeHillshade = useAppStore((state) => state.activeHillshade);
@@ -1169,8 +1122,6 @@ export function App() {
   const demDialogRef = useRef<HTMLDialogElement>(null);
   const [name, setName] = useState("aoi");
   const [bufferM, setBufferM] = useState(200);
-  const [snapRadiusM, setSnapRadiusM] = useState(30);
-  const [snapStepM, setSnapStepM] = useState(10);
   const [openMapTool, setOpenMapTool] = useState<
     "aoi" | "kml" | "ravine" | "opacity" | undefined
   >();
@@ -1243,11 +1194,28 @@ export function App() {
     onSuccess: invalidate,
   });
   const [pendingRunKey, setPendingRunKey] = useState<string | undefined>();
-  const runJobMutation = useMutation({
-    mutationFn: ({ demJob, spec }: { demJob: Job; spec: JobSpec }) =>
-      runDemJob(demJob.id, spec.key, {}),
-    onMutate: ({ demJob, spec }) => {
-      setPendingRunKey(`${demJob.id}:${spec.key}`);
+  type ToolDialogContext = {
+    spec: JobSpec;
+    initialInputs?: Record<string, string | undefined>;
+    initialParams?: Record<string, unknown>;
+    extraParams?: Record<string, unknown>;
+    pendingKey?: string;
+  };
+  const [toolDialog, setToolDialog] = useState<ToolDialogContext | undefined>();
+  const runToolMutation = useMutation({
+    mutationFn: (payload: {
+      spec: JobSpec;
+      result: ToolDialogResult;
+      extraParams?: Record<string, unknown>;
+    }) =>
+      runTool(payload.spec.key, {
+        inputs: payload.result.inputs,
+        params: { ...payload.result.params, ...(payload.extraParams ?? {}) },
+      }),
+    onMutate: ({ spec, result }) => {
+      const demId = result.inputs.dem;
+      const pendingKey = demId ? `${demId}:${spec.key}` : `tool:${spec.key}`;
+      setPendingRunKey(pendingKey);
     },
     onSettled: () => {
       setPendingRunKey(undefined);
@@ -1255,14 +1223,11 @@ export function App() {
     },
   });
   const onRunJob = (demJob: Job, spec: JobSpec) =>
-    runJobMutation.mutate({ demJob, spec });
-  const spineMutation = useMutation({
-    mutationFn: () => {
-      if (!activeCompareJob) throw new Error("Select a completed TPI job");
-      return runRavineSpine(activeCompareJob.id, selectedKmlTrack?.kmlJobId);
-    },
-    onSuccess: invalidate,
-  });
+    setToolDialog({
+      spec,
+      initialInputs: { dem: demJob.id },
+      pendingKey: `${demJob.id}:${spec.key}`,
+    });
   const uploadKmlMutation = useMutation({
     mutationFn: (file: File) => uploadKmlFile(file, activeDemJob?.id),
     onSuccess: () => {
@@ -1273,41 +1238,6 @@ export function App() {
     mutationFn: (source: string) => {
       if (!source) throw new Error("Enter a Ropewiki URL or title");
       return importRopewikiKml(source, activeDemJob?.id);
-    },
-    onSuccess: invalidate,
-  });
-  const snapKmlMutation = useMutation({
-    mutationFn: ({
-      job,
-      target,
-      demJob,
-      searchRadiusM,
-      sampleStepM,
-    }: {
-      job: Job;
-      target: KmlSnapTarget;
-      demJob?: Job;
-      searchRadiusM: number;
-      sampleStepM: number;
-    }) => {
-      if (target === "dem") {
-        const targetDemJob = demJob ?? activeDemJob;
-        if (!targetDemJob) throw new Error("Select a completed DEM job first");
-        return snapKml(job.id, {
-          target,
-          dem_job_id: targetDemJob.id,
-          search_radius_m: searchRadiusM,
-          sample_step_m: sampleStepM,
-        });
-      }
-      if (!activeCompareJob)
-        throw new Error("Select a completed TPI job first");
-      return snapKml(job.id, {
-        target,
-        compare_job_id: activeCompareJob.id,
-        search_radius_m: searchRadiusM,
-        sample_step_m: sampleStepM,
-      });
     },
     onSuccess: invalidate,
   });
@@ -1356,21 +1286,40 @@ export function App() {
   const trimOldRuns = (demJobId: string, jobKey: string) =>
     trimRunsMutation.mutate({ demJobId, jobKey });
 
-  const promptNumber = (
-    label: string,
-    current: number,
-    min: number,
-  ): number | undefined => {
-    const raw = window.prompt(label, String(current));
-    if (raw === null) return undefined;
-    const value = Number(raw);
-    if (!Number.isFinite(value) || value < min) {
-      window.alert(
-        `${label} must be ${min > 0 ? "a positive number" : "zero or greater"}.`,
-      );
-      return undefined;
+  const snapSpec = useMemo(
+    () => specs.find((s) => s.key === "kml-snap"),
+    [specs],
+  );
+  const spineSpec = useMemo(
+    () => specs.find((s) => s.key === "ravine-spine"),
+    [specs],
+  );
+
+  const openSnapDialog = (job: Job, target: KmlSnapTarget, demJob?: Job) => {
+    if (!snapSpec) return;
+    const initialInputs: Record<string, string | undefined> = { kml: job.id };
+    const targetDem = demJob ?? activeDemJob;
+    if (targetDem) initialInputs.dem = targetDem.id;
+    setToolDialog({
+      spec: snapSpec,
+      initialInputs,
+      initialParams: { target },
+    });
+  };
+
+  const openSpineDialog = () => {
+    if (!spineSpec) return;
+    const initialInputs: Record<string, string | undefined> = {};
+    if (activeDemJob) initialInputs.dem = activeDemJob.id;
+    const extraParams: Record<string, unknown> = {};
+    if (selectedKmlTrack?.kmlJobId) {
+      extraParams.parent_kml_job_id = selectedKmlTrack.kmlJobId;
     }
-    return value;
+    setToolDialog({
+      spec: spineSpec,
+      initialInputs,
+      extraParams,
+    });
   };
 
   const runBuildDem = () => {
@@ -1409,26 +1358,14 @@ export function App() {
     if (!dialog.open) dialog.showModal();
   };
 
-  const runSnap = (job: Job, target: KmlSnapTarget, demJob?: Job) => {
-    const searchRadiusM = promptNumber("Snap radius meters", snapRadiusM, 1);
-    if (searchRadiusM === undefined) return;
-    const sampleStepM = promptNumber("Snap sample step meters", snapStepM, 1);
-    if (sampleStepM === undefined) return;
-    setSnapRadiusM(searchRadiusM);
-    setSnapStepM(sampleStepM);
-    snapKmlMutation.mutate({ job, target, demJob, searchRadiusM, sampleStepM });
-  };
-
   const selectedAoiText = bounds ? formatBounds(bounds) : "No AOI selected";
 
   const error = useMemo(() => {
     return (
       buildMutation.error ??
-      runJobMutation.error ??
-      spineMutation.error ??
+      runToolMutation.error ??
       uploadKmlMutation.error ??
       ropewikiKmlMutation.error ??
-      snapKmlMutation.error ??
       trackProfileMutation.error ??
       deleteJobMutation.error ??
       cancelJobMutation.error ??
@@ -1436,11 +1373,9 @@ export function App() {
     );
   }, [
     buildMutation.error,
-    runJobMutation.error,
-    spineMutation.error,
+    runToolMutation.error,
     uploadKmlMutation.error,
     ropewikiKmlMutation.error,
-    snapKmlMutation.error,
     trackProfileMutation.error,
     deleteJobMutation.error,
     cancelJobMutation.error,
@@ -1499,10 +1434,6 @@ export function App() {
                 Clear active DEM/container
               </button>
             )}
-            <div>
-              <span>TPI job</span>
-              <strong>{activeCompareJob?.id ?? "none"}</strong>
-            </div>
             <div>
               <span>Hillshade base</span>
               <strong>{activeHillshade?.id ?? "off"}</strong>
@@ -1573,9 +1504,8 @@ export function App() {
                         job={job}
                         childLayers={childLayersFor(job, generated, kmls)}
                         activeDemJob={area.demJob}
-                        activeCompareJob={activeCompareJob}
                         onSnap={(sourceJob, target) =>
-                          runSnap(sourceJob, target, area.demJob)
+                          openSnapDialog(sourceJob, target, area.demJob)
                         }
                         onDelete={deleteJob}
                         onCancel={cancelRunningJob}
@@ -1592,8 +1522,7 @@ export function App() {
                               key={job.id}
                               job={job}
                               activeDemJob={area.demJob}
-                              activeCompareJob={activeCompareJob}
-                              onDelete={deleteJob}
+                                    onDelete={deleteJob}
                               onCancel={cancelRunningJob}
                             />
                           ))}
@@ -1624,8 +1553,9 @@ export function App() {
                         kmlContainers.loose,
                       )}
                       activeDemJob={activeDemJob}
-                      activeCompareJob={activeCompareJob}
-                      onSnap={(sourceJob, target) => runSnap(sourceJob, target)}
+                      onSnap={(sourceJob, target) =>
+                        openSnapDialog(sourceJob, target)
+                      }
                       onDelete={deleteJob}
                       onCancel={cancelRunningJob}
                     />
@@ -1638,7 +1568,6 @@ export function App() {
                       key={job.id}
                       job={job}
                       activeDemJob={activeDemJob}
-                      activeCompareJob={activeCompareJob}
                       onDelete={deleteJob}
                       onCancel={cancelRunningJob}
                     />
@@ -1800,8 +1729,8 @@ export function App() {
                     <span>Ravine</span>
                   </div>
                   <button
-                    disabled={!activeCompareJob || spineMutation.isPending}
-                    onClick={() => spineMutation.mutate()}
+                    disabled={!spineSpec || runToolMutation.isPending}
+                    onClick={openSpineDialog}
                   >
                     Ravine Spine
                   </button>
@@ -1931,6 +1860,27 @@ export function App() {
           <MapView kmlImports={kmlImports} profileJob={selectedProfileJob} />
         </section>
       </section>
+      {toolDialog && (
+        <ToolDialog
+          open={true}
+          spec={toolDialog.spec}
+          jobs={jobs}
+          initialInputs={toolDialog.initialInputs}
+          initialParams={toolDialog.initialParams}
+          isPending={runToolMutation.isPending}
+          onClose={() => setToolDialog(undefined)}
+          onRun={(result) =>
+            runToolMutation.mutate(
+              {
+                spec: toolDialog.spec,
+                result,
+                extraParams: toolDialog.extraParams,
+              },
+              { onSuccess: () => setToolDialog(undefined) },
+            )
+          }
+        />
+      )}
     </main>
   );
 }

@@ -32,7 +32,6 @@ export type SelectedKmlTrack = {
 type AppState = {
   bounds?: Bounds;
   activeDemJob?: Job;
-  activeCompareJob?: Job;
   activeHillshade?: Overlay;
   overlay?: Overlay;
   footprints: Record<string, Footprint>;
@@ -48,7 +47,6 @@ type AppState = {
   overlayOpacity: number;
   setBounds: (bounds?: Bounds) => void;
   setActiveDemJob: (job?: Job) => void;
-  setActiveCompareJob: (job?: Job) => void;
   setActiveHillshade: (overlay?: Overlay) => void;
   setOverlay: (overlay?: Overlay) => void;
   toggleFootprint: (footprint: Footprint) => void;
@@ -85,7 +83,6 @@ export const useAppStore = create<AppState>((set) => ({
   setOverlayOpacity: (overlayOpacity) => set({ overlayOpacity }),
   setBounds: (bounds) => set({ bounds }),
   setActiveDemJob: (activeDemJob) => set({ activeDemJob }),
-  setActiveCompareJob: (activeCompareJob) => set({ activeCompareJob }),
   setActiveHillshade: (activeHillshade) => set({ activeHillshade }),
   setOverlay: (overlay) => set({ overlay }),
   toggleFootprint: (footprint) =>
