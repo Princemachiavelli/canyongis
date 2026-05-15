@@ -9,7 +9,16 @@ from typing import Any
 from pydantic import BaseModel, Field
 
 from ..rvt_preview import RVT_VIS_KEYS, RVT_VIS_LABELS, export_rvt_previews
-from .dem_jobs import DemJobSpec, OutputUrlFn, ProgressCb, Visualization, _tile_payload, register
+from .dem_jobs import (
+    DemJobSpec,
+    LayerSpec,
+    OutputSpec,
+    OutputUrlFn,
+    ProgressCb,
+    Visualization,
+    _tile_payload,
+    register,
+)
 
 
 class RvtRequest(BaseModel):
@@ -63,5 +72,24 @@ register(
             for k in RVT_VIS_KEYS
         ),
         runner=_run_rvt,
+        outputs=tuple(
+            OutputSpec(
+                key=f"rvt_{k}",
+                label=f"{RVT_VIS_LABELS[k]} raster",
+                path_field=f"rvt_{k}_path",
+                role="relief-visualization",
+            )
+            for k in RVT_VIS_KEYS
+        ),
+        layers=tuple(
+            LayerSpec(
+                key=f"panel_rvt_{k}",
+                label=RVT_VIS_LABELS[k],
+                kind="raster-overlay",
+                url_field=f"panel_rvt_{k}_url",
+                role="relief-visualization",
+            )
+            for k in RVT_VIS_KEYS
+        ),
     )
 )

@@ -46,7 +46,7 @@ from .auth import (
     set_session_cookie,
 )
 from .db import PostgresConfig, apply_migrations
-from .dem_jobs import get_spec, list_specs
+from .dem_jobs import get_spec, list_specs, normalize_result
 
 JobStatus = Literal["queued", "running", "succeeded", "failed", "canceled"]
 DEFAULT_PROJECT_NAME = "Personal"
@@ -718,6 +718,9 @@ def _ravine_spine_layer_path(result: dict[str, Any], layer_key: str) -> Path | N
 
 def _job_response(ctx: WebContext, job: Job) -> dict[str, Any]:
     row = asdict(job)
+    spec = get_spec(job.kind)
+    if spec is not None and job.status == "succeeded" and isinstance(row.get("result"), dict):
+        row["result"] = normalize_result(spec, row["result"])
     if job.kind == "ravine-spine" and job.status == "succeeded" and row.get("result"):
         try:
             row["result"] = {**row["result"], **_ravine_spine_layers(ctx, row["result"])}
@@ -990,6 +993,9 @@ def create_app(
                         {"key": v.key, "label": v.label, "url_field": v.url_field}
                         for v in spec.visualizations
                     ],
+                    "inputs": [asdict(input_spec) for input_spec in spec.inputs],
+                    "outputs": [asdict(output_spec) for output_spec in spec.outputs],
+                    "layers": [asdict(layer_spec) for layer_spec in spec.layers],
                     "request_defaults": defaults,
                     "request_schema": spec.request_model.model_json_schema(),
                     "available": spec.available,
@@ -1235,7 +1241,7 @@ def create_app(
             )
             result.setdefault("dem_job_id", dem_job_id)
             result.setdefault("job_key", spec.key)
-            return result
+            return normalize_result(spec, result)
 
         job = ctx.submit(spec.key, params, run, user=user, project_id=project_id)
         return asdict(job)

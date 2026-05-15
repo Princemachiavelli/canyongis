@@ -16,7 +16,7 @@ merged into the job's ``result`` field.
 from __future__ import annotations
 
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -46,6 +46,44 @@ class Visualization:
 
 
 @dataclass(frozen=True)
+class InputSpec:
+    """One upstream input required by a DEM-derived job."""
+
+    key: str
+    label: str
+    kind: str
+    required: bool = True
+    default: str = "upstream"
+
+
+@dataclass(frozen=True)
+class OutputSpec:
+    """One typed file output produced by a DEM-derived job."""
+
+    key: str
+    label: str
+    path_field: str
+    role: str
+    asset_kind: str = "raster"
+    url_field: str | None = None
+
+
+@dataclass(frozen=True)
+class LayerSpec:
+    """One renderable layer produced by a DEM-derived job."""
+
+    key: str
+    label: str
+    kind: str
+    url_field: str
+    role: str | None = None
+    tile_prefix: str | None = None
+    bounds_field: str = "bounds_wgs84"
+    opacity: float = 0.72
+    blend: str | None = None
+
+
+@dataclass(frozen=True)
 class DemJobSpec:
     """Declarative spec for a DEM-derived job."""
 
@@ -55,6 +93,13 @@ class DemJobSpec:
     request_model: type[BaseModel]
     visualizations: tuple[Visualization, ...]
     runner: JobRunner
+    inputs: tuple[InputSpec, ...] = field(
+        default_factory=lambda: (
+            InputSpec(key="dem", label="DEM", kind="raster.dem", default="upstream"),
+        )
+    )
+    outputs: tuple[OutputSpec, ...] = ()
+    layers: tuple[LayerSpec, ...] = ()
     available: bool = True
     unavailable_reason: str | None = None
 
@@ -90,6 +135,102 @@ def list_specs() -> list[DemJobSpec]:
 
 def get_spec(key: str) -> DemJobSpec | None:
     return next((s for s in _REGISTRY if s.key == key), None)
+
+
+def _as_bounds(value: Any) -> list[float] | None:
+    if not isinstance(value, (list, tuple)) or len(value) != 4:
+        return None
+    try:
+        return [float(v) for v in value]
+    except (TypeError, ValueError):
+        return None
+
+
+def _output_metadata(result: dict[str, Any], spec: OutputSpec) -> dict[str, Any]:
+    metadata: dict[str, Any] = {"result_key": spec.path_field, "role": spec.role}
+    meta = result.get("meta")
+    if isinstance(meta, dict):
+        for key in ("display_lo", "display_hi", "scales_m", "combine", "smooth_m", "norm_pct"):
+            if key in meta:
+                metadata[key] = meta[key]
+    return metadata
+
+
+def _normalize_outputs(spec: DemJobSpec, result: dict[str, Any]) -> list[dict[str, Any]]:
+    bounds = _as_bounds(result.get("bounds_wgs84"))
+    outputs: list[dict[str, Any]] = []
+    for out_spec in spec.outputs:
+        path = result.get(out_spec.path_field)
+        if not isinstance(path, str) or not path:
+            continue
+        row: dict[str, Any] = {
+            "key": out_spec.key,
+            "label": out_spec.label,
+            "role": out_spec.role,
+            "asset_kind": out_spec.asset_kind,
+            "path": path,
+            "metadata": _output_metadata(result, out_spec),
+        }
+        if out_spec.url_field:
+            url = result.get(out_spec.url_field)
+            if isinstance(url, str) and url:
+                row["url"] = url
+        if bounds is not None:
+            row["bounds_wgs84"] = bounds
+        outputs.append(row)
+    return outputs
+
+
+def _normalize_layers(spec: DemJobSpec, result: dict[str, Any]) -> list[dict[str, Any]]:
+    layers: list[dict[str, Any]] = []
+    for layer_spec in spec.layers:
+        url = result.get(layer_spec.url_field)
+        if not isinstance(url, str) or not url:
+            continue
+        prefix = layer_spec.tile_prefix or layer_spec.url_field.removesuffix("_url")
+        tile_url = result.get(f"{prefix}_pmtiles_url")
+        tile_path = result.get(f"{prefix}_pmtiles_path")
+        bounds = _as_bounds(result.get(f"{prefix}_tile_bounds_wgs84")) or _as_bounds(
+            result.get(layer_spec.bounds_field)
+        )
+        source: dict[str, Any]
+        if isinstance(tile_url, str) and tile_url:
+            source = {"type": "pmtiles", "url": tile_url}
+            if isinstance(tile_path, str) and tile_path:
+                source["path"] = tile_path
+            min_zoom = result.get(f"{prefix}_tile_min_zoom")
+            max_zoom = result.get(f"{prefix}_tile_max_zoom")
+            if isinstance(min_zoom, int):
+                source["min_zoom"] = min_zoom
+            if isinstance(max_zoom, int):
+                source["max_zoom"] = max_zoom
+        else:
+            source = {"type": "image", "url": url}
+        layer: dict[str, Any] = {
+            "id": layer_spec.key,
+            "key": layer_spec.key,
+            "label": layer_spec.label,
+            "kind": layer_spec.kind,
+            "source": source,
+            "opacity": layer_spec.opacity,
+        }
+        if layer_spec.role:
+            layer["role"] = layer_spec.role
+        if bounds is not None:
+            layer["bounds_wgs84"] = bounds
+        if layer_spec.blend:
+            layer["blend"] = layer_spec.blend
+        layers.append(layer)
+    return layers
+
+
+def normalize_result(spec: DemJobSpec, result: dict[str, Any]) -> dict[str, Any]:
+    """Add phase-1 plugin metadata while preserving legacy flat result fields."""
+    normalized = dict(result)
+    normalized.setdefault("schema_version", 1)
+    normalized.setdefault("outputs", _normalize_outputs(spec, normalized))
+    normalized.setdefault("layers", _normalize_layers(spec, normalized))
+    return normalized
 
 
 class HillshadeRequest(BaseModel):
@@ -276,6 +417,24 @@ register(
             Visualization(key="hillshade", label="Hillshade", url_field="panel_hillshade_url"),
         ),
         runner=_run_hillshade,
+        outputs=(
+            OutputSpec(
+                key="hillshade",
+                label="Hillshade raster",
+                path_field="hillshade_tif_path",
+                role="hillshade",
+            ),
+        ),
+        layers=(
+            LayerSpec(
+                key="panel_hillshade",
+                label="Hillshade",
+                kind="base-raster",
+                url_field="panel_hillshade_url",
+                role="base",
+                blend="multiply",
+            ),
+        ),
     )
 )
 
@@ -294,6 +453,30 @@ register(
             Visualization(key="stream", label="Stream network", url_field="stream_preview_url"),
         ),
         runner=_run_drainage,
+        outputs=(
+            OutputSpec(
+                key="flow_accum",
+                label="Flow accumulation raster",
+                path_field="flow_accum_path",
+                role="flow-accumulation",
+            ),
+        ),
+        layers=(
+            LayerSpec(
+                key="flow_preview",
+                label="Flow accumulation",
+                kind="raster-overlay",
+                url_field="flow_preview_url",
+                role="flow-accumulation",
+            ),
+            LayerSpec(
+                key="stream_preview",
+                label="Stream network",
+                kind="raster-overlay",
+                url_field="stream_preview_url",
+                role="stream-network",
+            ),
+        ),
     )
 )
 
@@ -315,6 +498,23 @@ register(
             ),
         ),
         runner=_run_geomorphon,
+        outputs=(
+            OutputSpec(
+                key="a_geomorphon",
+                label="Geomorphon ravine score raster",
+                path_field="a_geomorphon_path",
+                role="ravine-score",
+            ),
+        ),
+        layers=(
+            LayerSpec(
+                key="panel_a_geomorphon",
+                label="Geomorphon ravines",
+                kind="raster-overlay",
+                url_field="panel_a_geomorphon_url",
+                role="ravine-score",
+            ),
+        ),
     )
 )
 
@@ -332,6 +532,23 @@ register(
             Visualization(key="b_tpi", label="TPI ravines", url_field="panel_b_tpi_url"),
         ),
         runner=_run_tpi,
+        outputs=(
+            OutputSpec(
+                key="b_tpi",
+                label="TPI ravine score raster",
+                path_field="b_tpi_path",
+                role="ravine-score",
+            ),
+        ),
+        layers=(
+            LayerSpec(
+                key="panel_b_tpi",
+                label="TPI ravines",
+                kind="raster-overlay",
+                url_field="panel_b_tpi_url",
+                role="ravine-score",
+            ),
+        ),
     )
 )
 
@@ -351,6 +568,23 @@ register(
             ),
         ),
         runner=_run_curvature,
+        outputs=(
+            OutputSpec(
+                key="c_curvature",
+                label="Plan curvature raster",
+                path_field="c_curvature_path",
+                role="ravine-score",
+            ),
+        ),
+        layers=(
+            LayerSpec(
+                key="panel_c_curvature",
+                label="Plan curvature",
+                kind="raster-overlay",
+                url_field="panel_c_curvature_url",
+                role="ravine-score",
+            ),
+        ),
     )
 )
 

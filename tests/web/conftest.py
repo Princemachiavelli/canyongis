@@ -1,7 +1,8 @@
 """Shared fixtures for canyongis.web tests.
 
-The ``live_postgres`` fixture creates a dedicated test database on whatever
-PostgreSQL instance the local environment is using (``PGHOST``/``CANYONGIS_PG_*``).
+The ``live_postgres`` fixture creates a dedicated test database on the Nix
+devshell PostgreSQL instance at ``localhost:5433``. It intentionally avoids
+``PGHOST``/socket paths so SQLAlchemy and psycopg use the same TCP target.
 Tests that don't need a DB ignore it. Tests requesting it are skipped when no
 postgres is reachable.
 """
@@ -18,18 +19,28 @@ from canyongis.web.db import PostgresConfig
 
 
 def _admin_config() -> PostgresConfig:
+    """Return the admin connection used to create per-test databases.
+
+    Keep this on TCP localhost rather than honoring ``PGHOST``. The devshell may
+    set ``PGHOST`` to a Unix socket directory, which works for psycopg but caused
+    SQLAlchemy URL construction to treat the socket path as part of the dbname.
+    Each test still gets a random ``canyongis_test_*`` database, so the existing
+    dev database is not modified.
+    """
+
     return PostgresConfig(
-        host=os.environ.get("PGHOST", os.environ.get("CANYONGIS_PG_HOST", "localhost")),
-        port=int(os.environ.get("PGPORT", os.environ.get("CANYONGIS_PG_PORT", "5433"))),
-        dbname=os.environ.get("PGDATABASE", os.environ.get("CANYONGIS_PG_DB", "postgres")),
-        user=os.environ.get("PGUSER", os.environ.get("CANYONGIS_PG_USER")),
-        password=os.environ.get("PGPASSWORD", os.environ.get("CANYONGIS_PG_PASSWORD")),
+        host=os.environ.get("CANYONGIS_TEST_PG_HOST", "localhost"),
+        port=int(os.environ.get("CANYONGIS_TEST_PG_PORT", "5433")),
+        dbname=os.environ.get("CANYONGIS_TEST_PG_ADMIN_DB", "postgres"),
+        user=os.environ.get("CANYONGIS_TEST_PG_USER", os.environ.get("PGUSER")),
+        password=os.environ.get("CANYONGIS_TEST_PG_PASSWORD", os.environ.get("PGPASSWORD")),
     )
 
 
 @pytest.fixture
 def live_postgres() -> Iterator[PostgresConfig]:
     import psycopg
+    from psycopg import sql
 
     admin = _admin_config()
     try:
@@ -39,7 +50,7 @@ def live_postgres() -> Iterator[PostgresConfig]:
     conn.autocommit = True
     db_name = f"canyongis_test_{uuid.uuid4().hex[:10]}"
     with conn.cursor() as cur:
-        cur.execute(f'CREATE DATABASE "{db_name}"')
+        cur.execute(sql.SQL("CREATE DATABASE {}").format(sql.Identifier(db_name)))
     conn.close()
 
     cfg = PostgresConfig(
@@ -59,5 +70,5 @@ def live_postgres() -> Iterator[PostgresConfig]:
                 "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname = %s",
                 (db_name,),
             )
-            cur.execute(f'DROP DATABASE IF EXISTS "{db_name}"')
+            cur.execute(sql.SQL("DROP DATABASE IF EXISTS {}").format(sql.Identifier(db_name)))
         admin_conn.close()

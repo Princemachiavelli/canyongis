@@ -75,3 +75,55 @@ def test_extract_candidates_ignores_missing_files(tmp_path: Path) -> None:
     out.mkdir()
     result = {"dem_path": str(out / "missing.tif")}
     assert extract_asset_candidates(result, output_root=out) == []
+
+
+def test_extract_candidates_prefers_explicit_outputs_metadata(tmp_path: Path) -> None:
+    out = tmp_path / "outputs"
+    tif = _touch(out / "score.tif")
+    result = {
+        "score_path": str(tif),
+        "score_url": "/outputs/legacy-score.tif",
+        "outputs": [
+            {
+                "key": "score",
+                "label": "Score raster",
+                "role": "ravine-score",
+                "asset_kind": "raster",
+                "path": str(tif),
+                "url": "/outputs/score.tif",
+                "bounds_wgs84": [1.0, 2.0, 3.0, 4.0],
+                "metadata": {"display_hi": 2.5},
+            }
+        ],
+    }
+
+    cands = extract_asset_candidates(result, output_root=out)
+
+    assert len(cands) == 1
+    assert cands[0].kind == "raster"
+    assert cands[0].url == "/outputs/score.tif"
+    assert cands[0].metadata["output_key"] == "score"
+    assert cands[0].metadata["role"] == "ravine-score"
+    assert cands[0].metadata["display_hi"] == 2.5
+
+
+def test_extract_candidates_keeps_fallback_paths_not_declared_as_outputs(tmp_path: Path) -> None:
+    out = tmp_path / "outputs"
+    tif = _touch(out / "score.tif")
+    pmtiles = _touch(out / "score.pmtiles")
+    result = {
+        "score_path": str(tif),
+        "score_pmtiles_path": str(pmtiles),
+        "outputs": [
+            {
+                "key": "score",
+                "role": "ravine-score",
+                "asset_kind": "raster",
+                "path": str(tif),
+            }
+        ],
+    }
+
+    cands = extract_asset_candidates(result, output_root=out)
+
+    assert {c.path for c in cands} == {str(tif.resolve()), str(pmtiles.resolve())}

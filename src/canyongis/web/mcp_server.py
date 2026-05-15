@@ -25,7 +25,7 @@ from ..ravine_spine import export_ravine_spines
 from ..track_profile import _rappels_geojson, analyze_track_profile
 from .auth import User
 from .db import PostgresConfig
-from .dem_jobs import get_spec, list_specs
+from .dem_jobs import get_spec, list_specs, normalize_result
 from .server import (
     WebContext,
     _build_kml_import_result,
@@ -283,7 +283,7 @@ def run_dem_job(dem_job_id: str, job_key: str, params: str = "{}") -> dict[str, 
         )
         result.setdefault("dem_job_id", dem_job_id)
         result.setdefault("job_key", spec.key)
-        return result
+        return normalize_result(spec, result)
 
     job = wc.submit(spec.key, body_params, run, user=_user_obj(user_info), project_id=pid)
     return asdict(job)
@@ -555,6 +555,9 @@ def job_specs() -> dict[str, Any]:
                 "label": spec.label,
                 "description": spec.description,
                 "visualizations": [{"key": v.key, "label": v.label} for v in spec.visualizations],
+                "inputs": [asdict(input_spec) for input_spec in spec.inputs],
+                "outputs": [asdict(output_spec) for output_spec in spec.outputs],
+                "layers": [asdict(layer_spec) for layer_spec in spec.layers],
                 "request_defaults": defaults,
                 "available": spec.available,
                 "unavailable_reason": spec.unavailable_reason,
