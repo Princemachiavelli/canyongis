@@ -233,6 +233,22 @@ export async function runDemJob(
   });
 }
 
+export async function runTool(
+  toolKey: string,
+  payload: {
+    inputs?: Record<string, unknown>;
+    params?: Record<string, unknown>;
+  } = {},
+): Promise<Job> {
+  return request<Job>(`/api/jobs/${toolKey}`, {
+    method: "POST",
+    body: JSON.stringify({
+      inputs: payload.inputs ?? {},
+      params: payload.params ?? {},
+    }),
+  });
+}
+
 export async function trimJobRuns(
   demJobId: string,
   jobKey: string,

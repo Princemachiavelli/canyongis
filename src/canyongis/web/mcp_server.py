@@ -25,7 +25,8 @@ from ..ravine_spine import export_ravine_spines
 from ..track_profile import _rappels_geojson, analyze_track_profile
 from .auth import User
 from .db import PostgresConfig
-from .dem_jobs import get_spec, list_specs, normalize_result
+from .dem_jobs import list_specs
+from .dispatcher import DispatchError, submit_tool_job
 from .server import (
     WebContext,
     _build_kml_import_result,
@@ -242,6 +243,39 @@ def build_dem(
 
 @mcp.tool(
     description=(
+        "Run any registered DEM-derived analysis tool. inputs_json is a JSON object; "
+        "use {'dem': '<job_id>'} or omit it to use the latest completed DEM in the project. "
+        "params_json must match the tool's request schema."
+    )
+)
+def run_tool(tool_key: str, inputs_json: str = "{}", params_json: str = "{}") -> dict[str, Any]:
+    user_info = _resolve_user()
+    wc = ctx()
+    pid = _project_id(user_info)
+    try:
+        inputs = json.loads(inputs_json)
+        params = json.loads(params_json)
+    except json.JSONDecodeError as exc:
+        raise ValueError(str(exc)) from exc
+    if not isinstance(inputs, dict):
+        raise ValueError("inputs_json must decode to an object")
+    if not isinstance(params, dict):
+        raise ValueError("params_json must decode to an object")
+    try:
+        job = submit_tool_job(
+            wc,
+            tool_key,
+            {"inputs": inputs, "params": params},
+            user=_user_obj(user_info),
+            project_id=pid,
+        )
+    except DispatchError as exc:
+        raise ValueError(str(exc.detail)) from exc
+    return asdict(job)
+
+
+@mcp.tool(
+    description=(
         "Run a DEM-derived analysis job on a completed DEM."
         " job_key options: hillshade, drainage, tpi-ravine, geomorphon-ravine, curvature, rvt."
         " params is a JSON string matching the job's request schema."
@@ -249,43 +283,25 @@ def build_dem(
     )
 )
 def run_dem_job(dem_job_id: str, job_key: str, params: str = "{}") -> dict[str, Any]:
-    from pydantic import ValidationError
-
     user_info = _resolve_user()
     wc = ctx()
     pid = _project_id(user_info)
-    spec = get_spec(job_key)
-    if spec is None:
-        raise ValueError(f"unknown job key: {job_key}")
-    if not spec.available:
-        raise ValueError(spec.unavailable_reason or f"{spec.label} is unavailable")
-    dem_job = wc.job_or_404(dem_job_id)
-    if dem_job.status != "succeeded" or not dem_job.result:
-        raise ValueError("DEM job has not succeeded")
-
-    dem_path = dem_job.result["dem_path"]
     try:
-        req = spec.request_model.model_validate(json.loads(params))
-    except ValidationError as exc:
+        params_body = json.loads(params)
+    except json.JSONDecodeError as exc:
         raise ValueError(str(exc)) from exc
-
-    body_params = {"dem_job_id": dem_job_id, "job_key": spec.key, **req.model_dump()}
-
-    def run(progress_cb) -> dict[str, Any]:
-        out_dir = wc.output_root / "jobs" / f"{spec.key}-{uuid.uuid4().hex[:8]}"
-        out_dir.mkdir(parents=True, exist_ok=True)
-        result = spec.runner(
-            dem_path=dem_path,
-            out_dir=out_dir,
-            req=req,
-            progress_cb=progress_cb,
-            output_url=wc.output_url,
+    if not isinstance(params_body, dict):
+        raise ValueError("params must decode to an object")
+    try:
+        job = submit_tool_job(
+            wc,
+            job_key,
+            {"inputs": {"dem": dem_job_id}, "params": params_body},
+            user=_user_obj(user_info),
+            project_id=pid,
         )
-        result.setdefault("dem_job_id", dem_job_id)
-        result.setdefault("job_key", spec.key)
-        return normalize_result(spec, result)
-
-    job = wc.submit(spec.key, body_params, run, user=_user_obj(user_info), project_id=pid)
+    except DispatchError as exc:
+        raise ValueError(str(exc.detail)) from exc
     return asdict(job)
 
 

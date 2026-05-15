@@ -47,6 +47,7 @@ from .auth import (
 )
 from .db import PostgresConfig, apply_migrations
 from .dem_jobs import get_spec, list_specs, normalize_result
+from .dispatcher import DispatchError, submit_tool_job
 
 JobStatus = Literal["queued", "running", "succeeded", "failed", "canceled"]
 DEFAULT_PROJECT_NAME = "Personal"
@@ -1211,39 +1212,30 @@ def create_app(
         user: User = CurrentUserDep,
         project_id: str = ActiveProjectDep,
     ) -> dict[str, Any]:
-        spec = get_spec(job_key)
-        if spec is None:
-            raise HTTPException(status_code=404, detail=f"unknown job key: {job_key}")
-        if not spec.available:
-            raise HTTPException(
-                status_code=400,
-                detail=spec.unavailable_reason or f"{spec.label} is unavailable",
-            )
-        dem_job = ctx.job_or_404(dem_job_id)
-        if dem_job.status != "succeeded" or not dem_job.result:
-            raise HTTPException(status_code=400, detail="DEM job has not succeeded")
-        dem_path = dem_job.result["dem_path"]
         try:
-            req = spec.request_model.model_validate(body or {})
-        except ValidationError as exc:
-            raise HTTPException(status_code=400, detail=exc.errors()) from exc
-        params = {"dem_job_id": dem_job_id, "job_key": spec.key, **req.model_dump()}
-
-        def run(progress_cb) -> dict[str, Any]:
-            out_dir = ctx.output_root / "jobs" / f"{spec.key}-{uuid.uuid4().hex[:8]}"
-            out_dir.mkdir(parents=True, exist_ok=True)
-            result = spec.runner(
-                dem_path=dem_path,
-                out_dir=out_dir,
-                req=req,
-                progress_cb=progress_cb,
-                output_url=ctx.output_url,
+            job = submit_tool_job(
+                ctx,
+                job_key,
+                body,
+                user=user,
+                project_id=project_id,
+                legacy_dem_job_id=dem_job_id,
             )
-            result.setdefault("dem_job_id", dem_job_id)
-            result.setdefault("job_key", spec.key)
-            return normalize_result(spec, result)
+        except DispatchError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        return asdict(job)
 
-        job = ctx.submit(spec.key, params, run, user=user, project_id=project_id)
+    @app.post("/api/jobs/{tool_key}")
+    def run_tool_job(
+        tool_key: str,
+        body: Annotated[dict[str, Any] | None, Body()] = None,
+        user: User = CurrentUserDep,
+        project_id: str = ActiveProjectDep,
+    ) -> dict[str, Any]:
+        try:
+            job = submit_tool_job(ctx, tool_key, body, user=user, project_id=project_id)
+        except DispatchError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
         return asdict(job)
 
     @app.post("/api/jobs/{tpi_job_id}/ravine-spine")
