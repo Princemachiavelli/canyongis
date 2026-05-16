@@ -58,6 +58,45 @@
 
           pysheds = python.pkgs.callPackage ./nix/pysheds.nix { };
           rvt-py = python.pkgs.callPackage ./nix/rvt-py.nix { };
+          rvt-qgis = pkgs.callPackage ./nix/rvt-qgis.nix { };
+          qgisPluginPath = pkgs.linkFarm "qgis-python-plugins" [
+            {
+              name = "rvt-qgis";
+              path = "${rvt-qgis}/share/qgis/python/plugins/rvt-qgis";
+            }
+          ];
+          qgis-base = pkgs.qgis.override {
+            withGrass = true;
+            extraPythonPackages = ps: [
+              ps.matplotlib
+              ps.scipy
+            ];
+          };
+          qgis = pkgs.symlinkJoin {
+            inherit (qgis-base) version;
+            pname = "qgis";
+            paths = [ qgis-base ];
+            nativeBuildInputs = [ pkgs.makeWrapper ];
+            postBuild = ''
+              for program in $out/bin/*; do
+                if [[ -f "$program" || -L "$program" ]]; then
+                  wrapProgram "$program" \
+                    --set QGIS_PLUGINPATH ${qgisPluginPath}
+                fi
+              done
+            ''
+            + pkgs.lib.optionalString pkgs.stdenv.hostPlatform.isDarwin ''
+              for program in $out/Applications/QGIS.app/Contents/MacOS/qgis \
+                             $out/Applications/QGIS.app/Contents/MacOS/qgis_process; do
+                if [[ -e "$program" ]]; then
+                  wrapProgram "$program" \
+                    --set QGIS_PLUGINPATH ${qgisPluginPath}
+                fi
+              done
+            '';
+            passthru = qgis-base.passthru;
+            meta = qgis-base.meta;
+          };
           postgresqlWithPostGIS = pkgs.postgresql_15.withPackages (p: [ p.postgis ]);
 
           canyongis-web-frontend = pkgs.callPackage ./web/frontend { };
@@ -81,6 +120,9 @@
             inherit canyongis-web-frontend;
             inherit pysheds;
             inherit rvt-py;
+            inherit rvt-qgis;
+            inherit qgisPluginPath;
+            qgis = qgis;
             segmentation_models_pytorch = python.pkgs.segmentation_models_pytorch;
           };
 
@@ -98,6 +140,7 @@
               pkgs.grass
               pkgs.gdal
               pkgs.pmtiles
+              qgis
               pkgs.nodejs
               postgresqlWithPostGIS
               python.pkgs.pytest
@@ -176,7 +219,7 @@
               '';
 
               installPhase = ''
-		cp coverage.xml $out
+                		cp coverage.xml $out
               '';
             };
             formatting = config.treefmt.build.check inputs.self;

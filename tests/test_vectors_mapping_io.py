@@ -44,7 +44,9 @@ def test_score_routes_handles_all_nodata_polygon() -> None:
     )
     elev = np.full((1, 1), np.nan, dtype=np.float32)
 
-    scored = score_routes(drainage, gpd.GeoDataFrame(geometry=[], crs="EPSG:26911"), elev, from_origin(0, 1, 1, 1))
+    scored = score_routes(
+        drainage, gpd.GeoDataFrame(geometry=[], crs="EPSG:26911"), elev, from_origin(0, 1, 1, 1)
+    )
 
     assert scored.loc[0, "total_descent_m"] == 0
     assert scored.loc[0, "grade"] == 0
@@ -58,9 +60,7 @@ def test_write_kml_lines_and_points_escape_labels(tmp_path: Path) -> None:
     lines = gpd.GeoDataFrame(
         {"name": ["A&B"], "geometry": [LineString([(0, 0), (1, 1)])]}, crs="EPSG:4326"
     )
-    points = gpd.GeoDataFrame(
-        {"prob": [0.75], "geometry": [Point(1, 2)]}, crs="EPSG:4326"
-    )
+    points = gpd.GeoDataFrame({"prob": [0.75], "geometry": [Point(1, 2)]}, crs="EPSG:4326")
 
     _write_kml_lines(lines, line_path)
     _write_kml_points(points, point_path)

@@ -27,7 +27,9 @@ import canyongis.__main__ as main_mod
         ("web", "web_cli"),
     ],
 )
-def test_cli_dispatches_subcommands(monkeypatch: pytest.MonkeyPatch, command: str, attr: str) -> None:
+def test_cli_dispatches_subcommands(
+    monkeypatch: pytest.MonkeyPatch, command: str, attr: str
+) -> None:
     calls: list[list[str]] = []
     monkeypatch.setattr(main_mod, attr, lambda argv: calls.append(argv))
 
@@ -36,9 +38,13 @@ def test_cli_dispatches_subcommands(monkeypatch: pytest.MonkeyPatch, command: st
     assert calls == [["--flag", "value"]]
 
 
-def test_cli_default_pipeline_builds_config(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_cli_default_pipeline_builds_config(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     calls = []
-    monkeypatch.setattr(main_mod, "main", lambda cfg, render_folium: calls.append((cfg, render_folium)))
+    monkeypatch.setattr(
+        main_mod, "main", lambda cfg, render_folium: calls.append((cfg, render_folium))
+    )
 
     main_mod.cli(["dem.tif", "best.pt", str(tmp_path / "out"), "--no-folium"])
 
@@ -58,7 +64,9 @@ def test_cli_errors_without_required_default_args() -> None:
     assert excinfo.value.code == 2
 
 
-def test_main_runs_inference_and_optional_map(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_main_runs_inference_and_optional_map(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     events: list[str] = []
     cfg = main_mod.MLConfig(dem_path="dem.tif", out_dir=str(tmp_path / "out"))
     monkeypatch.setattr(main_mod, "log", events.append)
@@ -67,11 +75,19 @@ def test_main_runs_inference_and_optional_map(monkeypatch: pytest.MonkeyPatch, t
 
     main_mod.main(cfg, render_folium=True)
 
-    assert events == ["STEP 1: ML inference", "dem.tif", "STEP 2: render Folium map", "render", "Done."]
+    assert events == [
+        "STEP 1: ML inference",
+        "dem.tif",
+        "STEP 2: render Folium map",
+        "render",
+        "Done.",
+    ]
     assert Path(cfg.out_dir).is_dir()
 
 
-def test_render_map_reads_outputs_and_dem_bounds(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_render_map_reads_outputs_and_dem_bounds(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
     out_dir = tmp_path / "out"
     out_dir.mkdir()
     (out_dir / "canyon_centerlines.gpkg").touch()

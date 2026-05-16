@@ -302,7 +302,9 @@ def test_kml_import_container_records_dem_edge(live_postgres, tmp_path: Path, mo
         created_by_user_id=dem.created_by_user_id,
     )
     ctx.store.upsert(job)
-    ctx.store.register_assets(job, project_id=dem.project_id, created_by_user_id=dem.created_by_user_id)
+    ctx.store.register_assets(
+        job, project_id=dem.project_id, created_by_user_id=dem.created_by_user_id
+    )
 
     assert ctx.store.register_job_inputs(job) == 1
 

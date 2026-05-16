@@ -70,7 +70,9 @@ def test_migrate_ignores_webp_outside_output_root(monkeypatch, tmp_path: Path) -
 
 def test_cli_passes_arguments(monkeypatch, tmp_path: Path) -> None:
     calls = []
-    monkeypatch.setattr(migrate_previews, "migrate", lambda root, *, delete_old: calls.append((root, delete_old)))
+    monkeypatch.setattr(
+        migrate_previews, "migrate", lambda root, *, delete_old: calls.append((root, delete_old))
+    )
 
     migrate_previews.cli(["--output-root", str(tmp_path), "--delete-old"])
 
