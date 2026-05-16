@@ -38,7 +38,7 @@ class KmlSnapRequest(BaseModel):
 
 class TrackProfileRequest(BaseModel):
     kml_job_id: str | None = None
-    dem_job_id: str
+    dem_job_id: str | None = None
     category: Literal["descent", "approach", "unclassified"] = "descent"
     track_index: int = Field(default=0, ge=0)
     sample_step_m: float = Field(default=5.0, gt=0)
@@ -267,10 +267,13 @@ def _run_track_profile(
     *, ctx: Any, req: TrackProfileRequest, inputs: dict[str, Any], progress_cb, **_: Any
 ):
     kml_job_id = _kml_job_id(req.kml_job_id, inputs)
+    dem_job_id = req.dem_job_id or _raw_input_id(inputs, "dem", "dem_job", "dem_job_id")
+    if not dem_job_id:
+        raise ValueError("dem_job_id is required")
     kml_job = ctx.job_or_404(kml_job_id)
     if kml_job.status != "succeeded" or not kml_job.result:
         raise ValueError("KML job has not succeeded")
-    dem_job = ctx.job_or_404(req.dem_job_id)
+    dem_job = ctx.job_or_404(dem_job_id)
     if dem_job.status != "succeeded" or not dem_job.result:
         raise ValueError("DEM job has not succeeded")
     kml_path = Path(str(kml_job.result["kml_path"]))
@@ -294,7 +297,7 @@ def _run_track_profile(
     payload["source"] = {
         "kind": "track-profile",
         "kml_job_id": kml_job_id,
-        "dem_job_id": req.dem_job_id,
+        "dem_job_id": dem_job_id,
     }
     payload["layers"] = [
         {

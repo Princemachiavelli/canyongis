@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Play, X } from "lucide-react";
-import type { Job, JobSpec } from "./api";
+import type { Job, JobSpec, TrackCategory } from "./api";
 
 type JsonSchema = {
   type?: string | string[];
@@ -13,6 +13,18 @@ type JsonSchema = {
   anyOf?: JsonSchema[];
   title?: string;
   description?: string;
+};
+
+type GeoJsonFeature = {
+  id?: string | number;
+  properties?: Record<string, unknown> | null;
+};
+
+type TrackOption = {
+  key: string;
+  label: string;
+  category: TrackCategory;
+  trackIndex: number;
 };
 
 function nonNullVariant(schema: JsonSchema): JsonSchema {
@@ -54,6 +66,54 @@ function resolveItems(schema: JsonSchema): JsonSchema | undefined {
 
 function isJobIdField(name: string): boolean {
   return name.endsWith("_job_id");
+}
+
+function isHiddenParam(spec: JobSpec, name: string): boolean {
+  return (
+    isJobIdField(name) ||
+    (spec.key === "track-profile" && (name === "category" || name === "track_index"))
+  );
+}
+
+function geoJsonFeatures(value: unknown): GeoJsonFeature[] {
+  if (!value || typeof value !== "object") return [];
+  const features = (value as { features?: unknown }).features;
+  return Array.isArray(features) ? (features as GeoJsonFeature[]) : [];
+}
+
+function trackFeatureName(feature: GeoJsonFeature, fallback: string): string {
+  const props = feature.properties ?? {};
+  const name = props.name ?? props.Name ?? props.title;
+  return typeof name === "string" && name ? name : fallback;
+}
+
+function trackFeatureIndex(feature: GeoJsonFeature, fallback: number): number {
+  const props = feature.properties ?? {};
+  const raw = feature.id ?? props.id ?? props.index;
+  const value = Number(raw);
+  return Number.isFinite(value) ? Math.trunc(value) : fallback;
+}
+
+function trackOptionsForJob(job?: Job): TrackOption[] {
+  if (!job?.result) return [];
+  const categories: Array<[TrackCategory, string, string]> = [
+    ["descent", "descent_geojson", "Descent"],
+    ["approach", "approach_geojson", "Approach"],
+    ["unclassified", "unclassified_geojson", "Track"],
+  ];
+  const options: TrackOption[] = [];
+  for (const [category, field, label] of categories) {
+    geoJsonFeatures(job.result[field]).forEach((feature, idx) => {
+      const trackIndex = trackFeatureIndex(feature, idx);
+      options.push({
+        key: `${category}:${trackIndex}`,
+        category,
+        trackIndex,
+        label: `${label}: ${trackFeatureName(feature, `${label} ${idx + 1}`)}`,
+      });
+    });
+  }
+  return options;
 }
 
 function toCsv(value: unknown): string {
@@ -344,8 +404,8 @@ export function ToolForm({
   const defaults = (spec.request_defaults ?? {}) as Record<string, unknown>;
 
   const paramKeys = useMemo(
-    () => Object.keys(props).filter((k) => !isJobIdField(k)),
-    [props],
+    () => Object.keys(props).filter((k) => !isHiddenParam(spec, k)),
+    [props, spec],
   );
 
   const jobInputs = useMemo(
@@ -362,6 +422,23 @@ export function ToolForm({
   const [inputState, setInputState] = useState<Record<string, string>>({});
 
   const selectedDem = demInputKey ? inputState[demInputKey] : undefined;
+  const trackInputKey = useMemo(
+    () =>
+      spec.key === "track-profile"
+        ? jobInputs.find((inp) => inp.kind === "vector.kml")?.key
+        : undefined,
+    [spec.key, jobInputs],
+  );
+  const trackOptions = useMemo(() => {
+    const selectedKml = trackInputKey ? inputState[trackInputKey] : undefined;
+    return trackOptionsForJob(selectedKml ? jobs.find((job) => job.id === selectedKml) : undefined);
+  }, [jobs, inputState, trackInputKey]);
+  const rawSelectedTrackKey = `${String(paramState.category ?? "descent")}:${String(
+    paramState.track_index ?? 0,
+  )}`;
+  const selectedTrackKey = trackOptions.some((option) => option.key === rawSelectedTrackKey)
+    ? rawSelectedTrackKey
+    : (trackOptions[0]?.key ?? "");
 
   const compatibleJobsByKey = useMemo(() => {
     const map = new Map<string, Job[]>();
@@ -437,6 +514,16 @@ export function ToolForm({
     });
   }, [selectedDem, demInputKey, jobInputs, compatibleJobsByKey]);
 
+  useEffect(() => {
+    if (spec.key !== "track-profile" || trackOptions.length === 0) return;
+    setParamState((prev) => {
+      const currentKey = `${String(prev.category ?? "descent")}:${String(prev.track_index ?? 0)}`;
+      if (trackOptions.some((option) => option.key === currentKey)) return prev;
+      const first = trackOptions[0];
+      return { ...prev, category: first.category, track_index: first.trackIndex };
+    });
+  }, [spec.key, trackOptions]);
+
   const missingRequired = jobInputs.find(
     (inp) => inp.required && !inputState[inp.key],
   );
@@ -449,8 +536,7 @@ export function ToolForm({
       if (v) inputs[k] = v;
     }
     const params: Record<string, unknown> = {};
-    for (const k of paramKeys) {
-      const v = paramState[k];
+    for (const [k, v] of Object.entries(paramState)) {
       if (v === undefined) continue;
       params[k] = v;
     }
@@ -506,6 +592,33 @@ export function ToolForm({
                 </label>
               );
             })}
+          </div>
+        )}
+
+        {spec.key === "track-profile" && trackInputKey && (
+          <div className="toolParams">
+            <label className="toolField">
+              <span>Track</span>
+              <select
+                value={selectedTrackKey}
+                onChange={(event) => {
+                  const option = trackOptions.find((item) => item.key === event.target.value);
+                  if (!option) return;
+                  setParamState((prev) => ({
+                    ...prev,
+                    category: option.category,
+                    track_index: option.trackIndex,
+                  }));
+                }}
+              >
+                {trackOptions.length === 0 && <option value="">No tracks in selected KML</option>}
+                {trackOptions.map((option) => (
+                  <option key={option.key} value={option.key}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+            </label>
           </div>
         )}
 

@@ -127,3 +127,46 @@ def test_extract_candidates_keeps_fallback_paths_not_declared_as_outputs(tmp_pat
     cands = extract_asset_candidates(result, output_root=out)
 
     assert {c.path for c in cands} == {str(tif.resolve()), str(pmtiles.resolve())}
+
+
+def test_extract_candidates_types_layer_preview_assets(tmp_path: Path) -> None:
+    out = tmp_path / "outputs"
+    tif = _touch(out / "flow_accum.tif")
+    pmtiles = _touch(out / "flow_preview.pmtiles")
+    result = {
+        "flow_accum_path": str(tif),
+        "flow_preview_pmtiles_path": str(pmtiles),
+        "flow_preview_pmtiles_url": "/outputs/flow_preview.pmtiles",
+        "outputs": [
+            {
+                "key": "flow_accum",
+                "label": "Flow accumulation raster",
+                "role": "flow-accumulation",
+                "asset_type": "raster.flow_accumulation",
+                "path": str(tif),
+            }
+        ],
+        "layers": [
+            {
+                "key": "flow_preview",
+                "label": "Flow accumulation",
+                "kind": "raster-overlay",
+                "role": "flow-accumulation",
+                "source": {
+                    "type": "pmtiles",
+                    "path": str(pmtiles),
+                    "url": "/outputs/flow_preview.pmtiles",
+                },
+            }
+        ],
+    }
+
+    cands = extract_asset_candidates(result, output_root=out)
+    by_path = {c.path: c for c in cands}
+
+    assert by_path[str(tif.resolve())].kind == "raster.flow_accumulation"
+    preview = by_path[str(pmtiles.resolve())]
+    assert preview.kind == "preview.raster-overlay"
+    assert preview.url == "/outputs/flow_preview.pmtiles"
+    assert preview.metadata["layer_key"] == "flow_preview"
+    assert preview.metadata["label"] == "Flow accumulation"

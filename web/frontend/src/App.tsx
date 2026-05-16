@@ -16,6 +16,7 @@ import {
   Tags,
   Trash2,
   Upload,
+  X,
 } from "lucide-react";
 import {
   buildDem,
@@ -463,6 +464,93 @@ function ProgressTail({
       )}
       {job.error && <pre className="jobError">{job.error}</pre>}
     </details>
+  );
+}
+
+function jobDisplayName(job: Job): string {
+  const name =
+    (job.result?.name as string | undefined) ?? (job.params.name as string | undefined);
+  return name ? `${name} (${job.kind})` : job.kind;
+}
+
+function formatJobTime(value: string): string {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return value;
+  return date.toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function JobActivityPanel({
+  jobs,
+  onClose,
+  onDeleteJob,
+  onCancelJob,
+}: {
+  jobs: Job[];
+  onClose: () => void;
+  onDeleteJob: (job: Job) => void;
+  onCancelJob: (job: Job) => void;
+}) {
+  const sorted = useMemo(
+    () => [...jobs].sort((a, b) => (a.created_at < b.created_at ? 1 : -1)),
+    [jobs],
+  );
+  const active = sorted.filter((job) => job.status === "queued" || job.status === "running");
+  return (
+    <aside className="jobActivityPanel">
+      <div className="jobActivityHead">
+        <div>
+          <Activity size={16} />
+          <strong>Jobs</strong>
+          <span>{active.length} running</span>
+        </div>
+        <button className="iconButton" onClick={onClose} aria-label="Close jobs">
+          <X size={14} />
+        </button>
+      </div>
+
+      <section className="jobActivitySection">
+        <h2>Running</h2>
+        {active.length === 0 && <div className="empty">No queued or running jobs.</div>}
+        {active.map((job) => (
+          <div key={job.id} className={`jobActivityRow ${job.status}`}>
+            <div className="jobActivityTitle">
+              <strong>{jobDisplayName(job)}</strong>
+              <StatusBadge status={job.status} />
+            </div>
+            <div className="jobActivityMeta">
+              <code>{job.id}</code>
+              <span>{formatJobTime(job.created_at)}</span>
+            </div>
+            <JobParamsDetails job={job} />
+            <ProgressTail job={job} onCancel={onCancelJob} />
+          </div>
+        ))}
+      </section>
+
+      <section className="jobActivitySection">
+        <h2>History</h2>
+        {sorted.length === 0 && <div className="empty">No jobs yet.</div>}
+        {sorted.map((job) => (
+          <div key={job.id} className={`jobActivityRow ${job.status}`}>
+            <div className="jobActivityTitle">
+              <strong>{jobDisplayName(job)}</strong>
+              <StatusBadge status={job.status} />
+            </div>
+            <div className="jobActivityMeta">
+              <code>{job.id}</code>
+              <span>{formatJobTime(job.created_at)}</span>
+            </div>
+            <JobParamsDetails job={job} />
+            <ProgressTail job={job} onDelete={onDeleteJob} onCancel={onCancelJob} />
+          </div>
+        ))}
+      </section>
+    </aside>
   );
 }
 
@@ -968,9 +1056,7 @@ function TrackProfilePanel({
             </div>
             <div>
               <span>Type</span>
-              <strong>
-                {selected.category} #{selected.trackIndex + 1}
-              </strong>
+              <strong>{selected.category} track</strong>
             </div>
           </div>
           <button disabled={!activeDemJob || isPending} onClick={onRun}>
@@ -1289,6 +1375,7 @@ export function App() {
   const invalidate = () => {
     queryClient.invalidateQueries({ queryKey: ["jobs"] });
     queryClient.invalidateQueries({ queryKey: ["project-assets"] });
+    queryClient.invalidateQueries({ queryKey: ["project-pipeline"] });
   };
   const buildMutation = useMutation({
     mutationFn: (payload: { name: string; bounds: Bounds; bufferM: number }) =>
@@ -1299,6 +1386,11 @@ export function App() {
   const [selectedAssetId, setSelectedAssetId] = useState<string | undefined>();
   const [inspectorTool, setInspectorTool] = useState<InspectorTool | undefined>();
   const [pipelineOpen, setPipelineOpen] = useState(false);
+  const [jobsOpen, setJobsOpen] = useState(false);
+  const runningJobCount = useMemo(
+    () => jobs.filter((job) => job.status === "queued" || job.status === "running").length,
+    [jobs],
+  );
   const runToolMutation = useMutation({
     mutationFn: (payload: {
       spec: JobSpec;
@@ -1516,9 +1608,20 @@ export function App() {
         </div>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <ProjectPicker queryClient={queryClient} />
-          <button onClick={() => setPipelineOpen(true)}>
+          <button
+            className={pipelineOpen ? "toggled" : ""}
+            onClick={() => setPipelineOpen((open) => !open)}
+          >
             <GitBranch size={16} />
             Pipeline
+          </button>
+          <button
+            className={jobsOpen ? "toggled" : ""}
+            onClick={() => setJobsOpen((open) => !open)}
+          >
+            <Activity size={16} />
+            Jobs
+            {runningJobCount > 0 && <span className="toolbarBadge">{runningJobCount}</span>}
           </button>
           <UserMenu queryClient={queryClient} />
           <button onClick={() => jobsQuery.refetch()}>
@@ -1538,6 +1641,7 @@ export function App() {
               setInspectorTool(undefined);
             }}
             onRunTool={onRunAssetTool}
+            onDeleteJob={deleteJob}
           />
         <section className="mapFrame">
           <div className="mapToolDock">
@@ -1794,6 +1898,14 @@ export function App() {
           onRunTool={runInspectorTool}
         />
       </section>
+      {jobsOpen && (
+        <JobActivityPanel
+          jobs={jobs}
+          onClose={() => setJobsOpen(false)}
+          onDeleteJob={deleteJob}
+          onCancelJob={cancelRunningJob}
+        />
+      )}
       {pipelineOpen && (
         <PipelineView
           projectId={activeProjectId}

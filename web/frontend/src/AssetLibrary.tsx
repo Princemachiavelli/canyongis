@@ -1,16 +1,17 @@
 import { useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Eye, LocateFixed, Play, Search, Tags } from "lucide-react";
+import { Eye, LocateFixed, Play, Search, Tags, Trash2 } from "lucide-react";
 import {
+  getProjectPipeline,
   listProjectAssets,
   type Asset,
+  type AssetLineageEdge,
   type Job,
   type JobSpec,
 } from "./api";
 import { useAppStore } from "./state";
-import { descriptorsFromJob } from "./layers";
+import { descriptorsFromJob, type LayerDescriptor } from "./layers";
 import {
-  ASSET_GROUP_ORDER,
   assetBounds,
   assetGroup,
   assetName,
@@ -27,12 +28,18 @@ type AssetLibraryProps = {
     spec: JobSpec,
     initialInputs: Record<string, string | undefined>,
   ) => void;
+  onDeleteJob: (job: Job) => void;
 };
 
 type AssetGroup = {
   key: string;
   label: string;
   assets: Asset[];
+};
+
+type AssetTreeData = {
+  roots: Asset[];
+  childrenByParent: Map<string, Asset[]>;
 };
 
 function formatBytes(value: number | null): string | undefined {
@@ -43,6 +50,182 @@ function formatBytes(value: number | null): string | undefined {
   return `${(value / 1024).toFixed(1)} KB`;
 }
 
+function lineageGroup(kind: string): { key: string; label: string } {
+  if (kind === "raster.dem") return { key: "dem", label: "DEMs" };
+  if (kind === "raster.hillshade") return { key: "hillshade", label: "Hillshades" };
+  if (kind.startsWith("raster.score")) return { key: "score", label: "Score Rasters" };
+  if (kind.startsWith("vector.kml.route")) return { key: "route", label: "Routes" };
+  if (kind.startsWith("vector.kml.spine")) return { key: "spine", label: "Spines" };
+  if (isPreviewAssetKind(kind)) return { key: "preview", label: "Previews" };
+  return assetGroup(kind);
+}
+
+function isPreviewAssetKind(kind: string): boolean {
+  return (
+    kind.startsWith("preview.") ||
+    kind === "pmtiles" ||
+    kind === "preview_png" ||
+    kind === "preview_webp" ||
+    kind === "preview_jpg"
+  );
+}
+
+function isPreviewAsset(asset: Asset): boolean {
+  return isPreviewAssetKind(asset.kind) || typeof asset.metadata.layer_key === "string";
+}
+
+function canonicalAssetForJob(assets: Asset[], jobId: string): Asset | undefined {
+  return assets
+    .filter((asset) => asset.job_id === jobId && !isPreviewAsset(asset))
+    .sort(assetSort)[0];
+}
+
+function layerKey(asset: Asset): string | undefined {
+  const value = asset.metadata.layer_key;
+  return typeof value === "string" && value ? value : undefined;
+}
+
+function assetLayerSourceType(asset: Asset): "image" | "pmtiles" | undefined {
+  if (asset.kind === "pmtiles" || asset.media_type === "application/vnd.pmtiles") return "pmtiles";
+  if (asset.kind.startsWith("preview.") && asset.format === "pmtiles") return "pmtiles";
+  if (asset.media_type?.startsWith("image/")) return "image";
+  if (asset.kind === "preview_png" || asset.kind === "preview_webp" || asset.kind === "preview_jpg") {
+    return "image";
+  }
+  return undefined;
+}
+
+function synthesizedLayer(asset: Asset, name: string): LayerDescriptor | undefined {
+  const sourceType = assetLayerSourceType(asset);
+  if (!sourceType || !asset.url) return undefined;
+  const bounds =
+    asset.bounds_wgs84 && asset.bounds_wgs84.length === 4
+      ? ([
+          asset.bounds_wgs84[0],
+          asset.bounds_wgs84[1],
+          asset.bounds_wgs84[2],
+          asset.bounds_wgs84[3],
+        ] as [number, number, number, number])
+      : undefined;
+  const role = typeof asset.metadata.role === "string" ? asset.metadata.role : undefined;
+  const source: LayerDescriptor["source"] = { type: sourceType, url: asset.url };
+  if (asset.path) source.path = asset.path;
+  return {
+    id: `asset:${asset.id}`,
+    label: name,
+    kind: role === "base" ? "base-raster" : "raster-overlay",
+    bounds_wgs84: bounds,
+    role,
+    source,
+  };
+}
+
+function descriptorsForAsset(asset: Asset, job: Job | undefined, name: string): LayerDescriptor[] {
+  const descriptors = job ? descriptorsFromJob(job) : [];
+  if (isPreviewAsset(asset)) {
+    const key = layerKey(asset);
+    const matching = descriptors.filter((descriptor) => {
+      if (key && descriptor.id.endsWith(`:${key}`)) return true;
+      return Boolean(asset.path && descriptor.source?.path === asset.path);
+    });
+    if (matching.length > 0) return matching;
+    const synthesized = synthesizedLayer(asset, name);
+    return synthesized ? [synthesized] : [];
+  }
+  if (asset.kind.startsWith("raster.")) return [];
+  return descriptors.filter(
+    (descriptor) =>
+      descriptor.kind === "vector-kml" ||
+      descriptor.kind === "vector-geojson" ||
+      descriptor.kind === "point-events",
+  );
+}
+
+function assetSort(a: Asset, b: Asset): number {
+  if (a.created_at !== b.created_at) return a.created_at < b.created_at ? -1 : 1;
+  return a.id.localeCompare(b.id);
+}
+
+function buildTree(assets: Asset[], edges: AssetLineageEdge[]): AssetTreeData {
+  const assetsById = new Map(assets.map((asset) => [asset.id, asset]));
+  const childrenByParent = new Map<string, Asset[]>();
+  const hasParent = new Set<string>();
+  const canonicalByJob = new Map<string, Asset>();
+  for (const asset of assets) {
+    if (!asset.job_id || isPreviewAsset(asset)) continue;
+    if (!canonicalByJob.has(asset.job_id)) {
+      canonicalByJob.set(asset.job_id, canonicalAssetForJob(assets, asset.job_id) ?? asset);
+    }
+  }
+  for (const edge of edges) {
+    const producer = assetsById.get(edge.producer);
+    const consumer = assetsById.get(edge.consumer);
+    if (!producer || !consumer) continue;
+    const canonical = consumer.job_id ? canonicalByJob.get(consumer.job_id) : undefined;
+    const parent = isPreviewAsset(consumer) && canonical ? canonical : producer;
+    const children = childrenByParent.get(parent.id) ?? [];
+    if (!children.some((asset) => asset.id === consumer.id)) children.push(consumer);
+    childrenByParent.set(parent.id, children);
+    hasParent.add(consumer.id);
+    if (canonical && canonical.id !== consumer.id && !hasParent.has(canonical.id)) {
+      const parentChildren = childrenByParent.get(producer.id) ?? [];
+      if (!parentChildren.some((asset) => asset.id === canonical.id)) parentChildren.push(canonical);
+      childrenByParent.set(producer.id, parentChildren);
+      hasParent.add(canonical.id);
+    }
+  }
+  for (const children of childrenByParent.values()) children.sort(assetSort);
+  return {
+    roots: assets.filter((asset) => !hasParent.has(asset.id)).sort(assetSort),
+    childrenByParent,
+  };
+}
+
+function matchingAssetIds(assets: Asset[], jobsById: Map<string, Job>, search: string): Set<string> {
+  const q = search.trim().toLowerCase();
+  if (!q) return new Set(assets.map((asset) => asset.id));
+  const ids = new Set<string>();
+  for (const asset of assets) {
+    const job = asset.job_id ? jobsById.get(asset.job_id) : undefined;
+    const name = assetName(asset, job);
+    const haystack = `${name} ${asset.kind} ${asset.id} ${asset.path ?? ""}`.toLowerCase();
+    if (haystack.includes(q)) ids.add(asset.id);
+  }
+  return ids;
+}
+
+function expandMatches(matches: Set<string>, edges: AssetLineageEdge[]): Set<string> {
+  if (matches.size === 0) return matches;
+  const expanded = new Set(matches);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const edge of edges) {
+      if (expanded.has(edge.consumer) && !expanded.has(edge.producer)) {
+        expanded.add(edge.producer);
+        changed = true;
+      }
+      if (expanded.has(edge.producer) && !expanded.has(edge.consumer)) {
+        expanded.add(edge.consumer);
+        changed = true;
+      }
+    }
+  }
+  return expanded;
+}
+
+function groupAssets(assets: Asset[]): AssetGroup[] {
+  const byKey = new Map<string, AssetGroup>();
+  for (const asset of assets) {
+    const groupInfo = lineageGroup(asset.kind);
+    const group = byKey.get(groupInfo.key) ?? { ...groupInfo, assets: [] };
+    group.assets.push(asset);
+    byKey.set(group.key, group);
+  }
+  for (const group of byKey.values()) group.assets.sort(assetSort);
+  return [...byKey.values()].sort((a, b) => a.label.localeCompare(b.label));
+}
+
 function AssetRow({
   asset,
   job,
@@ -50,6 +233,7 @@ function AssetRow({
   selected,
   onSelectAsset,
   onRunTool,
+  onDeleteJob,
 }: {
   asset: Asset;
   job?: Job;
@@ -57,6 +241,7 @@ function AssetRow({
   selected: boolean;
   onSelectAsset: (assetId: string) => void;
   onRunTool: AssetLibraryProps["onRunTool"];
+  onDeleteJob: AssetLibraryProps["onDeleteJob"];
 }) {
   const setActiveDemJob = useAppStore((s) => s.setActiveDemJob);
   const toggleFootprint = useAppStore((s) => s.toggleFootprint);
@@ -73,10 +258,13 @@ function AssetRow({
   const footprintVisible = useAppStore((s) => Boolean(s.footprints[asset.id]));
 
   const bounds = assetBounds(asset);
-  const descriptors = useMemo(() => (job ? descriptorsFromJob(job) : []), [job]);
-  const tools = useMemo(() => compatibleSpecs(asset, specs), [asset, specs]);
   const name = assetName(asset, job);
+  const descriptors = useMemo(() => descriptorsForAsset(asset, job, name), [asset, job, name]);
+  const tools = useMemo(() => compatibleSpecs(asset, specs), [asset, specs]);
   const size = formatBytes(asset.size_bytes);
+  const canDeleteJob = Boolean(
+    job && !asset.linked && job.status !== "queued" && job.status !== "running",
+  );
 
   return (
     <div className={`assetRow ${selected ? "selected" : ""}`}>
@@ -152,7 +340,7 @@ function AssetRow({
                 onClick={() => setOverlayLayer(active ? undefined : descriptor.id)}
               >
                 <Eye size={12} />
-                Overlay
+                Display
               </button>
             );
           }
@@ -187,10 +375,20 @@ function AssetRow({
           }
           return null;
         })}
+        {job && canDeleteJob && (
+          <button
+            className="danger miniButton"
+            title="Delete this job and its output files"
+            onClick={() => onDeleteJob(job)}
+          >
+            <Trash2 size={12} />
+            Delete job
+          </button>
+        )}
       </div>
       {tools.length > 0 && asset.job_id && (
         <div className="assetTools">
-          {tools.slice(0, 3).map(({ spec, inputKey }) => (
+          {tools.map(({ spec, inputKey }) => (
             <button
               key={`${spec.key}:${inputKey}`}
               className="miniButton"
@@ -208,6 +406,66 @@ function AssetRow({
   );
 }
 
+function AssetTreeChildren({
+  parentId,
+  childrenByParent,
+  jobsById,
+  specs,
+  selectedAssetId,
+  onSelectAsset,
+  onRunTool,
+  onDeleteJob,
+}: {
+  parentId: string;
+  childrenByParent: Map<string, Asset[]>;
+  jobsById: Map<string, Job>;
+  specs: JobSpec[];
+  selectedAssetId?: string;
+  onSelectAsset: (assetId: string) => void;
+  onRunTool: AssetLibraryProps["onRunTool"];
+  onDeleteJob: AssetLibraryProps["onDeleteJob"];
+}) {
+  const groups = groupAssets(childrenByParent.get(parentId) ?? []);
+  if (groups.length === 0) return null;
+  return (
+    <div className="assetTreeChildren">
+      {groups.map((group) => (
+        <details key={`${parentId}:${group.key}`} className="assetTypeGroup">
+          <summary>
+            <span>{group.label}</span>
+            <span className="assetCount">{group.assets.length}</span>
+          </summary>
+          <div className="assetRows">
+            {group.assets.map((asset) => (
+              <div key={asset.id} className="assetTreeNode">
+                <AssetRow
+                  asset={asset}
+                  job={asset.job_id ? jobsById.get(asset.job_id) : undefined}
+                  specs={specs}
+                  selected={asset.id === selectedAssetId}
+                  onSelectAsset={onSelectAsset}
+                  onRunTool={onRunTool}
+                  onDeleteJob={onDeleteJob}
+                />
+                <AssetTreeChildren
+                  parentId={asset.id}
+                  childrenByParent={childrenByParent}
+                  jobsById={jobsById}
+                  specs={specs}
+                  selectedAssetId={selectedAssetId}
+                  onSelectAsset={onSelectAsset}
+                  onRunTool={onRunTool}
+                  onDeleteJob={onDeleteJob}
+                />
+              </div>
+            ))}
+          </div>
+        </details>
+      ))}
+    </div>
+  );
+}
+
 export function AssetLibrary({
   projectId,
   jobs,
@@ -215,6 +473,7 @@ export function AssetLibrary({
   selectedAssetId,
   onSelectAsset,
   onRunTool,
+  onDeleteJob,
 }: AssetLibraryProps) {
   const [search, setSearch] = useState("");
   const assetsQuery = useQuery({
@@ -223,25 +482,25 @@ export function AssetLibrary({
     enabled: Boolean(projectId),
     refetchInterval: 2000,
   });
+  const pipelineQuery = useQuery({
+    queryKey: ["project-pipeline", projectId],
+    queryFn: () => getProjectPipeline(projectId as string),
+    enabled: Boolean(projectId),
+    refetchInterval: 2000,
+  });
 
   const jobsById = useMemo(() => new Map(jobs.map((job) => [job.id, job])), [jobs]);
-  const groups = useMemo<AssetGroup[]>(() => {
-    const q = search.trim().toLowerCase();
-    const byKey = new Map<string, AssetGroup>();
-    for (const asset of assetsQuery.data ?? []) {
-      const job = asset.job_id ? jobsById.get(asset.job_id) : undefined;
-      const name = assetName(asset, job);
-      const haystack = `${name} ${asset.kind} ${asset.id} ${asset.path ?? ""}`.toLowerCase();
-      if (q && !haystack.includes(q)) continue;
-      const groupInfo = assetGroup(asset.kind);
-      const group = byKey.get(groupInfo.key) ?? { ...groupInfo, assets: [] };
-      group.assets.push(asset);
-      byKey.set(group.key, group);
-    }
-    return [...byKey.values()].sort(
-      (a, b) => ASSET_GROUP_ORDER.indexOf(a.key) - ASSET_GROUP_ORDER.indexOf(b.key),
+  const tree = useMemo<AssetTreeData>(() => {
+    const assets = assetsQuery.data ?? [];
+    const edges = pipelineQuery.data?.edges ?? [];
+    const visibleIds = expandMatches(matchingAssetIds(assets, jobsById, search), edges);
+    return buildTree(
+      assets.filter((asset) => visibleIds.has(asset.id)),
+      edges,
     );
-  }, [assetsQuery.data, jobsById, search]);
+  }, [assetsQuery.data, jobsById, pipelineQuery.data, search]);
+  const demRoots = tree.roots.filter((asset) => asset.kind === "raster.dem");
+  const otherRoots = tree.roots.filter((asset) => asset.kind !== "raster.dem");
 
   return (
     <aside className="panel assetLibrary">
@@ -260,27 +519,71 @@ export function AssetLibrary({
       {!projectId && <div className="empty">Choose a project to show assets.</div>}
       {assetsQuery.error && <pre className="error">{String(assetsQuery.error)}</pre>}
       {projectId && assetsQuery.isLoading && <div className="empty">Loading assets...</div>}
-      {projectId && !assetsQuery.isLoading && groups.length === 0 && (
+      {pipelineQuery.error && <pre className="error">{String(pipelineQuery.error)}</pre>}
+      {projectId && !assetsQuery.isLoading && tree.roots.length === 0 && (
         <div className="empty">No matching assets in this project.</div>
       )}
       <div className="assetGroups">
-        {groups.map((group) => (
-          <details key={group.key} className="assetGroup" open>
+        {demRoots.map((asset) => (
+          <details key={`aoi:${asset.id}`} className="assetGroup" open>
             <summary>
-              <span>{group.label}</span>
-              <span className="assetCount">{group.assets.length}</span>
+              <span>AOI Bounds</span>
+              <span className="assetCount">1</span>
             </summary>
             <div className="assetRows">
-              {group.assets.map((asset) => (
+              <div className="assetTreeNode">
                 <AssetRow
-                  key={asset.id}
                   asset={asset}
                   job={asset.job_id ? jobsById.get(asset.job_id) : undefined}
                   specs={specs}
                   selected={asset.id === selectedAssetId}
                   onSelectAsset={onSelectAsset}
                   onRunTool={onRunTool}
+                  onDeleteJob={onDeleteJob}
                 />
+                <AssetTreeChildren
+                  parentId={asset.id}
+                  childrenByParent={tree.childrenByParent}
+                  jobsById={jobsById}
+                  specs={specs}
+                  selectedAssetId={selectedAssetId}
+                  onSelectAsset={onSelectAsset}
+                  onRunTool={onRunTool}
+                  onDeleteJob={onDeleteJob}
+                />
+              </div>
+            </div>
+          </details>
+        ))}
+        {groupAssets(otherRoots).map((group) => (
+          <details key={`root:${group.key}`} className="assetGroup" open>
+            <summary>
+              <span>{group.label}</span>
+              <span className="assetCount">{group.assets.length}</span>
+            </summary>
+            <div className="assetRows">
+              {group.assets.map((asset) => (
+                <div key={asset.id} className="assetTreeNode">
+                  <AssetRow
+                    asset={asset}
+                    job={asset.job_id ? jobsById.get(asset.job_id) : undefined}
+                    specs={specs}
+                    selected={asset.id === selectedAssetId}
+                    onSelectAsset={onSelectAsset}
+                    onRunTool={onRunTool}
+                    onDeleteJob={onDeleteJob}
+                  />
+                  <AssetTreeChildren
+                    parentId={asset.id}
+                    childrenByParent={tree.childrenByParent}
+                    jobsById={jobsById}
+                    specs={specs}
+                    selectedAssetId={selectedAssetId}
+                    onSelectAsset={onSelectAsset}
+                    onRunTool={onRunTool}
+                    onDeleteJob={onDeleteJob}
+                  />
+                </div>
               ))}
             </div>
           </details>

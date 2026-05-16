@@ -15,9 +15,13 @@ merged into the job's ``result`` field.
 
 from __future__ import annotations
 
+import queue
+import time
 from collections.abc import Callable, Sequence
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
+from multiprocessing import get_context
 from pathlib import Path
+from traceback import format_exc
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -296,6 +300,27 @@ class DrainageRequest(BaseModel):
     line_width_px: int = 1
 
 
+def _drainage_worker(
+    result_queue,
+    dem_path: str,
+    out_dir: str,
+    thresholds: tuple[int, ...],
+    fill_depressions: bool,
+    line_width_px: int,
+) -> None:
+    try:
+        result = export_drainage_previews(
+            dem_path,
+            out_dir,
+            thresholds=thresholds,
+            fill_depressions=fill_depressions,
+            line_width_px=line_width_px,
+        )
+        result_queue.put({"ok": True, "result": asdict(result)})
+    except BaseException:  # pragma: no cover - exercised by real drainage jobs
+        result_queue.put({"ok": False, "error": format_exc()})
+
+
 def _run_drainage(
     *,
     dem_path: str,
@@ -305,23 +330,60 @@ def _run_drainage(
     output_url: OutputUrlFn,
 ) -> dict[str, Any]:
     progress_cb(f"drainage-preview → {out_dir} (thresholds={tuple(req.thresholds)})")
-    result = export_drainage_previews(
-        dem_path,
-        out_dir,
-        thresholds=tuple(req.thresholds),
-        fill_depressions=req.fill_depressions,
-        line_width_px=req.line_width_px,
+    mp_ctx = get_context("spawn")
+    result_queue = mp_ctx.Queue(maxsize=1)
+    proc = mp_ctx.Process(
+        target=_drainage_worker,
+        args=(
+            result_queue,
+            str(dem_path),
+            str(out_dir),
+            tuple(int(threshold) for threshold in req.thresholds),
+            req.fill_depressions,
+            req.line_width_px,
+        ),
     )
+    proc.start()
+    next_heartbeat = time.monotonic() + 2.0
+    try:
+        while proc.is_alive():
+            proc.join(timeout=1.0)
+            now = time.monotonic()
+            if now >= next_heartbeat:
+                progress_cb("drainage-preview still running")
+                next_heartbeat = now + 2.0
+    except Exception:
+        proc.terminate()
+        proc.join(timeout=5.0)
+        if proc.is_alive():
+            proc.kill()
+            proc.join()
+        raise
+    try:
+        payload = result_queue.get_nowait()
+    except queue.Empty as exc:
+        raise RuntimeError(f"drainage-preview failed with exit code {proc.exitcode}") from exc
+    if not payload.get("ok"):
+        raise RuntimeError(f"drainage-preview failed\n{payload.get('error', '')}")
+    result = payload["result"]
     return {
         "dem_path": dem_path,
         "out_dir": str(out_dir),
-        "flow_accum_path": result.flow_accum_path,
-        "flow_preview_url": output_url(Path(result.flow_preview_path)),
-        "stream_preview_url": output_url(Path(result.stream_preview_path)),
-        **_tile_payload("flow_preview", result.flow_tile_archive, output_url),
-        **_tile_payload("stream_preview", result.stream_tile_archive, output_url),
-        "thresholds": list(result.thresholds),
-        "stream_pixels": result.stream_pixels,
+        "flow_accum_path": result["flow_accum_path"],
+        "flow_preview_url": output_url(Path(result["flow_preview_path"])),
+        "stream_preview_url": output_url(Path(result["stream_preview_path"])),
+        **_tile_payload(
+            "flow_preview",
+            TileArchive(**result["flow_tile_archive"]) if result["flow_tile_archive"] else None,
+            output_url,
+        ),
+        **_tile_payload(
+            "stream_preview",
+            TileArchive(**result["stream_tile_archive"]) if result["stream_tile_archive"] else None,
+            output_url,
+        ),
+        "thresholds": list(result["thresholds"]),
+        "stream_pixels": result["stream_pixels"],
     }
 
 

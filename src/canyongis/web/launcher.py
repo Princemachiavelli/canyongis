@@ -158,12 +158,10 @@ def cli(argv: list[str] | None = None) -> None:
 
     if not args.no_web:
         w = Process(target=_start_web, args=(args,), name="canyongis-web")
-        w.daemon = True
         procs.append(w)
 
     if not args.no_mcp:
         m = Process(target=_start_mcp, args=(args,), name="canyongis-mcp")
-        m.daemon = True
         procs.append(m)
 
     def _shutdown(_signum: int, _frame) -> None:

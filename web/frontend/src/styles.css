@@ -1305,6 +1305,38 @@ button.miniButton {
     margin-top: 8px;
 }
 
+.assetTreeNode {
+    display: grid;
+    gap: 7px;
+}
+
+.assetTreeChildren {
+    display: grid;
+    gap: 7px;
+    margin-left: 12px;
+    padding-left: 10px;
+    border-left: 1px solid #dce3e7;
+}
+
+.assetTypeGroup {
+    display: grid;
+    gap: 6px;
+}
+
+.assetTypeGroup summary {
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    border-radius: 6px;
+    padding: 5px 7px;
+    color: #46535b;
+    background: #eef3f5;
+    font-size: 12px;
+    font-weight: 700;
+}
+
 .assetRow {
     display: grid;
     gap: 6px;
@@ -1423,10 +1455,61 @@ button.miniButton {
     min-height: 0;
     overflow: auto;
     display: grid;
-    grid-auto-rows: max-content;
     align-content: start;
-    gap: 12px 18px;
+    gap: 12px;
     padding: 4px;
+}
+
+.pipelineRoot {
+    border: 1px solid #d6dde1;
+    border-radius: 10px;
+    padding: 10px;
+    background: #f7fafb;
+}
+
+.pipelineRoot > summary,
+.pipelineTypeGroup > summary {
+    cursor: pointer;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    color: #2c3a42;
+    font-size: 12px;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.pipelineTreeNode,
+.pipelineGroupRows,
+.pipelineChildren {
+    display: grid;
+    gap: 8px;
+}
+
+.pipelineRoot > .pipelineTreeNode,
+.pipelineRoot > .pipelineGroupRows {
+    margin-top: 9px;
+}
+
+.pipelineChildren {
+    margin-left: 14px;
+    padding-left: 12px;
+    border-left: 1px solid #dce3e7;
+}
+
+.pipelineTypeGroup {
+    display: grid;
+    gap: 7px;
+}
+
+.pipelineTypeGroup > summary {
+    border-radius: 7px;
+    padding: 6px 8px;
+    background: #e9eff2;
+    text-transform: none;
+    letter-spacing: 0;
 }
 
 .pipelineNode {
@@ -1466,4 +1549,108 @@ button.miniButton {
 
 .pipelineInputs span {
     color: #46535b;
+}
+
+.toolbarBadge {
+    min-width: 18px;
+    border-radius: 999px;
+    padding: 1px 6px;
+    color: #ffffff;
+    background: #b42318;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
+}
+
+.jobActivityPanel {
+    position: fixed;
+    top: 58px;
+    right: 18px;
+    bottom: 18px;
+    z-index: 1250;
+    width: min(520px, calc(100vw - 36px));
+    display: grid;
+    grid-template-rows: auto auto minmax(0, 1fr);
+    gap: 12px;
+    border: 1px solid #b9c2c8;
+    border-radius: 12px;
+    padding: 14px;
+    background: rgba(248, 250, 251, 0.98);
+    box-shadow: 0 18px 60px rgba(15, 23, 42, 0.24);
+    overflow: auto;
+}
+
+.jobActivityHead {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+}
+
+.jobActivityHead > div {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.jobActivityHead span {
+    color: #65737c;
+    font-size: 12px;
+}
+
+.jobActivitySection {
+    display: grid;
+    align-content: start;
+    gap: 8px;
+}
+
+.jobActivitySection h2 {
+    margin: 0;
+    color: #2c3a42;
+    font-size: 12px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+}
+
+.jobActivityRow {
+    display: grid;
+    gap: 7px;
+    border: 1px solid #d6dde1;
+    border-left: 4px solid #91a6b2;
+    border-radius: 8px;
+    padding: 9px;
+    background: #ffffff;
+}
+
+.jobActivityRow.running,
+.jobActivityRow.queued {
+    border-left-color: #d97706;
+}
+
+.jobActivityRow.failed {
+    border-left-color: #b42318;
+}
+
+.jobActivityRow.succeeded {
+    border-left-color: #0c6b58;
+}
+
+.jobActivityTitle,
+.jobActivityMeta {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+}
+
+.jobActivityTitle strong,
+.jobActivityMeta code {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.jobActivityMeta {
+    color: #65737c;
+    font-size: 11px;
 }

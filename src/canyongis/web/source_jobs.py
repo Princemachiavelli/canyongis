@@ -251,7 +251,15 @@ register(
         visualizations=(),
         runner=_run_ropewiki_kml_import,
         runner_kind="context",
-        inputs=(),
+        inputs=(
+            InputSpec(
+                key="container",
+                label="DEM container",
+                kind="raster.dem",
+                required=False,
+                default="user",
+            ),
+        ),
         outputs=(
             OutputSpec(
                 key="kml",

@@ -9,6 +9,7 @@ export const ASSET_GROUP_ORDER = [
   "score",
   "spine",
   "event",
+  "preview",
   "raster",
   "other",
 ];
@@ -23,6 +24,15 @@ export function assetGroup(kind: string): { key: string; label: string } {
   if (kind.startsWith("vector.kml.spine")) return { key: "spine", label: "Spines" };
   if (kind.includes("rappel") || kind.startsWith("vector.geojson.points")) {
     return { key: "event", label: "Events" };
+  }
+  if (
+    kind.startsWith("preview.") ||
+    kind === "pmtiles" ||
+    kind === "preview_png" ||
+    kind === "preview_webp" ||
+    kind === "preview_jpg"
+  ) {
+    return { key: "preview", label: "Previews" };
   }
   if (kind.startsWith("raster.")) return { key: "raster", label: "Rasters" };
   return { key: "other", label: "Other" };

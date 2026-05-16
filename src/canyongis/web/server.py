@@ -1368,11 +1368,13 @@ def create_app(
         if not content:
             raise HTTPException(status_code=400, detail="uploaded KML file is empty")
         name = _safe_kml_name(original_name)
-        params = {
+        params: dict[str, Any] = {
             "name": name,
             "filename": original_name,
             "container_dem_job_id": container_dem_job_id,
         }
+        if container_dem_job_id:
+            params["_inputs"] = {"container": container_dem_job_id}
 
         def run(progress_cb, job_id: str) -> dict[str, Any]:
             kml_path = _kml_import_path(ctx, job_id, name)
@@ -1406,11 +1408,14 @@ def create_app(
     def import_kml_ropewiki(
         req: RopewikiImportRequest, user: User = CurrentUserDep, project_id: str = ActiveProjectDep
     ) -> dict[str, Any]:
+        inputs: dict[str, Any] = {}
+        if req.container_dem_job_id:
+            inputs["container"] = req.container_dem_job_id
         try:
             job = submit_tool_job(
                 ctx,
                 "kml-import",
-                {"params": req.model_dump()},
+                {"params": req.model_dump(), "inputs": inputs},
                 user=user,
                 project_id=project_id,
             )

@@ -157,6 +157,54 @@ def _explicit_output_candidates(
     return seen
 
 
+def _layer_asset_candidates(
+    result: dict[str, Any],
+    *,
+    output_root: Path,
+    require_inside_root: bool,
+) -> dict[str, AssetCandidate]:
+    bounds = result.get("bounds_wgs84") if isinstance(result.get("bounds_wgs84"), list) else None
+    layers = result.get("layers")
+    if not isinstance(layers, list):
+        return {}
+    seen: dict[str, AssetCandidate] = {}
+    for layer in layers:
+        if not isinstance(layer, dict):
+            continue
+        source = layer.get("source")
+        if not isinstance(source, dict):
+            continue
+        path_value = source.get("path")
+        if not isinstance(path_value, str) or not path_value:
+            continue
+        layer_key = layer.get("key") or layer.get("id")
+        layer_kind = layer.get("kind")
+        source_type = source.get("type")
+        metadata: dict[str, Any] = {
+            "layer_key": layer_key,
+            "label": layer.get("label"),
+            "role": layer.get("role"),
+            "source_type": source_type,
+        }
+        item_bounds = layer.get("bounds_wgs84") if isinstance(layer.get("bounds_wgs84"), list) else bounds
+        if item_bounds is not None:
+            metadata["bounds_wgs84"] = item_bounds
+        kind = f"preview.{layer_kind}" if isinstance(layer_kind, str) else "preview.layer"
+        candidate = _candidate_for_path(
+            path_value,
+            output_root=output_root,
+            require_inside_root=require_inside_root,
+            kind=kind,
+            url=source.get("url") if isinstance(source.get("url"), str) else None,
+            metadata={k: v for k, v in metadata.items() if v is not None},
+        )
+        if candidate is None:
+            continue
+        key, value = candidate
+        seen.setdefault(key, value)
+    return seen
+
+
 def extract_asset_candidates(
     result: dict[str, Any] | None,
     *,
@@ -178,6 +226,13 @@ def extract_asset_candidates(
         result,
         output_root=output_root,
         require_inside_root=require_inside_root,
+    )
+    seen.update(
+        _layer_asset_candidates(
+            result,
+            output_root=output_root,
+            require_inside_root=require_inside_root,
+        )
     )
     for key, value in result.items():
         if not isinstance(value, str) or not value:
