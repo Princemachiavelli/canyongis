@@ -28,6 +28,7 @@ def test_tpi_job_spec_normalizes_outputs_and_layers() -> None:
             "label": "TPI ravine score raster",
             "role": "ravine-score",
             "asset_kind": "raster",
+            "asset_type": "raster.score.ravine.tpi",
             "path": "/tmp/out/b_tpi.tif",
             "metadata": {
                 "result_key": "b_tpi_path",

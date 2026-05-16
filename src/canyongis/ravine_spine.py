@@ -145,21 +145,6 @@ def _skeleton_to_paths(skel: np.ndarray) -> list[list[tuple[int, int]]]:
     return paths
 
 
-def _skeleton_degrees(skel: np.ndarray) -> dict[tuple[int, int], int]:
-    """8-neighbor degree of every skeleton pixel."""
-    pixels = {(int(y), int(x)) for y, x in np.argwhere(skel)}
-    out: dict[tuple[int, int], int] = {}
-    for p in pixels:
-        y, x = p
-        d = 0
-        for dy in (-1, 0, 1):
-            for dx in (-1, 0, 1):
-                if (dy or dx) and (y + dy, x + dx) in pixels:
-                    d += 1
-        out[p] = d
-    return out
-
-
 def _path_length_m(path: list[tuple[int, int]], pixel_size: float) -> float:
     """Geodesic length of a pixel path in meters (counts diagonals as √2)."""
     total = 0.0

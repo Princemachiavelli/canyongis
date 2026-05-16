@@ -51,7 +51,35 @@ class PostgresConfig:
             if self.password:
                 userinfo = f"{userinfo}:{quote(self.password, safe='')}"
             userinfo = f"{userinfo}@"
+        if self.host.startswith("/"):
+            return (
+                f"postgresql+psycopg://{userinfo}/{quote(self.dbname, safe='')}"
+                f"?host={quote(self.host, safe='')}"
+            )
         return f"postgresql+psycopg://{userinfo}{self.host}:{self.port}/{self.dbname}"
+
+    def sqlalchemy_engine_url(self):
+        """Return a SQLAlchemy URL object, preserving Unix socket paths as raw fields."""
+        from sqlalchemy.engine import URL, make_url
+
+        if self.dsn:
+            return make_url(self.sqlalchemy_url())
+        if self.host.startswith("/"):
+            return URL.create(
+                "postgresql+psycopg",
+                username=self.user,
+                password=self.password,
+                database=self.dbname,
+                query={"host": self.host},
+            )
+        return URL.create(
+            "postgresql+psycopg",
+            username=self.user,
+            password=self.password,
+            host=self.host,
+            port=self.port,
+            database=self.dbname,
+        )
 
 
 def postgres_config_from_env() -> PostgresConfig:
@@ -78,7 +106,6 @@ def _alembic_config(pg: PostgresConfig):
         cfg.set_main_option("script_location", script_location)
     else:
         cfg = Config(str(ini))
-    cfg.set_main_option("sqlalchemy.url", pg.sqlalchemy_url())
     cfg.attributes["postgres_config"] = pg
     return cfg
 

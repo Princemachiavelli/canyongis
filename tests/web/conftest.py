@@ -1,10 +1,10 @@
 """Shared fixtures for canyongis.web tests.
 
-The ``live_postgres`` fixture creates a dedicated test database on the Nix
-devshell PostgreSQL instance at ``localhost:5433``. It intentionally avoids
-``PGHOST``/socket paths so SQLAlchemy and psycopg use the same TCP target.
-Tests that don't need a DB ignore it. Tests requesting it are skipped when no
-postgres is reachable.
+The ``live_postgres`` fixture creates a dedicated database on a reachable test
+PostgreSQL server. Defaults target the Nix devshell server at ``localhost:5433``;
+``CANYONGIS_TEST_PG_*`` overrides let Nix checks use ``postgresqlTestHook``'s
+Unix socket in ``PGHOST``. Tests that don't need a DB ignore it, and tests
+requesting it are skipped when no postgres is reachable.
 """
 
 from __future__ import annotations
@@ -21,16 +21,15 @@ from canyongis.web.db import PostgresConfig
 def _admin_config() -> PostgresConfig:
     """Return the admin connection used to create per-test databases.
 
-    Keep this on TCP localhost rather than honoring ``PGHOST``. The devshell may
-    set ``PGHOST`` to a Unix socket directory, which works for psycopg but caused
-    SQLAlchemy URL construction to treat the socket path as part of the dbname.
-    Each test still gets a random ``canyongis_test_*`` database, so the existing
-    dev database is not modified.
+    The defaults use TCP localhost for the devshell. Nix checks override these
+    with the Unix socket exported by postgresqlTestHook. Each test still gets a
+    random ``canyongis_test_*`` database, so the existing dev database is not
+    modified.
     """
 
     return PostgresConfig(
         host=os.environ.get("CANYONGIS_TEST_PG_HOST", "localhost"),
-        port=int(os.environ.get("CANYONGIS_TEST_PG_PORT", "5433")),
+        port=int(os.environ.get("CANYONGIS_TEST_PG_PORT", os.environ.get("PGPORT", "5433"))),
         dbname=os.environ.get("CANYONGIS_TEST_PG_ADMIN_DB", "postgres"),
         user=os.environ.get("CANYONGIS_TEST_PG_USER", os.environ.get("PGUSER")),
         password=os.environ.get("CANYONGIS_TEST_PG_PASSWORD", os.environ.get("PGPASSWORD")),

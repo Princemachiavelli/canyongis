@@ -8,7 +8,7 @@ from CANYONGIS_PG_* env vars when invoked from the CLI.
 from __future__ import annotations
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import create_engine, pool
 
 from canyongis.web.db import PostgresConfig, postgres_config_from_env
 
@@ -17,7 +17,6 @@ config = context.config
 pg: PostgresConfig | None = config.attributes.get("postgres_config")
 if pg is None:
     pg = postgres_config_from_env()
-config.set_main_option("sqlalchemy.url", pg.sqlalchemy_url())
 
 
 def run_migrations_offline() -> None:
@@ -33,11 +32,7 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+    connectable = create_engine(pg.sqlalchemy_engine_url(), poolclass=pool.NullPool)
     with connectable.connect() as connection:
         context.configure(connection=connection, target_metadata=None)
         with context.begin_transaction():

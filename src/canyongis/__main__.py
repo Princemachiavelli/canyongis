@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 import geopandas as gpd
@@ -57,6 +58,7 @@ def main(cfg: MLConfig, render_folium: bool) -> None:
 
 def cli(argv: list[str] | None = None) -> None:
     """Top-level CLI — dispatch to train, predict, or the default predict+render pipeline."""
+    raw_argv = sys.argv[1:] if argv is None else list(argv)
     parser = argparse.ArgumentParser(
         prog="canyongis",
         description="Canyon detector powered by an ML U-Net over DEM-derived features.",
@@ -128,7 +130,39 @@ def cli(argv: list[str] | None = None) -> None:
         help="Maximum number of rappel points to render on the map.",
     )
 
-    args, extra = parser.parse_known_args(argv)
+    subcommand_names = set(sub.choices)
+    if raw_argv and raw_argv[0] not in subcommand_names and raw_argv[0] not in {"-h", "--help"}:
+        default_parser = argparse.ArgumentParser(
+            prog="canyongis",
+            description="Run ML inference and render an optional Folium map.",
+        )
+        default_parser.add_argument("dem", type=Path, help="Path to input DEM GeoTIFF.")
+        default_parser.add_argument("checkpoint", type=Path, help="Path to trained .pt checkpoint.")
+        default_parser.add_argument("outdir", type=Path, help="Output directory.")
+        default_parser.add_argument(
+            "--no-folium", action="store_true", help="Skip Folium HTML map render."
+        )
+        default_parser.add_argument(
+            "--folium-max-points",
+            type=int,
+            default=MLConfig().folium_max_points,
+            help="Maximum number of rappel points to render on the map.",
+        )
+        args = default_parser.parse_args(raw_argv)
+        cfg = MLConfig(
+            use_geomorphons=True,
+            dem_path=str(args.dem),
+            checkpoint_path=str(args.checkpoint),
+            out_dir=str(args.outdir),
+            folium_max_points=args.folium_max_points,
+            render_folium=not args.no_folium,
+        )
+        cfg._cli_overrides = {"folium_max_points", "render_folium"}  # type: ignore[attr-defined]
+        cfg._use_checkpoint_defaults = True  # type: ignore[attr-defined]
+        main(cfg, render_folium=not args.no_folium)
+        return
+
+    args, extra = parser.parse_known_args(raw_argv)
 
     if args.command == "train":
         train_cli(extra)

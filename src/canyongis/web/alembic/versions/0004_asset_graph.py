@@ -64,11 +64,7 @@ LEGACY_INPUT_FIELDS: dict[str, tuple[str, str]] = {
 def _typed_kind(job_kind: str, result_key: str) -> str | None:
     if (job_kind, result_key) in ASSET_KIND_MAP:
         return ASSET_KIND_MAP[(job_kind, result_key)]
-    if (
-        job_kind == "rvt"
-        and result_key.startswith(RVT_PREFIX)
-        and result_key.endswith(RVT_SUFFIX)
-    ):
+    if job_kind == "rvt" and result_key.startswith(RVT_PREFIX) and result_key.endswith(RVT_SUFFIX):
         vis = result_key[len(RVT_PREFIX) : -len(RVT_SUFFIX)]
         if vis:
             return f"raster.relief.{vis}"
@@ -118,10 +114,7 @@ def upgrade() -> None:
         )
         """
     )
-    op.execute(
-        "CREATE INDEX canyongis_job_inputs_asset_id_idx "
-        "ON canyongis_job_inputs (asset_id)"
-    )
+    op.execute("CREATE INDEX canyongis_job_inputs_asset_id_idx ON canyongis_job_inputs (asset_id)")
 
     conn = op.get_bind()
 
@@ -139,8 +132,10 @@ def upgrade() -> None:
     for asset_id, path, job_kind, job_result in assets:
         if not job_kind:
             continue
-        result_dict = job_result if isinstance(job_result, dict) else (
-            json.loads(job_result) if isinstance(job_result, str) and job_result else None
+        result_dict = (
+            job_result
+            if isinstance(job_result, dict)
+            else (json.loads(job_result) if isinstance(job_result, str) and job_result else None)
         )
         result_key = _result_path_for_asset(result_dict, path)
         if result_key is None:
@@ -162,12 +157,16 @@ def upgrade() -> None:
             "WHERE status = 'succeeded' AND project_id IS NOT NULL"
         )
     ).fetchall()
-    for job_id, params, result, project_id in jobs:
-        params_dict = params if isinstance(params, dict) else (
-            json.loads(params) if isinstance(params, str) and params else {}
+    for job_id, params, result, _project_id in jobs:
+        params_dict = (
+            params
+            if isinstance(params, dict)
+            else (json.loads(params) if isinstance(params, str) and params else {})
         )
-        result_dict = result if isinstance(result, dict) else (
-            json.loads(result) if isinstance(result, str) and result else {}
+        result_dict = (
+            result
+            if isinstance(result, dict)
+            else (json.loads(result) if isinstance(result, str) and result else {})
         )
         edges: dict[tuple[str, str], str] = {}  # (input_key, asset_id) dedup
 
@@ -226,10 +225,7 @@ def _pick_producer_asset(conn, producer_job_id: str, *, accepted_prefix: str | N
         if row is not None:
             return row[0]
     row = conn.execute(
-        text(
-            "SELECT id FROM canyongis_assets WHERE job_id = :j "
-            "ORDER BY created_at LIMIT 1"
-        ),
+        text("SELECT id FROM canyongis_assets WHERE job_id = :j ORDER BY created_at LIMIT 1"),
         {"j": producer_job_id},
     ).fetchone()
     return row[0] if row is not None else None

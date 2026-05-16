@@ -355,27 +355,6 @@ class JobStore:
         return project_id
 
 
-class Bounds(BaseModel):
-    west: float
-    south: float
-    east: float
-    north: float
-
-    def tuple(self) -> tuple[float, float, float, float]:  # type: ignore[override]
-        if self.west >= self.east:
-            raise ValueError("west must be < east")
-        if self.south >= self.north:
-            raise ValueError("south must be < north")
-        return (self.west, self.south, self.east, self.north)
-
-
-class BuildDemRequest(BaseModel):
-    name: str = Field(default="aoi", min_length=1)
-    bounds: Bounds
-    buffer_m: float = 200.0
-    max_products: int = 24
-
-
 class RopewikiImportRequest(BaseModel):
     source: str = Field(..., min_length=1)
     container_dem_job_id: str | None = None
@@ -859,11 +838,10 @@ def _active_project_id(request: Request, user: User = CurrentUserDep) -> str:
     return ctx.store.ensure_personal_project(user)
 
 
-def _require_project_member(ctx: "WebContext", project_id: str, user: User) -> None:
+def _require_project_member(ctx: WebContext, project_id: str, user: User) -> None:
     with ctx.store.conn.cursor() as cur:
         cur.execute(
-            "SELECT 1 FROM canyongis_project_memberships "
-            "WHERE project_id = %s AND user_id = %s",
+            "SELECT 1 FROM canyongis_project_memberships WHERE project_id = %s AND user_id = %s",
             (project_id, user.id),
         )
         if cur.fetchone() is None:
@@ -875,8 +853,7 @@ def _require_project_member(ctx: "WebContext", project_id: str, user: User) -> N
 
 def _load_asset_summary(cur, asset_id: str) -> dict[str, Any] | None:
     cur.execute(
-        "SELECT id, kind, path, url, job_id, bounds_wgs84 "
-        "FROM canyongis_assets WHERE id = %s",
+        "SELECT id, kind, path, url, job_id, bounds_wgs84 FROM canyongis_assets WHERE id = %s",
         (asset_id,),
     )
     row = cur.fetchone()
@@ -954,7 +931,7 @@ def _walk_lineage_downward(
                 queue.append(consumer_asset_id)
 
 
-def _require_asset_access(ctx: "WebContext", asset_id: str, user: User) -> None:
+def _require_asset_access(ctx: WebContext, asset_id: str, user: User) -> None:
     """Raise 404 if the asset is invisible to ``user``.
 
     Visible = the asset's owning project has the user as a member, OR the

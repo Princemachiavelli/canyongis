@@ -1,0 +1,55 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <Placemark>
+      <name>Descent</name>
+      <LineString>
+        <coordinates>-118.2000,34.3100,0 -118.1980,34.3050,0</coordinates>
+      </LineString>
+    </Placemark>
+    <Placemark>
+      <name>Approach</name>
+      <LineString>
+        <coordinates>-118.2050,34.3150,0 -118.2000,34.3100,0</coordinates>
+      </LineString>
+    </Placemark>
+    <Placemark>
+      <name>Exit</name>
+      <LineString>
+        <coordinates>-118.1980,34.3050,0 -118.1920,34.3080,0</coordinates>
+      </LineString>
+    </Placemark>
+    <Placemark>
+      <name>160ft rappel</name>
+      <Point><coordinates>-118.1990,34.3080,0</coordinates></Point>
+    </Placemark>
+    <Placemark>
+      <name>Rappel sequence start</name>
+      <Point><coordinates>-118.1988,34.3075,0</coordinates></Point>
+    </Placemark>
+    <Placemark>
+      <name>End rappel sequence</name>
+      <Point><coordinates>-118.1985,34.3070,0</coordinates></Point>
+    </Placemark>
+    <Placemark>
+      <name>Final rappel</name>
+      <Point><coordinates>-118.1982,34.3065,0</coordinates></Point>
+    </Placemark>
+    <Placemark>
+      <name>Drop in</name>
+      <Point><coordinates>-118.2000,34.3100,0</coordinates></Point>
+    </Placemark>
+    <Placemark>
+      <name>Park</name>
+      <Point><coordinates>-118.2060,34.3160,0</coordinates></Point>
+    </Placemark>
+    <Placemark>
+      <name>Summit</name>
+      <Point><coordinates>-118.2070,34.3170,0</coordinates></Point>
+    </Placemark>
+    <Placemark>
+      <name>Shuttle parking</name>
+      <Point><coordinates>-118.2080,34.3180,0</coordinates></Point>
+    </Placemark>
+  </Document>
+</kml>

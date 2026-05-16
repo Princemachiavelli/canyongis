@@ -114,7 +114,7 @@ def test_migration_stamps_baseline_when_legacy_schema_present(
     with psycopg.connect(**live_postgres.connect_kwargs()) as conn, conn.cursor() as cur:
         cur.execute("SELECT kind, path FROM canyongis_assets")
         kind, path = cur.fetchone()
-        assert kind == "tif"
+        assert kind == "raster.dem"
         assert Path(path) == dem.resolve()
 
 

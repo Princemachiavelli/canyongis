@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from canyongis.web.db import PostgresConfig
+from canyongis.web.db import PostgresConfig, _alembic_config
 
 
 def test_sqlalchemy_url_basic() -> None:
@@ -13,6 +13,48 @@ def test_sqlalchemy_url_basic() -> None:
 def test_sqlalchemy_url_no_user() -> None:
     pg = PostgresConfig(host="localhost", port=5433, dbname="postgres")
     assert pg.sqlalchemy_url() == "postgresql+psycopg://localhost:5433/postgres"
+
+
+def test_sqlalchemy_url_unix_socket() -> None:
+    pg = PostgresConfig(
+        host="/nix/var/nix/builds/example/run/postgresql",
+        port=5432,
+        dbname="canyongis_test",
+        user="test_user",
+    )
+    assert pg.sqlalchemy_url() == (
+        "postgresql+psycopg://test_user@/canyongis_test"
+        "?host=%2Fnix%2Fvar%2Fnix%2Fbuilds%2Fexample%2Frun%2Fpostgresql"
+    )
+
+
+def test_sqlalchemy_engine_url_preserves_socket_host() -> None:
+    pg = PostgresConfig(
+        host="/nix/var/nix/builds/example/run/postgresql",
+        port=5432,
+        dbname="canyongis_test",
+        user="test_user",
+    )
+
+    url = pg.sqlalchemy_engine_url()
+
+    assert url.host is None
+    assert url.port is None
+    assert url.database == "canyongis_test"
+    assert url.query["host"] == "/nix/var/nix/builds/example/run/postgresql"
+
+
+def test_alembic_config_does_not_interpolate_socket_url() -> None:
+    pg = PostgresConfig(
+        host="/nix/var/nix/builds/example/run/postgresql",
+        port=5432,
+        dbname="canyongis_test",
+        user="test_user",
+    )
+
+    cfg = _alembic_config(pg)
+
+    assert cfg.attributes["postgres_config"] == pg
 
 
 def test_sqlalchemy_url_escapes_user_password() -> None:

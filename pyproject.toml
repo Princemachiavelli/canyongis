@@ -51,7 +51,7 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-dev = ["ruff", "pytest"]
+dev = ["ruff", "pytest", "pytest-cov"]
 
 [project.scripts]
 canyongis = "canyongis.__main__:cli"
@@ -111,7 +111,20 @@ quote-style = "double"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
-addopts = "-ra -m 'not slow'"
+addopts = "-ra -m 'not slow' --cov=canyongis --cov-report=term-missing:skip-covered --cov-report=xml"
 markers = [
   "slow: end-to-end tests that train a model (run with `pytest -m slow` or `-m ''`)",
 ]
+
+[tool.coverage.run]
+branch = true
+source = ["canyongis"]
+omit = [
+  "src/canyongis/web/alembic/env.py",
+  "src/canyongis/web/alembic/versions/*.py",
+]
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = true
+exclude_lines = ["pragma: no cover", "if TYPE_CHECKING:"]

@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <Placemark>
+      <name>Full Descent</name>
+      <LineString>
+        <coordinates>-118.2000,34.3100,0 -118.1980,34.3040,0 -118.1960,34.2980,0</coordinates>
+      </LineString>
+    </Placemark>
+    <Placemark>
+      <name>Fox Creek Logjams</name>
+      <LineString>
+        <coordinates>-118.1950,34.2980,0 -118.1940,34.2960,0</coordinates>
+      </LineString>
+    </Placemark>
+    <Placemark>
+      <name>Approach</name>
+      <LineString>
+        <coordinates>-118.2100,34.3150,0 -118.2050,34.3120,0</coordinates>
+      </LineString>
+    </Placemark>
+    <Placemark>
+      <name>Bramble Canyon Approach</name>
+      <LineString>
+        <coordinates>-118.2050,34.3120,0 -118.2020,34.3110,0</coordinates>
+      </LineString>
+    </Placemark>
+    <Placemark>
+      <name>Full Approach</name>
+      <LineString>
+        <coordinates>-118.2150,34.3180,0 -118.2100,34.3150,0</coordinates>
+      </LineString>
+    </Placemark>
+    <Placemark>
+      <name>Last Rappel</name>
+      <Point><coordinates>-118.1960,34.2980,0</coordinates></Point>
+    </Placemark>
+    <Placemark>
+      <name>Canyon Drop-in</name>
+      <Point><coordinates>-118.2000,34.3100,0</coordinates></Point>
+    </Placemark>
+  </Document>
+</kml>

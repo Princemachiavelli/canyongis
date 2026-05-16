@@ -101,6 +101,7 @@
               pkgs.nodejs
               postgresqlWithPostGIS
               python.pkgs.pytest
+              python.pkgs.pytest-cov
             ];
             shellHook = ''
               # Make the in-tree source importable without a `pip install -e .`
@@ -129,6 +130,55 @@
           checks = {
             inherit canyongis;
             inherit canyongis-web-frontend;
+            coverage = pkgs.stdenv.mkDerivation {
+              pname = "canyongis-coverage";
+              version = "0.1.0";
+              src = inputs.self;
+
+              nativeCheckInputs = [
+                (python.withPackages (_: [
+                  canyongis
+                  python.pkgs.pytest
+                  python.pkgs.pytest-cov
+                ]))
+                pkgs.gdal
+                pkgs.grass
+                pkgs.pmtiles
+                postgresqlWithPostGIS
+                (pkgs.postgresqlTestHook.overrideAttrs (old: {
+                  meta = (old.meta or { }) // {
+                    badPlatforms = [ ];
+                  };
+                }))
+              ];
+
+              dontBuild = true;
+              doCheck = true;
+              postgresqlTestUserOptions = "LOGIN CREATEDB";
+
+              checkPhase = ''
+                runHook preCheck
+                trap 'runHook postCheck' EXIT
+
+                export HOME="$TMPDIR"
+                export NUMBA_CACHE_DIR="$TMPDIR/numba-cache"
+                mkdir -p "$NUMBA_CACHE_DIR"
+                export PYTHONPATH="$PWD/src''${PYTHONPATH:+:$PYTHONPATH}"
+                export CANYONGIS_TEST_PG_HOST="$PGHOST"
+                export CANYONGIS_TEST_PG_PORT="''${PGPORT:-5432}"
+                export CANYONGIS_TEST_PG_ADMIN_DB="$PGDATABASE"
+                export CANYONGIS_TEST_PG_USER="$PGUSER"
+
+                pytest --cov-fail-under=50
+
+                runHook postCheck
+                trap - EXIT
+              '';
+
+              installPhase = ''
+		cp coverage.xml $out
+              '';
+            };
             formatting = config.treefmt.build.check inputs.self;
           };
         };

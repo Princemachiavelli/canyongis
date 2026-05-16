@@ -8,7 +8,6 @@ from typing import Any
 import geopandas as gpd
 from pydantic import BaseModel, Field
 
-from .auth import User
 from ..aoi_mosaic import build_aoi_dem_mosaic
 from ..ingest import (
     ROPEWIKI_PAGE_URL,
@@ -20,6 +19,7 @@ from ..ingest import (
     parse_ropewiki_ref,
 )
 from ..validate import parse_kml
+from .auth import User
 from .dem_jobs import DemJobSpec, InputSpec, LayerSpec, OutputSpec, register
 
 
@@ -226,9 +226,7 @@ def _run_bulk_ropewiki_kml_import(
 
     bounds = req.bounds.tuple()
     container_id = req.container_dem_job_id
-    progress_cb(
-        f"query Ropewiki for canyons in {bounds} (limit {req.max_results})"
-    )
+    progress_cb(f"query Ropewiki for canyons in {bounds} (limit {req.max_results})")
     candidates = list_ropewiki_canyons_in_bbox(bounds, max_results=req.max_results)
     progress_cb(f"Ropewiki returned {len(candidates)} candidate canyon pages")
     submitted: list[dict[str, Any]] = []
@@ -265,9 +263,7 @@ def _run_bulk_ropewiki_kml_import(
             "inputs": {"container": container_id} if container_id else {},
         }
         try:
-            child = submit_tool_job(
-                ctx, "kml-import", body, user=user, project_id=project_id
-            )
+            child = submit_tool_job(ctx, "kml-import", body, user=user, project_id=project_id)
         except (DispatchError, ValueError) as exc:
             skipped.append({"page_title": title, "reason": str(exc)})
             progress_cb(f"skip {title}: {exc}")
@@ -283,9 +279,7 @@ def _run_bulk_ropewiki_kml_import(
         )
         progress_cb(f"queued {title} -> job {child.id}")
 
-    progress_cb(
-        f"bulk import complete: {len(submitted)} queued, {len(skipped)} skipped"
-    )
+    progress_cb(f"bulk import complete: {len(submitted)} queued, {len(skipped)} skipped")
     return {
         "bounds_wgs84": list(bounds),
         "container_dem_job_id": container_id,

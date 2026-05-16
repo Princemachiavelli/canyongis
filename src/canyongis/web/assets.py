@@ -186,7 +186,9 @@ def _layer_asset_candidates(
             "role": layer.get("role"),
             "source_type": source_type,
         }
-        item_bounds = layer.get("bounds_wgs84") if isinstance(layer.get("bounds_wgs84"), list) else bounds
+        item_bounds = (
+            layer.get("bounds_wgs84") if isinstance(layer.get("bounds_wgs84"), list) else bounds
+        )
         if item_bounds is not None:
             metadata["bounds_wgs84"] = item_bounds
         kind = f"preview.{layer_kind}" if isinstance(layer_kind, str) else "preview.layer"

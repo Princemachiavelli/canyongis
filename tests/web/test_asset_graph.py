@@ -18,7 +18,7 @@ from canyongis.web.dem_jobs import DemJobSpec, OutputSpec, get_spec, register
 from canyongis.web.server import Job, create_app
 
 pytest.importorskip("httpx")
-from fastapi.testclient import TestClient  # noqa: E402
+from fastapi.testclient import TestClient
 
 PRODUCER_KEY = "test-asset-graph-producer"
 CONSUMER_KEY = "test-asset-graph-consumer"
@@ -168,18 +168,16 @@ def test_migration_creates_asset_graph_tables(live_postgres) -> None:
     from canyongis.web.db import apply_migrations
 
     apply_migrations(live_postgres)
-    with psycopg.connect(**live_postgres.connect_kwargs()) as conn:
-        with conn.cursor() as cur:
-            cur.execute(
-                "SELECT 1 FROM information_schema.tables "
-                "WHERE table_name = 'canyongis_job_inputs'"
-            )
-            assert cur.fetchone() is not None
-            cur.execute(
-                "SELECT 1 FROM information_schema.tables "
-                "WHERE table_name = 'canyongis_project_asset_links'"
-            )
-            assert cur.fetchone() is not None
+    with psycopg.connect(**live_postgres.connect_kwargs()) as conn, conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM information_schema.tables WHERE table_name = 'canyongis_job_inputs'"
+        )
+        assert cur.fetchone() is not None
+        cur.execute(
+            "SELECT 1 FROM information_schema.tables "
+            "WHERE table_name = 'canyongis_project_asset_links'"
+        )
+        assert cur.fetchone() is not None
 
 
 def test_typed_asset_kind_lands_on_canyongis_assets(
@@ -266,9 +264,9 @@ def test_list_project_assets_filters_by_kind_prefix(
     assert "raster.dem" in kinds
     assert "raster.score.ravine.tpi" in kinds
 
-    dems = client.get(
-        f"/api/projects/{project_id}/assets", params={"kind": "raster.dem"}
-    ).json()["assets"]
+    dems = client.get(f"/api/projects/{project_id}/assets", params={"kind": "raster.dem"}).json()[
+        "assets"
+    ]
     assert {a["kind"] for a in dems} == {"raster.dem"}
 
     scores = client.get(
@@ -277,9 +275,7 @@ def test_list_project_assets_filters_by_kind_prefix(
     assert {a["kind"] for a in scores} == {"raster.score.ravine.tpi"}
 
 
-def test_asset_lineage_returns_full_chain(
-    live_postgres, tmp_path: Path, monkeypatch
-) -> None:
+def test_asset_lineage_returns_full_chain(live_postgres, tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("CANYONGIS_SINGLE_USER", "1")
     app = create_app(output_root=tmp_path / "out", postgres=live_postgres)
     client = TestClient(app)

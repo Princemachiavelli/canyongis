@@ -17,8 +17,9 @@ from canyongis.validate import (
     validate_run,
 )
 
-FIXTURE_KML = Path.home() / "Downloads" / "Great_Falls_of_the_Fox.kml"
-FIXTURE_KML_FOX = Path.home() / "Downloads" / "Fantastic_Mr._Fox_Canyon.kml"
+FIXTURE_DIR = Path(__file__).parent / "fixtures" / "kml"
+FIXTURE_KML = FIXTURE_DIR / "Great_Falls_of_the_Fox.kml"
+FIXTURE_KML_FOX = FIXTURE_DIR / "Fantastic_Mr._Fox_Canyon.kml"
 
 
 def test_classifier_heuristics():
