@@ -46,6 +46,7 @@ class BuildDemToolRequest(BaseModel):
 
 class RopewikiKmlImportRequest(BaseModel):
     source: str = Field(..., min_length=1)
+    name: str | None = None
     container_dem_job_id: str | None = None
 
 
@@ -183,8 +184,9 @@ def _run_ropewiki_kml_import(
     download_url = _get_kml_download_url(file_title)
     if download_url is None:
         raise ValueError(f"Ropewiki KML has no download URL: {file_title}")
-    name = _safe_kml_name(file_title.removeprefix("File:"))
-    kml_path = _kml_import_path(ctx, job_id, name)
+    filename = _safe_kml_name(file_title.removeprefix("File:"))
+    display_name = (req.name or page_title or Path(filename).stem).strip() or Path(filename).stem
+    kml_path = _kml_import_path(ctx, job_id, filename)
     kml_path.parent.mkdir(parents=True, exist_ok=True)
     progress_cb(f"download Ropewiki KML {file_title} -> {kml_path}")
     _download_file(download_url, kml_path)
@@ -194,7 +196,7 @@ def _run_ropewiki_kml_import(
     result = build_kml_import_result(
         ctx,
         kml_path,
-        Path(name).stem,
+        display_name,
         source={
             "type": "ropewiki",
             "source": source,
@@ -259,7 +261,7 @@ def _run_bulk_ropewiki_kml_import(
             continue
         source = ROPEWIKI_PAGE_URL.format(title=title.replace(" ", "_"))
         body: dict[str, Any] = {
-            "params": {"source": source, "container_dem_job_id": container_id},
+            "params": {"source": source, "name": title, "container_dem_job_id": container_id},
             "inputs": {"container": container_id} if container_id else {},
         }
         try:

@@ -275,6 +275,51 @@ def test_list_project_assets_filters_by_kind_prefix(
     assert {a["kind"] for a in scores} == {"raster.score.ravine.tpi"}
 
 
+def test_kml_import_container_records_dem_edge(live_postgres, tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CANYONGIS_SINGLE_USER", "1")
+    app = create_app(output_root=tmp_path / "out", postgres=live_postgres)
+    ctx = app.state.ctx
+    dem = _insert_dem_job(ctx, job_id="dem-container")
+    assert dem.project_id is not None
+    kml_path = ctx.output_root / "kml" / "kml-contained" / "route.kml"
+    kml_path.parent.mkdir(parents=True, exist_ok=True)
+    kml_path.write_text("<kml/>")
+    job = Job(
+        id="kml-contained",
+        kind="kml-import",
+        status="succeeded",
+        created_at="2026-01-01T00:00:00+00:00",
+        updated_at="2026-01-01T00:00:00+00:00",
+        finished_at="2026-01-01T00:00:00+00:00",
+        params={"_inputs": {"container": dem.id}, "container_dem_job_id": dem.id},
+        result={
+            "name": "Contained Route",
+            "container_dem_job_id": dem.id,
+            "kml_path": str(kml_path),
+            "bounds_wgs84": [1.1, 2.1, 3.1, 4.1],
+        },
+        project_id=dem.project_id,
+        created_by_user_id=dem.created_by_user_id,
+    )
+    ctx.store.upsert(job)
+    ctx.store.register_assets(job, project_id=dem.project_id, created_by_user_id=dem.created_by_user_id)
+
+    assert ctx.store.register_job_inputs(job) == 1
+
+    with ctx.store.conn.cursor() as cur:
+        cur.execute(
+            """
+            SELECT i.input_key, producer.job_id, consumer.job_id
+            FROM canyongis_job_inputs i
+            JOIN canyongis_assets producer ON producer.id = i.asset_id
+            JOIN canyongis_assets consumer ON consumer.job_id = i.job_id
+            WHERE i.job_id = %s
+            """,
+            (job.id,),
+        )
+        assert cur.fetchall() == [("container", dem.id, job.id)]
+
+
 def test_asset_lineage_returns_full_chain(live_postgres, tmp_path: Path, monkeypatch) -> None:
     monkeypatch.setenv("CANYONGIS_SINGLE_USER", "1")
     app = create_app(output_root=tmp_path / "out", postgres=live_postgres)

@@ -176,9 +176,12 @@ def _normalize_outputs(spec: DemJobSpec, result: dict[str, Any]) -> list[dict[st
         path = result.get(out_spec.path_field)
         if not isinstance(path, str) or not path:
             continue
+        label = out_spec.label
+        if out_spec.asset_type == "vector.kml.route" and isinstance(result.get("name"), str):
+            label = result["name"]
         row: dict[str, Any] = {
             "key": out_spec.key,
-            "label": out_spec.label,
+            "label": label,
             "role": out_spec.role,
             "asset_kind": out_spec.asset_kind,
             "path": path,

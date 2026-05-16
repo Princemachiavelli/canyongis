@@ -283,6 +283,8 @@ class JobStore:
         if not isinstance(recorded, dict) or not recorded:
             return 0
         input_kinds = {ispec.key: ispec.kind for ispec in spec.inputs}
+        if job.kind == "kml-import":
+            input_kinds.setdefault("container", "raster.dem")
         written = 0
         with self.conn.cursor() as cur:
             for input_key, raw in recorded.items():

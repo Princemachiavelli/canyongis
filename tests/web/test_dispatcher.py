@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import time
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 import pytest
@@ -212,6 +213,78 @@ def test_source_tools_are_exposed_in_specs_and_tools(
     assert specs["track-profile"]["inputs"][1]["kind"] == "raster.dem"
     assert specs["ravine-spine"]["outputs"][0]["role"] == "route"
     assert sum(1 for tool in tools if tool["id"] == "build-dem") == 1
+
+
+def test_bulk_ropewiki_import_names_children_and_preserves_container(monkeypatch) -> None:
+    calls: list[dict[str, Any]] = []
+    parent = Job(
+        id="bulk-job",
+        kind="ropewiki-bulk-import",
+        status="running",
+        created_at="2026-01-01T00:00:00+00:00",
+        updated_at="2026-01-01T00:00:00+00:00",
+        params={},
+        project_id="project-1",
+        created_by_user_id="user-1",
+    )
+    ctx = SimpleNamespace(job_or_404=lambda job_id: parent)
+
+    def fake_submit_tool_job(wc, tool_key, body, *, user, project_id):
+        calls.append({"tool_key": tool_key, "body": body, "user": user, "project_id": project_id})
+        return Job(
+            id="child-job",
+            kind=tool_key,
+            status="queued",
+            created_at="2026-01-01T00:00:00+00:00",
+            updated_at="2026-01-01T00:00:00+00:00",
+            params=body["params"],
+            project_id=project_id,
+            created_by_user_id=user.id,
+        )
+
+    monkeypatch.setattr(
+        source_jobs,
+        "list_ropewiki_canyons_in_bbox",
+        lambda bounds, max_results: [
+            {"title": "Fantastic Mr. Fox Canyon", "latitude": 37.1, "longitude": -112.9}
+        ],
+    )
+    monkeypatch.setattr(
+        source_jobs,
+        "batch_resolve_page_kmls",
+        lambda titles: {"Fantastic Mr. Fox Canyon": "File:Fantastic_Mr._Fox_Canyon.kml"},
+    )
+    monkeypatch.setattr("canyongis.web.dispatcher.submit_tool_job", fake_submit_tool_job)
+
+    result = source_jobs._run_bulk_ropewiki_kml_import(
+        ctx=ctx,
+        req=source_jobs.BulkRopewikiKmlImportRequest(
+            bounds={"west": -113.0, "south": 37.0, "east": -112.0, "north": 38.0},
+            container_dem_job_id="dem-container",
+            max_results=10,
+        ),
+        inputs={},
+        progress_cb=lambda _message: None,
+        job_id=parent.id,
+    )
+
+    assert result["submitted_jobs"] == [
+        {
+            "page_title": "Fantastic Mr. Fox Canyon",
+            "job_id": "child-job",
+            "source": "https://ropewiki.com/Fantastic_Mr._Fox_Canyon",
+            "latitude": 37.1,
+            "longitude": -112.9,
+        }
+    ]
+    assert calls[0]["body"] == {
+        "params": {
+            "source": "https://ropewiki.com/Fantastic_Mr._Fox_Canyon",
+            "name": "Fantastic Mr. Fox Canyon",
+            "container_dem_job_id": "dem-container",
+        },
+        "inputs": {"container": "dem-container"},
+    }
 
 
 def _patch_mcp_dispatch(monkeypatch) -> list[dict[str, Any]]:

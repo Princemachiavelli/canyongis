@@ -67,3 +67,18 @@ def test_normalize_result_preserves_existing_metadata() -> None:
     normalized = normalize_result(spec, result)
 
     assert normalized == result
+
+
+def test_kml_import_output_uses_route_name_as_label() -> None:
+    spec = get_spec("kml-import")
+    assert spec is not None
+    result = {
+        "name": "Fantastic Mr. Fox Canyon",
+        "kml_path": "/tmp/out/fantastic.kml",
+        "kml_url": "/outputs/fantastic.kml",
+        "bounds_wgs84": [-113.0, 37.0, -112.0, 38.0],
+    }
+
+    normalized = normalize_result(spec, result)
+
+    assert normalized["outputs"][0]["label"] == "Fantastic Mr. Fox Canyon"

@@ -222,7 +222,11 @@ export function App() {
   const ropewikiBulkMutation = useMutation({
     mutationFn: () => {
       if (!bounds) throw new Error("Draw or select an AOI first");
-      return importRopewikiBulk({ bounds, maxResults: bulkMaxResults });
+      return importRopewikiBulk({
+        bounds,
+        containerDemJobId: activeDemJob?.id,
+        maxResults: bulkMaxResults,
+      });
     },
     onSuccess: invalidate,
   });
