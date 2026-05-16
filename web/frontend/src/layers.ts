@@ -1,4 +1,4 @@
-import type { Job } from "./api";
+import type { Asset, Job } from "./api";
 
 export type LayerKind =
   | "base-raster"
@@ -116,4 +116,66 @@ export function allDescriptorsFromJobs(jobs: Job[]): LayerDescriptor[] {
 export function descriptorJobId(layerId: string): string | undefined {
   const idx = layerId.indexOf(":");
   return idx > 0 ? layerId.slice(0, idx) : undefined;
+}
+
+export function isPreviewAssetKind(kind: string): boolean {
+  return (
+    kind.startsWith("preview.") ||
+    kind === "pmtiles" ||
+    kind === "preview_png" ||
+    kind === "preview_webp" ||
+    kind === "preview_jpg"
+  );
+}
+
+export function isPreviewAsset(asset: Asset): boolean {
+  return isPreviewAssetKind(asset.kind) || typeof asset.metadata.layer_key === "string";
+}
+
+export function assetLayerSourceType(asset: Asset): "image" | "pmtiles" | undefined {
+  if (asset.kind === "pmtiles" || asset.media_type === "application/vnd.pmtiles") return "pmtiles";
+  if (typeof asset.metadata.source_type === "string") {
+    const t = asset.metadata.source_type;
+    if (t === "pmtiles" || t === "image") return t;
+  }
+  if (asset.kind.startsWith("preview.") && asset.format === "pmtiles") return "pmtiles";
+  if (asset.media_type?.startsWith("image/")) return "image";
+  if (asset.kind === "preview_png" || asset.kind === "preview_webp" || asset.kind === "preview_jpg") {
+    return "image";
+  }
+  return undefined;
+}
+
+export function assetSynthesizedLayerId(assetId: string): string {
+  return `asset:${assetId}`;
+}
+
+export function synthesizedLayerFromAsset(
+  asset: Asset,
+  name: string,
+): LayerDescriptor | undefined {
+  const sourceType = assetLayerSourceType(asset);
+  if (!sourceType || !asset.url) return undefined;
+  const bounds =
+    asset.bounds_wgs84 && asset.bounds_wgs84.length === 4
+      ? ([
+          asset.bounds_wgs84[0],
+          asset.bounds_wgs84[1],
+          asset.bounds_wgs84[2],
+          asset.bounds_wgs84[3],
+        ] as [number, number, number, number])
+      : undefined;
+  const role = typeof asset.metadata.role === "string" ? asset.metadata.role : undefined;
+  const source: LayerSource = { type: sourceType, url: asset.url };
+  if (asset.path) source.path = asset.path;
+  return {
+    id: assetSynthesizedLayerId(asset.id),
+    label: name,
+    kind: role === "base" ? "base-raster" : "raster-overlay",
+    bounds_wgs84: bounds,
+    role,
+    source,
+    sourceJobId: asset.job_id ?? undefined,
+    fallbackName: name,
+  };
 }

@@ -23,12 +23,15 @@ import {
   cancelJob,
   deleteGeneratedKmlLayer,
   deleteJobRecord,
+  importRopewikiBulk,
   importRopewikiKml,
   listJobSpecs,
   listJobs,
+  listProjectAssets,
   runTool,
   trimJobRuns,
   uploadKmlFile,
+  type Asset,
   type Bounds,
   type Job,
   type JobSpec,
@@ -45,7 +48,13 @@ import { Inspector, type InspectorTool } from "./Inspector";
 import { PipelineView } from "./PipelineView";
 import { useAppStore } from "./state";
 import type { ToolDialogResult } from "./ToolDialog";
-import { descriptorsFromJob, type LayerDescriptor } from "./layers";
+import {
+  assetSynthesizedLayerId,
+  descriptorsFromJob,
+  isPreviewAsset,
+  synthesizedLayerFromAsset,
+  type LayerDescriptor,
+} from "./layers";
 
 function jobBoundsWgs84(job: Job): Bounds | undefined {
   const arr = job.result?.bounds_wgs84 as number[] | undefined;
@@ -1285,8 +1294,16 @@ export function App() {
     gcTime: Infinity,
   });
 
+  const assetsQuery = useQuery({
+    queryKey: ["project-assets", activeProjectId],
+    queryFn: () => listProjectAssets(activeProjectId as string),
+    enabled: Boolean(activeProjectId),
+    refetchInterval: 2000,
+  });
+
   const jobs = jobsQuery.data ?? [];
   const specs = useMemo(() => specsQuery.data ?? [], [specsQuery.data]);
+  const projectAssets: Asset[] = useMemo(() => assetsQuery.data ?? [], [assetsQuery.data]);
   const containerSpecs = useMemo(
     () => specs.filter((spec) => spec.runner_kind === "dem"),
     [specs],
@@ -1361,9 +1378,24 @@ export function App() {
         });
       }
     }
+    for (const asset of projectAssets) {
+      if (!isPreviewAsset(asset)) continue;
+      const layerId = assetSynthesizedLayerId(asset.id);
+      const isBase = baseLayerId === layerId;
+      const isOverlay = overlayLayerId === layerId;
+      if (!isBase && !isOverlay) continue;
+      const name =
+        typeof asset.metadata.label === "string" && asset.metadata.label
+          ? asset.metadata.label
+          : asset.path?.split("/").pop() || asset.id;
+      const synthesized = synthesizedLayerFromAsset(asset, name);
+      if (!synthesized) continue;
+      out.push(synthesized);
+    }
     return out;
   }, [
     jobs,
+    projectAssets,
     footprints,
     baseLayerId,
     overlayLayerId,
@@ -1383,6 +1415,7 @@ export function App() {
     onSuccess: invalidate,
   });
   const [pendingRunKey, setPendingRunKey] = useState<string | undefined>();
+  const [bulkMaxResults, setBulkMaxResults] = useState(50);
   const [selectedAssetId, setSelectedAssetId] = useState<string | undefined>();
   const [inspectorTool, setInspectorTool] = useState<InspectorTool | undefined>();
   const [pipelineOpen, setPipelineOpen] = useState(false);
@@ -1448,6 +1481,13 @@ export function App() {
     mutationFn: (source: string) => {
       if (!source) throw new Error("Enter a Ropewiki URL or title");
       return importRopewikiKml(source, activeDemJob?.id);
+    },
+    onSuccess: invalidate,
+  });
+  const ropewikiBulkMutation = useMutation({
+    mutationFn: () => {
+      if (!bounds) throw new Error("Draw or select an AOI first");
+      return importRopewikiBulk({ bounds, maxResults: bulkMaxResults });
     },
     onSuccess: invalidate,
   });
@@ -1726,6 +1766,37 @@ export function App() {
                     >
                       Ropewiki
                     </button>
+                  </div>
+                  <div className="mapToolBulk">
+                    <label>
+                      <span>Bulk Ropewiki import</span>
+                      <input
+                        type="number"
+                        min={1}
+                        max={500}
+                        value={bulkMaxResults}
+                        onChange={(event) => {
+                          const value = Number(event.target.value);
+                          if (Number.isFinite(value) && value >= 1) {
+                            setBulkMaxResults(Math.min(500, Math.floor(value)));
+                          }
+                        }}
+                      />
+                    </label>
+                    <button
+                      disabled={ropewikiBulkMutation.isPending || !bounds}
+                      onClick={() => ropewikiBulkMutation.mutate()}
+                      title="Import all Ropewiki canyons inside the AOI"
+                    >
+                      {ropewikiBulkMutation.isPending
+                        ? "Discovering..."
+                        : "Import all in AOI"}
+                    </button>
+                    {ropewikiBulkMutation.error && (
+                      <div className="error">
+                        {String((ropewikiBulkMutation.error as Error).message)}
+                      </div>
+                    )}
                   </div>
                 </div>
               )}

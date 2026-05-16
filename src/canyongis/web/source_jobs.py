@@ -8,12 +8,15 @@ from typing import Any
 import geopandas as gpd
 from pydantic import BaseModel, Field
 
+from .auth import User
 from ..aoi_mosaic import build_aoi_dem_mosaic
 from ..ingest import (
     ROPEWIKI_PAGE_URL,
     _download_file,
     _find_kml_file_title,
     _get_kml_download_url,
+    batch_resolve_page_kmls,
+    list_ropewiki_canyons_in_bbox,
     parse_ropewiki_ref,
 )
 from ..validate import parse_kml
@@ -44,6 +47,12 @@ class BuildDemToolRequest(BaseModel):
 class RopewikiKmlImportRequest(BaseModel):
     source: str = Field(..., min_length=1)
     container_dem_job_id: str | None = None
+
+
+class BulkRopewikiKmlImportRequest(BaseModel):
+    bounds: Bounds
+    container_dem_job_id: str | None = None
+    max_results: int = Field(default=50, ge=1, le=500)
 
 
 def _safe_name(value: str) -> str:
@@ -204,6 +213,88 @@ def _run_ropewiki_kml_import(
     return result
 
 
+def _run_bulk_ropewiki_kml_import(
+    *,
+    ctx: Any,
+    req: BulkRopewikiKmlImportRequest,
+    inputs: dict[str, Any],
+    progress_cb,
+    job_id: str,
+    **_: Any,
+) -> dict[str, Any]:
+    from .dispatcher import DispatchError, submit_tool_job  # avoid plugins ↔ dispatcher cycle
+
+    bounds = req.bounds.tuple()
+    container_id = req.container_dem_job_id
+    progress_cb(
+        f"query Ropewiki for canyons in {bounds} (limit {req.max_results})"
+    )
+    candidates = list_ropewiki_canyons_in_bbox(bounds, max_results=req.max_results)
+    progress_cb(f"Ropewiki returned {len(candidates)} candidate canyon pages")
+    submitted: list[dict[str, Any]] = []
+    skipped: list[dict[str, Any]] = []
+    if not candidates:
+        return {
+            "bounds_wgs84": list(bounds),
+            "container_dem_job_id": container_id,
+            "candidate_count": 0,
+            "submitted_jobs": submitted,
+            "skipped": skipped,
+        }
+
+    titles = [c["title"] for c in candidates]
+    progress_cb(f"resolving KML attachments for {len(titles)} page(s)")
+    kml_by_page = batch_resolve_page_kmls(titles)
+
+    parent_job = ctx.job_or_404(job_id)
+    user = User(id=parent_job.created_by_user_id or "system", username="bulk-import")
+    project_id = parent_job.project_id
+    if not project_id:
+        raise ValueError("bulk import requires an active project")
+
+    for candidate in candidates:
+        title = candidate["title"]
+        kml_title = kml_by_page.get(title)
+        if not kml_title:
+            skipped.append({"page_title": title, "reason": "no KML attachment"})
+            progress_cb(f"skip {title}: no KML attachment")
+            continue
+        source = ROPEWIKI_PAGE_URL.format(title=title.replace(" ", "_"))
+        body: dict[str, Any] = {
+            "params": {"source": source, "container_dem_job_id": container_id},
+            "inputs": {"container": container_id} if container_id else {},
+        }
+        try:
+            child = submit_tool_job(
+                ctx, "kml-import", body, user=user, project_id=project_id
+            )
+        except (DispatchError, ValueError) as exc:
+            skipped.append({"page_title": title, "reason": str(exc)})
+            progress_cb(f"skip {title}: {exc}")
+            continue
+        submitted.append(
+            {
+                "page_title": title,
+                "job_id": child.id,
+                "source": source,
+                "latitude": candidate.get("latitude"),
+                "longitude": candidate.get("longitude"),
+            }
+        )
+        progress_cb(f"queued {title} -> job {child.id}")
+
+    progress_cb(
+        f"bulk import complete: {len(submitted)} queued, {len(skipped)} skipped"
+    )
+    return {
+        "bounds_wgs84": list(bounds),
+        "container_dem_job_id": container_id,
+        "candidate_count": len(candidates),
+        "submitted_jobs": submitted,
+        "skipped": skipped,
+    }
+
+
 register(
     DemJobSpec(
         key="build-dem",
@@ -251,15 +342,10 @@ register(
         visualizations=(),
         runner=_run_ropewiki_kml_import,
         runner_kind="context",
-        inputs=(
-            InputSpec(
-                key="container",
-                label="DEM container",
-                kind="raster.dem",
-                required=False,
-                default="user",
-            ),
-        ),
+        # No InputSpec for "container": KML imports are user-initiated from the
+        # map popover, not run as a tool on a DEM asset. The container link is
+        # still recorded via params._inputs.container.
+        inputs=(),
         outputs=(
             OutputSpec(
                 key="kml",
@@ -280,5 +366,25 @@ register(
                 role="route",
             ),
         ),
+    )
+)
+
+
+register(
+    DemJobSpec(
+        key="ropewiki-bulk-import",
+        label="Import all Ropewiki canyons in AOI",
+        description=(
+            "Discover Ropewiki canyon pages whose coordinates fall inside the AOI "
+            "(or the selected DEM container) and submit one Import KML job per canyon."
+        ),
+        request_model=BulkRopewikiKmlImportRequest,
+        visualizations=(),
+        runner=_run_bulk_ropewiki_kml_import,
+        runner_kind="context",
+        # No InputSpec: bulk import is map-popover driven, not run on a DEM row.
+        inputs=(),
+        outputs=(),
+        layers=(),
     )
 )

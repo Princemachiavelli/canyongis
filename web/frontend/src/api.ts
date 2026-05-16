@@ -253,6 +253,34 @@ export async function importRopewikiKml(
   });
 }
 
+export async function setKmlContainer(
+  kmlJobId: string,
+  containerDemJobId: string | null,
+): Promise<Job> {
+  return request<Job>(`/api/jobs/${kmlJobId}/container`, {
+    method: "POST",
+    body: JSON.stringify({ container_dem_job_id: containerDemJobId }),
+  });
+}
+
+export async function importRopewikiBulk(args: {
+  bounds?: Bounds;
+  containerDemJobId?: string;
+  maxResults: number;
+}): Promise<Job> {
+  return request<Job>("/api/jobs/import-kml-ropewiki-bulk", {
+    method: "POST",
+    body: JSON.stringify({
+      params: {
+        bounds: args.bounds,
+        container_dem_job_id: args.containerDemJobId,
+        max_results: args.maxResults,
+      },
+      inputs: args.containerDemJobId ? { container: args.containerDemJobId } : {},
+    }),
+  });
+}
+
 export type KmlSnapTarget = "dem" | "tpi" | "geomorphon" | "curvature";
 
 export type TrackCategory = "descent" | "approach" | "unclassified";

@@ -176,6 +176,155 @@ def _get_kml_download_url(file_title: str) -> str | None:
     return None if not url else str(url)
 
 
+def _chunked(seq: list[Any], n: int) -> list[list[Any]]:
+    return [seq[i : i + n] for i in range(0, len(seq), n)]
+
+
+def _smw_results(data: dict[str, Any]) -> list[tuple[str, dict[str, Any]]]:
+    """Normalize SMW ``action=ask`` results to a list of (page_title, info).
+
+    SMW returns ``results`` as either a dict keyed by title (older clients) or
+    a list of ``{fulltext, ...}`` objects (formatversion=2). Accept both.
+    """
+    results = data.get("query", {}).get("results")
+    if isinstance(results, dict):
+        return [(title, info) for title, info in results.items() if isinstance(info, dict)]
+    if isinstance(results, list):
+        out: list[tuple[str, dict[str, Any]]] = []
+        for entry in results:
+            if not isinstance(entry, dict):
+                continue
+            title = str(entry.get("fulltext") or entry.get("title") or "").strip()
+            if title:
+                out.append((title, entry))
+        return out
+    return []
+
+
+def list_ropewiki_canyons_in_bbox(
+    bounds_wgs84: tuple[float, float, float, float],
+    *,
+    max_results: int = 50,
+) -> list[dict[str, Any]]:
+    """Discover Ropewiki canyon pages whose Latitude/Longitude fall in ``bounds_wgs84``.
+
+    Uses one Semantic MediaWiki ``action=ask`` call. Returns at most
+    ``max_results`` entries, each a dict with ``title``, ``latitude``,
+    ``longitude``, and ``page_url`` (when SMW returns ``fullurl``).
+    """
+    west, south, east, north = (float(v) for v in bounds_wgs84)
+    if west >= east or south >= north:
+        raise ValueError(f"invalid bounds: {bounds_wgs84}")
+    limit = max(1, min(int(max_results), 500))
+    # SMW ask: conditions are SPACE-separated, then pipe-separated printouts/params.
+    # Ropewiki's canyon Infobox sets ``Has latitude`` and ``Has longitude``
+    # (numeric SMW properties) — bare ``Latitude``/``Longitude`` do not exist.
+    conditions = " ".join(
+        [
+            "[[Category:Canyons]]",
+            f"[[Has latitude::>{south}]]",
+            f"[[Has latitude::<{north}]]",
+            f"[[Has longitude::>{west}]]",
+            f"[[Has longitude::<{east}]]",
+        ]
+    )
+    extras = ["?Has latitude", "?Has longitude", f"limit={limit}"]
+    query = "|".join([conditions, *extras])
+    data = _ropewiki_query(action="ask", query=query)
+    out: list[dict[str, Any]] = []
+    for title, info in _smw_results(data):
+        printouts = info.get("printouts") or {}
+        lat_list = printouts.get("Has latitude") or []
+        lon_list = printouts.get("Has longitude") or []
+
+        def _first_float(values: list[Any]) -> float | None:
+            for value in values:
+                if isinstance(value, (int, float)):
+                    return float(value)
+                if isinstance(value, dict):
+                    for key in ("value", "raw"):
+                        v = value.get(key)
+                        if isinstance(v, (int, float)):
+                            return float(v)
+                        if isinstance(v, str):
+                            try:
+                                return float(v)
+                            except ValueError:
+                                continue
+                if isinstance(value, str):
+                    try:
+                        return float(value)
+                    except ValueError:
+                        continue
+            return None
+
+        out.append(
+            {
+                "title": title,
+                "latitude": _first_float(lat_list),
+                "longitude": _first_float(lon_list),
+                "page_url": info.get("fullurl"),
+            }
+        )
+    return out
+
+
+def batch_resolve_page_kmls(page_titles: list[str]) -> dict[str, str | None]:
+    """For each page title, return the first ``.kml`` File attachment title (or None).
+
+    Issues one ``action=query&prop=images`` call per batch of up to 50 titles.
+    """
+    out: dict[str, str | None] = {title: None for title in page_titles}
+    for batch in _chunked(list(page_titles), 50):
+        data = _ropewiki_query(
+            action="query",
+            titles="|".join(batch),
+            prop="images",
+            imlimit="max",
+        )
+        pages = data.get("query", {}).get("pages", [])
+        for page in pages:
+            if not isinstance(page, dict):
+                continue
+            title = page.get("title")
+            if not isinstance(title, str):
+                continue
+            images = page.get("images") or []
+            for image in images:
+                if not isinstance(image, dict):
+                    continue
+                image_title = str(image.get("title", ""))
+                if image_title.lower().endswith(".kml"):
+                    out[title] = image_title
+                    break
+    return out
+
+
+def batch_get_kml_urls(file_titles: list[str]) -> dict[str, str | None]:
+    """Resolve download URLs for a list of ``File:`` titles in batched calls."""
+    out: dict[str, str | None] = {title: None for title in file_titles}
+    for batch in _chunked(list(file_titles), 50):
+        data = _ropewiki_query(
+            action="query",
+            titles="|".join(batch),
+            prop="imageinfo",
+            iiprop="url",
+        )
+        pages = data.get("query", {}).get("pages", [])
+        for page in pages:
+            if not isinstance(page, dict):
+                continue
+            title = page.get("title")
+            if not isinstance(title, str):
+                continue
+            info_list = page.get("imageinfo") or []
+            if info_list and isinstance(info_list[0], dict):
+                url = info_list[0].get("url")
+                if isinstance(url, str) and url:
+                    out[title] = url
+    return out
+
+
 def _manifest_dem_paths(manifest_path: str | Path | None) -> list[Path]:
     if manifest_path is None:
         return []

@@ -1,16 +1,24 @@
-import { useMemo, useState } from "react";
-import { useQuery } from "@tanstack/react-query";
-import { Eye, LocateFixed, Play, Search, Tags, Trash2 } from "lucide-react";
+import { useEffect, useMemo, useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Box, Eye, LocateFixed, Play, Search, Tags, Trash2 } from "lucide-react";
 import {
   getProjectPipeline,
   listProjectAssets,
+  setKmlContainer,
   type Asset,
   type AssetLineageEdge,
   type Job,
   type JobSpec,
 } from "./api";
 import { useAppStore } from "./state";
-import { descriptorsFromJob, type LayerDescriptor } from "./layers";
+import {
+  assetSynthesizedLayerId,
+  descriptorsFromJob,
+  isPreviewAsset,
+  isPreviewAssetKind,
+  synthesizedLayerFromAsset,
+  type LayerDescriptor,
+} from "./layers";
 import {
   assetBounds,
   assetGroup,
@@ -42,6 +50,23 @@ type AssetTreeData = {
   childrenByParent: Map<string, Asset[]>;
 };
 
+function isRouteAsset(asset: Asset): boolean {
+  return asset.kind === "vector.kml.route" || asset.kind.startsWith("vector.kml.route.");
+}
+
+function kmlJobContainerId(job: Job): string | undefined {
+  const resultId = job.result?.container_dem_job_id;
+  if (typeof resultId === "string" && resultId) return resultId;
+  const paramId = job.params.container_dem_job_id;
+  return typeof paramId === "string" && paramId ? paramId : undefined;
+}
+
+function demJobLabel(job: Job): string {
+  const name =
+    (job.result?.name as string | undefined) ?? (job.params.name as string | undefined);
+  return name ? `${name} · ${job.id.slice(0, 8)}` : job.id;
+}
+
 function formatBytes(value: number | null): string | undefined {
   if (value == null) return undefined;
   if (value < 1024) return `${value} B`;
@@ -60,79 +85,19 @@ function lineageGroup(kind: string): { key: string; label: string } {
   return assetGroup(kind);
 }
 
-function isPreviewAssetKind(kind: string): boolean {
-  return (
-    kind.startsWith("preview.") ||
-    kind === "pmtiles" ||
-    kind === "preview_png" ||
-    kind === "preview_webp" ||
-    kind === "preview_jpg"
-  );
-}
-
-function isPreviewAsset(asset: Asset): boolean {
-  return isPreviewAssetKind(asset.kind) || typeof asset.metadata.layer_key === "string";
-}
-
 function canonicalAssetForJob(assets: Asset[], jobId: string): Asset | undefined {
   return assets
     .filter((asset) => asset.job_id === jobId && !isPreviewAsset(asset))
     .sort(assetSort)[0];
 }
 
-function layerKey(asset: Asset): string | undefined {
-  const value = asset.metadata.layer_key;
-  return typeof value === "string" && value ? value : undefined;
-}
-
-function assetLayerSourceType(asset: Asset): "image" | "pmtiles" | undefined {
-  if (asset.kind === "pmtiles" || asset.media_type === "application/vnd.pmtiles") return "pmtiles";
-  if (asset.kind.startsWith("preview.") && asset.format === "pmtiles") return "pmtiles";
-  if (asset.media_type?.startsWith("image/")) return "image";
-  if (asset.kind === "preview_png" || asset.kind === "preview_webp" || asset.kind === "preview_jpg") {
-    return "image";
-  }
-  return undefined;
-}
-
-function synthesizedLayer(asset: Asset, name: string): LayerDescriptor | undefined {
-  const sourceType = assetLayerSourceType(asset);
-  if (!sourceType || !asset.url) return undefined;
-  const bounds =
-    asset.bounds_wgs84 && asset.bounds_wgs84.length === 4
-      ? ([
-          asset.bounds_wgs84[0],
-          asset.bounds_wgs84[1],
-          asset.bounds_wgs84[2],
-          asset.bounds_wgs84[3],
-        ] as [number, number, number, number])
-      : undefined;
-  const role = typeof asset.metadata.role === "string" ? asset.metadata.role : undefined;
-  const source: LayerDescriptor["source"] = { type: sourceType, url: asset.url };
-  if (asset.path) source.path = asset.path;
-  return {
-    id: `asset:${asset.id}`,
-    label: name,
-    kind: role === "base" ? "base-raster" : "raster-overlay",
-    bounds_wgs84: bounds,
-    role,
-    source,
-  };
-}
-
 function descriptorsForAsset(asset: Asset, job: Job | undefined, name: string): LayerDescriptor[] {
-  const descriptors = job ? descriptorsFromJob(job) : [];
   if (isPreviewAsset(asset)) {
-    const key = layerKey(asset);
-    const matching = descriptors.filter((descriptor) => {
-      if (key && descriptor.id.endsWith(`:${key}`)) return true;
-      return Boolean(asset.path && descriptor.source?.path === asset.path);
-    });
-    if (matching.length > 0) return matching;
-    const synthesized = synthesizedLayer(asset, name);
+    const synthesized = synthesizedLayerFromAsset(asset, name);
     return synthesized ? [synthesized] : [];
   }
   if (asset.kind.startsWith("raster.")) return [];
+  const descriptors = job ? descriptorsFromJob(job) : [];
   return descriptors.filter(
     (descriptor) =>
       descriptor.kind === "vector-kml" ||
@@ -226,10 +191,87 @@ function groupAssets(assets: Asset[]): AssetGroup[] {
   return [...byKey.values()].sort((a, b) => a.label.localeCompare(b.label));
 }
 
+function ContainerPicker({
+  job,
+  demJobs,
+  expanded,
+}: {
+  job: Job;
+  demJobs: Job[];
+  expanded: boolean;
+}) {
+  const queryClient = useQueryClient();
+  const currentId = kmlJobContainerId(job);
+  const currentLabel = useMemo(() => {
+    if (!currentId) return "(detached)";
+    const match = demJobs.find((d) => d.id === currentId);
+    return match ? demJobLabel(match) : `${currentId.slice(0, 8)} (missing)`;
+  }, [currentId, demJobs]);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    if (expanded) setOpen(true);
+  }, [expanded]);
+  const mutation = useMutation({
+    mutationFn: (newId: string | null) => setKmlContainer(job.id, newId),
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["project-assets"] });
+      queryClient.invalidateQueries({ queryKey: ["project-pipeline"] });
+    },
+  });
+  const showOpen = open || expanded;
+  return (
+    <div className="containerPicker">
+      <button
+        type="button"
+        className={showOpen ? "toggled miniButton" : "miniButton"}
+        onClick={() => setOpen((o) => !o)}
+        title="Change AOI container"
+      >
+        <Box size={12} />
+        AOI: {currentLabel}
+      </button>
+      {showOpen && (
+        <div className="containerPickerBody">
+          <select
+            value={currentId ?? ""}
+            disabled={mutation.isPending}
+            onChange={(event) => {
+              const value = event.target.value;
+              mutation.mutate(value ? value : null);
+            }}
+          >
+            <option value="">— Detached —</option>
+            {demJobs.map((dem) => (
+              <option key={dem.id} value={dem.id}>
+                {demJobLabel(dem)}
+              </option>
+            ))}
+          </select>
+          {currentId && (
+            <button
+              type="button"
+              className="miniButton"
+              disabled={mutation.isPending}
+              onClick={() => mutation.mutate(null)}
+            >
+              Detach
+            </button>
+          )}
+          {mutation.error && (
+            <span className="error">{String((mutation.error as Error).message)}</span>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function AssetRow({
   asset,
   job,
   specs,
+  demJobs,
   selected,
   onSelectAsset,
   onRunTool,
@@ -238,6 +280,7 @@ function AssetRow({
   asset: Asset;
   job?: Job;
   specs: JobSpec[];
+  demJobs: Job[];
   selected: boolean;
   onSelectAsset: (assetId: string) => void;
   onRunTool: AssetLibraryProps["onRunTool"];
@@ -292,6 +335,9 @@ function AssetRow({
         <span>{asset.kind}</span>
         {size && <span>{size}</span>}
       </div>
+      {isRouteAsset(asset) && job && (
+        <ContainerPicker job={job} demJobs={demJobs} expanded={selected} />
+      )}
       <div className="assetActions">
         {bounds && (
           <>
@@ -411,6 +457,7 @@ function AssetTreeChildren({
   childrenByParent,
   jobsById,
   specs,
+  demJobs,
   selectedAssetId,
   onSelectAsset,
   onRunTool,
@@ -420,6 +467,7 @@ function AssetTreeChildren({
   childrenByParent: Map<string, Asset[]>;
   jobsById: Map<string, Job>;
   specs: JobSpec[];
+  demJobs: Job[];
   selectedAssetId?: string;
   onSelectAsset: (assetId: string) => void;
   onRunTool: AssetLibraryProps["onRunTool"];
@@ -442,6 +490,7 @@ function AssetTreeChildren({
                   asset={asset}
                   job={asset.job_id ? jobsById.get(asset.job_id) : undefined}
                   specs={specs}
+                  demJobs={demJobs}
                   selected={asset.id === selectedAssetId}
                   onSelectAsset={onSelectAsset}
                   onRunTool={onRunTool}
@@ -452,6 +501,7 @@ function AssetTreeChildren({
                   childrenByParent={childrenByParent}
                   jobsById={jobsById}
                   specs={specs}
+                  demJobs={demJobs}
                   selectedAssetId={selectedAssetId}
                   onSelectAsset={onSelectAsset}
                   onRunTool={onRunTool}
@@ -490,6 +540,13 @@ export function AssetLibrary({
   });
 
   const jobsById = useMemo(() => new Map(jobs.map((job) => [job.id, job])), [jobs]);
+  const demJobs = useMemo(
+    () =>
+      jobs
+        .filter((job) => job.kind === "build-dem" && job.status === "succeeded")
+        .sort((a, b) => (a.updated_at < b.updated_at ? 1 : -1)),
+    [jobs],
+  );
   const tree = useMemo<AssetTreeData>(() => {
     const assets = assetsQuery.data ?? [];
     const edges = pipelineQuery.data?.edges ?? [];
@@ -536,6 +593,7 @@ export function AssetLibrary({
                   asset={asset}
                   job={asset.job_id ? jobsById.get(asset.job_id) : undefined}
                   specs={specs}
+                  demJobs={demJobs}
                   selected={asset.id === selectedAssetId}
                   onSelectAsset={onSelectAsset}
                   onRunTool={onRunTool}
@@ -546,6 +604,7 @@ export function AssetLibrary({
                   childrenByParent={tree.childrenByParent}
                   jobsById={jobsById}
                   specs={specs}
+                  demJobs={demJobs}
                   selectedAssetId={selectedAssetId}
                   onSelectAsset={onSelectAsset}
                   onRunTool={onRunTool}
@@ -568,6 +627,7 @@ export function AssetLibrary({
                     asset={asset}
                     job={asset.job_id ? jobsById.get(asset.job_id) : undefined}
                     specs={specs}
+                    demJobs={demJobs}
                     selected={asset.id === selectedAssetId}
                     onSelectAsset={onSelectAsset}
                     onRunTool={onRunTool}
@@ -578,6 +638,7 @@ export function AssetLibrary({
                     childrenByParent={tree.childrenByParent}
                     jobsById={jobsById}
                     specs={specs}
+                    demJobs={demJobs}
                     selectedAssetId={selectedAssetId}
                     onSelectAsset={onSelectAsset}
                     onRunTool={onRunTool}

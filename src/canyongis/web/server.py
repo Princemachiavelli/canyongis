@@ -381,6 +381,10 @@ class RopewikiImportRequest(BaseModel):
     container_dem_job_id: str | None = None
 
 
+class KmlContainerRequest(BaseModel):
+    container_dem_job_id: str | None = None
+
+
 class WebContext:
     def __init__(
         self,
@@ -1421,6 +1425,71 @@ def create_app(
             )
         except DispatchError as exc:
             raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        return asdict(job)
+
+    @app.post("/api/jobs/import-kml-ropewiki-bulk")
+    def import_kml_ropewiki_bulk(
+        body: Annotated[dict[str, Any] | None, Body()] = None,
+        user: User = CurrentUserDep,
+        project_id: str = ActiveProjectDep,
+    ) -> dict[str, Any]:
+        try:
+            job = submit_tool_job(
+                ctx, "ropewiki-bulk-import", body, user=user, project_id=project_id
+            )
+        except DispatchError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        return asdict(job)
+
+    @app.post("/api/jobs/{kml_job_id}/container")
+    def set_kml_container(
+        kml_job_id: str,
+        req: KmlContainerRequest,
+        user: User = CurrentUserDep,
+        project_id: str = ActiveProjectDep,
+    ) -> dict[str, Any]:
+        job = ctx.job_or_404(kml_job_id)
+        if job.kind != "kml-import":
+            raise HTTPException(status_code=400, detail="job is not a kml-import")
+        if job.status != "succeeded" or not job.result:
+            raise HTTPException(status_code=400, detail="kml-import job has not succeeded")
+        if job.project_id != project_id:
+            raise HTTPException(status_code=404, detail=f"job not found: {kml_job_id}")
+        new_container = req.container_dem_job_id or None
+        if new_container:
+            bounds = job.result.get("bounds_wgs84")
+            if not isinstance(bounds, list) or len(bounds) != 4:
+                raise HTTPException(status_code=400, detail="kml-import is missing bounds")
+            try:
+                _validate_kml_container(ctx, new_container, bounds)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+        with ctx.lock:
+            params = dict(job.params) if isinstance(job.params, dict) else {}
+            params["container_dem_job_id"] = new_container
+            existing_inputs = params.get("_inputs")
+            inputs = dict(existing_inputs) if isinstance(existing_inputs, dict) else {}
+            if new_container:
+                inputs["container"] = new_container
+            else:
+                inputs.pop("container", None)
+            params["_inputs"] = inputs
+            job.params = params
+            result = dict(job.result) if isinstance(job.result, dict) else {}
+            if new_container:
+                result["container_dem_job_id"] = new_container
+            else:
+                result.pop("container_dem_job_id", None)
+            job.result = result
+            job.updated_at = ctx.now()
+            ctx.store.upsert(job)
+            with ctx.store.conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM canyongis_job_inputs WHERE job_id = %s AND input_key = %s",
+                    (kml_job_id, "container"),
+                )
+            if new_container:
+                ctx.store.register_job_inputs(job)
         return asdict(job)
 
     @app.post("/api/jobs/build-dem")

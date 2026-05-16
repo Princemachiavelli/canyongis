@@ -889,6 +889,34 @@ button.miniButton {
     font-size: 12px;
 }
 
+.mapToolBulk {
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+    border-top: 1px solid #e3e8ea;
+    padding-top: 8px;
+}
+
+.mapToolBulk label {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    font-size: 11px;
+    color: #4a5560;
+}
+
+.mapToolBulk input {
+    width: 64px;
+    font-size: 12px;
+    padding: 2px 4px;
+}
+
+.mapToolBulk .error {
+    color: #b3261e;
+    font-size: 11px;
+}
+
 .hiddenFileInput {
     display: none;
 }
@@ -1417,6 +1445,32 @@ button.miniButton {
 .assetTools {
     border-top: 1px solid #eef2f4;
     padding-top: 6px;
+}
+
+.containerPicker {
+    display: flex;
+    flex-direction: column;
+    gap: 4px;
+}
+
+.containerPickerBody {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    align-items: center;
+}
+
+.containerPickerBody select {
+    flex: 1 1 auto;
+    min-width: 0;
+    font-size: 11px;
+    padding: 2px 4px;
+}
+
+.containerPickerBody .error {
+    flex-basis: 100%;
+    color: #b3261e;
+    font-size: 11px;
 }
 
 .pipelineOverlay {
