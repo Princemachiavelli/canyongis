@@ -147,6 +147,7 @@
               python.pkgs.pytest-cov
             ];
             shellHook = ''
+              set -x
               # Make the in-tree source importable without a `pip install -e .`
               # (the dev shell only provides deps, not the canyongis package itself).
               export PYTHONPATH="$PWD/src''${PYTHONPATH:+:$PYTHONPATH}"

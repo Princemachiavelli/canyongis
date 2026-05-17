@@ -7,6 +7,7 @@ import {
   Map as MapIcon,
   Play,
   RefreshCw,
+  Search,
   SlidersHorizontal,
   Upload,
 } from "lucide-react";
@@ -20,6 +21,7 @@ import {
   listJobSpecs,
   listJobs,
   listProjectAssets,
+  resolveMapUrl,
   runTool,
   uploadKmlFile,
   type Asset,
@@ -49,6 +51,124 @@ function formatBounds(b: Bounds): string {
   return `${b.west.toFixed(4)}, ${b.south.toFixed(4)} → ${b.east.toFixed(4)}, ${b.north.toFixed(4)}`;
 }
 
+type SearchAction =
+  | { kind: "jump"; lat: number; lng: number; label: string }
+  | { kind: "ropewiki"; source: string };
+
+type NominatimResult = {
+  lat: string;
+  lon: string;
+  display_name?: string;
+};
+
+function pointBounds(lat: number, lng: number, span = 0.025): Bounds {
+  return {
+    west: lng - span,
+    south: lat - span,
+    east: lng + span,
+    north: lat + span,
+  };
+}
+
+function isValidLatLng(lat: number, lng: number): boolean {
+  return (
+    Number.isFinite(lat) &&
+    Number.isFinite(lng) &&
+    Math.abs(lat) <= 90 &&
+    Math.abs(lng) <= 180
+  );
+}
+
+function coordinateAction(value: string): SearchAction | undefined {
+  const coord = "(-?\\d+(?:\\.\\d+)?)";
+  const match = value.trim().match(new RegExp(`^\\s*${coord}[,\\s]+${coord}\\s*$`));
+  if (!match) return undefined;
+  const lat = Number(match[1]);
+  const lng = Number(match[2]);
+  if (!isValidLatLng(lat, lng)) return undefined;
+  return { kind: "jump", lat, lng, label: `${lat.toFixed(5)}, ${lng.toFixed(5)}` };
+}
+
+function coordsFromText(value: string): SearchAction | undefined {
+  let decoded = value;
+  try {
+    decoded = decodeURIComponent(value);
+  } catch {
+    decoded = value;
+  }
+  const patterns = [
+    /@(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)(?:[,/]|$)/,
+    /[?&](?:q|query|ll)=(-?\d+(?:\.\d+)?),(-?\d+(?:\.\d+)?)(?:[&]|$)/,
+    /!3d(-?\d+(?:\.\d+)?)!4d(-?\d+(?:\.\d+)?)/,
+  ];
+  for (const pattern of patterns) {
+    const match = decoded.match(pattern);
+    if (!match) continue;
+    const lat = Number(match[1]);
+    const lng = Number(match[2]);
+    if (isValidLatLng(lat, lng)) {
+      return { kind: "jump", lat, lng, label: `${lat.toFixed(5)}, ${lng.toFixed(5)}` };
+    }
+  }
+  return coordinateAction(decoded);
+}
+
+function searchUrl(value: string): URL | undefined {
+  try {
+    return new URL(value);
+  } catch {
+    return undefined;
+  }
+}
+
+function isRopewikiUrl(url: URL): boolean {
+  return url.hostname.toLowerCase().replace(/^www\./, "") === "ropewiki.com";
+}
+
+function isGoogleMapsUrl(url: URL): boolean {
+  const host = url.hostname.toLowerCase().replace(/^www\./, "");
+  return (
+    host === "maps.app.goo.gl" ||
+    host === "goo.gl" ||
+    host === "google.com" ||
+    host.endsWith(".google.com")
+  );
+}
+
+async function geocodeAddress(query: string): Promise<SearchAction> {
+  const params = new URLSearchParams({ format: "jsonv2", limit: "1", q: query });
+  const res = await fetch(`https://nominatim.openstreetmap.org/search?${params.toString()}`, {
+    headers: { Accept: "application/json" },
+  });
+  if (!res.ok) throw new Error(`Geocoder failed: ${res.status} ${res.statusText}`);
+  const data = (await res.json()) as NominatimResult[];
+  const first = data[0];
+  if (!first) throw new Error("No matching location found");
+  const lat = Number(first.lat);
+  const lng = Number(first.lon);
+  if (!isValidLatLng(lat, lng)) throw new Error("Geocoder returned an invalid location");
+  return { kind: "jump", lat, lng, label: first.display_name ?? query };
+}
+
+async function classifySearch(value: string): Promise<SearchAction> {
+  const trimmed = value.trim();
+  const directCoords = coordinateAction(trimmed);
+  if (directCoords) return directCoords;
+  const url = searchUrl(trimmed);
+  if (url && isRopewikiUrl(url)) return { kind: "ropewiki", source: trimmed };
+  if (url && isGoogleMapsUrl(url)) {
+    const coords = coordsFromText(trimmed);
+    if (coords) return coords;
+    const resolved = await resolveMapUrl(trimmed);
+    const resolvedCoords = coordsFromText(resolved);
+    if (resolvedCoords) return resolvedCoords;
+    throw new Error("Google Maps link did not include coordinates");
+  }
+  const linkCoords = coordsFromText(trimmed);
+  if (linkCoords) return linkCoords;
+  return geocodeAddress(trimmed);
+}
+
 export function App() {
   const queryClient = useQueryClient();
   const bounds = useAppStore((state) => state.bounds);
@@ -61,6 +181,7 @@ export function App() {
   const labelLayerIds = useAppStore((state) => state.labelLayerIds);
   const footprints = useAppStore((state) => state.footprints);
   const setActiveDemJob = useAppStore((state) => state.setActiveDemJob);
+  const requestPan = useAppStore((state) => state.requestPan);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
   const ropewikiDialogRef = useRef<HTMLDialogElement>(null);
@@ -72,6 +193,8 @@ export function App() {
     "aoi" | "kml" | "ravine" | "opacity" | undefined
   >();
   const [ropewikiSource, setRopewikiSource] = useState("");
+  const [searchText, setSearchText] = useState("");
+  const [searchStatus, setSearchStatus] = useState<string | undefined>();
   const [bulkMaxResults, setBulkMaxResults] = useState(50);
   const [selectedAssetId, setSelectedAssetId] = useState<string | undefined>();
   const [inspectorTool, setInspectorTool] = useState<InspectorTool | undefined>();
@@ -230,6 +353,28 @@ export function App() {
     },
     onSuccess: invalidate,
   });
+  const searchMutation = useMutation({
+    mutationFn: async (query: string) => {
+      if (!query.trim()) {
+        throw new Error("Enter a location, address, Ropewiki URL, or Google Maps link");
+      }
+      const action = await classifySearch(query);
+      if (action.kind === "ropewiki") {
+        const job = await importRopewikiKml(action.source, activeDemJob?.id);
+        return { kind: "ropewiki" as const, job };
+      }
+      requestPan(pointBounds(action.lat, action.lng));
+      return { kind: "jump" as const, label: action.label };
+    },
+    onSuccess: (result) => {
+      if (result.kind === "ropewiki") {
+        invalidate();
+        setSearchStatus("Ropewiki KML import queued");
+      } else {
+        setSearchStatus(`Jumped to ${result.label}`);
+      }
+    },
+  });
   const deleteJobMutation = useMutation({
     mutationFn: (job: Job) => {
       if (job.kind === "kml-layer") {
@@ -302,6 +447,13 @@ export function App() {
     });
   };
 
+  const runSearch = () => {
+    const query = searchText.trim();
+    if (!query) return;
+    setSearchStatus(undefined);
+    searchMutation.mutate(query);
+  };
+
   const openRopewikiDialog = () => {
     const dialog = ropewikiDialogRef.current;
     if (dialog && !dialog.open) dialog.showModal();
@@ -316,6 +468,38 @@ export function App() {
           <MapIcon size={18} />
           <span>canyongis</span>
         </div>
+        <form
+          className="toolbarSearch"
+          onSubmit={(event) => {
+            event.preventDefault();
+            runSearch();
+          }}
+        >
+          <Search size={15} />
+          <input
+            value={searchText}
+            onChange={(event) => setSearchText(event.target.value)}
+            placeholder="Search GPS, address, Ropewiki, or Google Maps"
+            aria-label="Search location or import link"
+          />
+          <button
+            type="submit"
+            disabled={!searchText.trim() || searchMutation.isPending}
+          >
+            {searchMutation.isPending ? "Searching" : "Go"}
+          </button>
+          {(searchMutation.error || searchStatus) && (
+            <div
+              className={
+                searchMutation.error ? "toolbarSearchMessage error" : "toolbarSearchMessage"
+              }
+            >
+              {searchMutation.error
+                ? String((searchMutation.error as Error).message)
+                : searchStatus}
+            </div>
+          )}
+        </form>
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <ProjectPicker queryClient={queryClient} />
           <button

@@ -230,6 +230,14 @@ export async function buildDem(
   });
 }
 
+export async function resolveMapUrl(url: string): Promise<string> {
+  const data = await request<{ url: string }>("/api/resolve-map-url", {
+    method: "POST",
+    body: JSON.stringify({ url }),
+  });
+  return data.url;
+}
+
 export async function uploadKmlFile(
   file: File,
   containerDemJobId?: string,

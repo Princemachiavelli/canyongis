@@ -88,6 +88,52 @@ input {
     align-items: center;
     gap: 8px;
     font-weight: 700;
+    flex: 0 0 auto;
+}
+
+.toolbarSearch {
+    position: relative;
+    flex: 1 1 520px;
+    max-width: 720px;
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0 16px;
+    color: #56656d;
+}
+
+.toolbarSearch input {
+    min-width: 180px;
+    height: 32px;
+}
+
+.toolbarSearch button {
+    min-height: 32px;
+}
+
+.toolbarSearchMessage {
+    position: absolute;
+    top: calc(100% + 7px);
+    left: 25px;
+    z-index: 1300;
+    width: max-content;
+    max-width: min(620px, calc(100vw - 72px));
+    border: 1px solid #cbd3d8;
+    border-radius: 6px;
+    padding: 6px 8px;
+    background: rgba(255, 255, 255, 0.98);
+    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.14);
+    color: #46535b;
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+.toolbarSearchMessage.error {
+    border-color: #f4b5ad;
+    color: #b3261e;
+    background: #fff8f7;
 }
 
 .workspace {
@@ -1707,4 +1753,23 @@ button.miniButton {
 .jobActivityMeta {
     color: #65737c;
     font-size: 11px;
+}
+
+@media (max-width: 900px) {
+    .toolbar {
+        gap: 8px;
+    }
+
+    .toolbarSearch {
+        margin: 0 4px;
+        flex-basis: 260px;
+    }
+
+    .toolbarSearch input {
+        min-width: 120px;
+    }
+
+    .toolbarSearchMessage {
+        left: 0;
+    }
 }

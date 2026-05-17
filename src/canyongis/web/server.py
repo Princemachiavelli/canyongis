@@ -6,6 +6,9 @@ import json
 import os
 import shutil
 import traceback
+import urllib.error
+import urllib.parse
+import urllib.request
 import uuid
 from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import asdict, dataclass, field
@@ -365,6 +368,60 @@ class RopewikiImportRequest(BaseModel):
 
 class KmlContainerRequest(BaseModel):
     container_dem_job_id: str | None = None
+
+
+class ResolveUrlRequest(BaseModel):
+    url: str = Field(..., min_length=1)
+
+
+def _is_allowed_map_host(hostname: str | None) -> bool:
+    if not hostname:
+        return False
+    host = hostname.lower().removeprefix("www.")
+    return host in {"maps.app.goo.gl", "goo.gl", "google.com"} or host.endswith(
+        ".google.com"
+    )
+
+
+class _NoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, *args: Any, **kwargs: Any) -> None:
+        return None
+
+
+def _resolve_map_url(url: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    if parsed.scheme not in {"http", "https"} or not _is_allowed_map_host(parsed.hostname):
+        raise HTTPException(status_code=400, detail="Only Google Maps URLs can be resolved")
+    opener = urllib.request.build_opener(_NoRedirect)
+    current_url = url
+    try:
+        for _ in range(5):
+            req = urllib.request.Request(
+                current_url,
+                headers={"User-Agent": "canyongis-web/0.1"},
+            )
+            try:
+                with opener.open(req, timeout=8) as res:
+                    return res.geturl()
+            except urllib.error.HTTPError as exc:
+                if exc.code < 300 or exc.code >= 400:
+                    raise
+                location = exc.headers.get("Location")
+                if not location:
+                    raise
+                next_url = urllib.parse.urljoin(current_url, location)
+                next_parsed = urllib.parse.urlparse(next_url)
+                if next_parsed.scheme not in {"http", "https"} or not _is_allowed_map_host(
+                    next_parsed.hostname
+                ):
+                    raise HTTPException(
+                        status_code=400,
+                        detail="Resolved URL was not a Google Maps URL",
+                    ) from exc
+                current_url = next_url
+        raise HTTPException(status_code=400, detail="Too many Google Maps redirects")
+    except (urllib.error.URLError, TimeoutError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=f"Could not resolve URL: {exc}") from exc
 
 
 class WebContext:
@@ -1084,6 +1141,10 @@ def create_app(
     @app.get("/api/health")
     def health() -> dict[str, str]:
         return {"status": "ok"}
+
+    @app.post("/api/resolve-map-url")
+    def resolve_map_url(req: ResolveUrlRequest, _user: User = CurrentUserDep) -> dict[str, str]:
+        return {"url": _resolve_map_url(req.url)}
 
     @app.get("/api/auth/me")
     def auth_me(request: Request) -> dict[str, Any]:

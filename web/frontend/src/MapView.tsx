@@ -444,7 +444,13 @@ export function MapView({ layers = [] }: { layers?: LayerDescriptor[] }) {
   const esriOpacity = useAppStore((state) => state.esriOpacity);
 
   return (
-    <MapContainer center={[37.3, -112.9]} zoom={10} maxZoom={22} className="map">
+    <MapContainer
+      center={[37.3, -112.9]}
+      zoom={10}
+      maxZoom={22}
+      preferCanvas
+      className="map"
+    >
       <TileLayer
         attribution='&copy; <a href="https://www.openstreetmap.org/copyright">OpenStreetMap</a>'
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
