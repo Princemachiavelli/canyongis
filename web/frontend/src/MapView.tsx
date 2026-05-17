@@ -317,7 +317,7 @@ function VectorKmlLayer({ descriptor }: { descriptor: LayerDescriptor }) {
         <GeoJSON
           key={`${descriptor.id}:unclassified:${showLabels}`}
           data={descriptor.unclassified_geojson}
-          style={{ color: "#59656d", weight: 3, opacity: 0.85, dashArray: "4 4" }}
+          style={{ color: "#00e5ff", weight: 3, opacity: 0.95, dashArray: "4 4" }}
           onEachFeature={bindKmlFeature(sourceJobId, name, "unclassified", showLabels)}
         />
       )}
@@ -345,7 +345,7 @@ function VectorKmlLayer({ descriptor }: { descriptor: LayerDescriptor }) {
           pointToLayer={(_feature, latlng) =>
             L.circleMarker(latlng, {
               radius: 5,
-              color: "#5d3b00",
+              color: "#ff7a00",
               weight: 1,
               fillColor: "#f5b82e",
               fillOpacity: 0.95,
