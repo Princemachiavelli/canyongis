@@ -166,6 +166,7 @@ def _run_build_dem(*, ctx: Any, req: BuildDemToolRequest, progress_cb, **_: Any)
     )
     return {
         **asdict(result),
+        "name": name,
         "dem_url": ctx.output_url(result.dem_path),
         "bounds_wgs84": result.bounds_wgs84,
     }

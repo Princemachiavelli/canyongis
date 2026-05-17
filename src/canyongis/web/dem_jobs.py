@@ -179,6 +179,8 @@ def _normalize_outputs(spec: DemJobSpec, result: dict[str, Any]) -> list[dict[st
         label = out_spec.label
         if out_spec.asset_type == "vector.kml.route" and isinstance(result.get("name"), str):
             label = result["name"]
+        if out_spec.asset_type == "raster.dem" and isinstance(result.get("name"), str):
+            label = result["name"]
         row: dict[str, Any] = {
             "key": out_spec.key,
             "label": label,
@@ -233,7 +235,9 @@ def _normalize_layers(spec: DemJobSpec, result: dict[str, Any]) -> list[dict[str
         layer: dict[str, Any] = {
             "id": layer_spec.key,
             "key": layer_spec.key,
-            "label": layer_spec.label,
+            "label": result["name"]
+            if layer_spec.role == "container" and isinstance(result.get("name"), str)
+            else layer_spec.label,
             "kind": layer_spec.kind,
             "source": source,
             "opacity": layer_spec.opacity,

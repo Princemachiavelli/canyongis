@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import base64
 import json
 import os
 import shutil
@@ -781,85 +780,6 @@ def _ravine_spine_layer_path(result: dict[str, Any], layer_key: str) -> Path | N
     return Path(str(value)) if value else None
 
 
-_IMAGE_MIME_BY_SUFFIX = {
-    ".webp": "image/webp",
-    ".png": "image/png",
-    ".jpg": "image/jpeg",
-    ".jpeg": "image/jpeg",
-}
-
-
-def _embed_image_from_path(file_path: str | None) -> str | None:
-    """Read previewable image file and return base64-encoded data URI.
-
-    Only embeds raster preview formats (webp/png/jpg). Tile archives like
-    pmtiles, vector files (kml/geojson/gpkg), and TIFFs are intentionally
-    skipped — they aren't directly viewable by MCP clients and would bloat
-    responses past token limits.
-    """
-    if not file_path:
-        return None
-    path = Path(file_path)
-    if not path.exists():
-        return None
-    mime_type = _IMAGE_MIME_BY_SUFFIX.get(path.suffix.lower())
-    if mime_type is None:
-        return None
-    try:
-        with open(path, "rb") as f:
-            data = f.read()
-        b64 = base64.b64encode(data).decode("utf-8")
-        return f"data:{mime_type};base64,{b64}"
-    except Exception:
-        return None
-
-
-def _embed_images_in_result(result: dict[str, Any] | None, output_root: Path) -> None:
-    """Mutate result dict to embed image files as base64 data URIs.
-
-    Finds keys ending in '_url' that point to image files within output_root,
-    and replaces their values with base64 data URIs.
-    """
-    if not result or not isinstance(result, dict):
-        return
-    out_dir = result.get("out_dir")
-    if not out_dir:
-        return
-    try:
-        out_path = Path(out_dir).resolve()
-        out_path.relative_to(output_root.resolve())
-    except (ValueError, TypeError):
-        return
-
-    for key, value in list(result.items()):
-        if isinstance(value, str) and key.endswith("_url"):
-            # Try to find the image file from various possible locations
-            candidates = []
-
-            # If value is an absolute path, try it directly
-            if Path(value).is_absolute():
-                candidates.append(Path(value))
-            else:
-                # Try relative to out_dir
-                candidates.append(out_path / value)
-
-            # Try extracting just the filename from /outputs/... URLs
-            if "/" in value:
-                filename = value.split("/")[-1]
-                candidates.append(out_path / filename)
-
-            file_path = None
-            for candidate in candidates:
-                if candidate.exists():
-                    file_path = candidate
-                    break
-
-            if file_path:
-                embedded = _embed_image_from_path(str(file_path))
-                if embedded:
-                    result[key] = embedded
-
-
 def _job_response(ctx: WebContext, job: Job) -> dict[str, Any]:
     row = asdict(job)
     spec = get_spec(job.kind)
@@ -870,8 +790,6 @@ def _job_response(ctx: WebContext, job: Job) -> dict[str, Any]:
             row["result"] = {**row["result"], **_ravine_spine_layers(ctx, row["result"])}
         except Exception:
             row["result"] = row["result"]
-    if job.status == "succeeded" and isinstance(row.get("result"), dict):
-        _embed_images_in_result(row["result"], ctx.output_root)
     return row
 
 

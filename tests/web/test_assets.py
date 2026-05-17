@@ -3,8 +3,12 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Any, cast
 
 from canyongis.web.assets import extract_asset_candidates
+from canyongis.web.plugins import get_spec, normalize_result
+from canyongis.web.server import Job, _job_response
 
 
 def _touch(path: Path, content: bytes = b"x") -> Path:
@@ -170,3 +174,45 @@ def test_extract_candidates_types_layer_preview_assets(tmp_path: Path) -> None:
     assert preview.url == "/outputs/flow_preview.pmtiles"
     assert preview.metadata["layer_key"] == "flow_preview"
     assert preview.metadata["label"] == "Flow accumulation"
+
+
+def test_job_response_keeps_preview_urls_external(tmp_path: Path) -> None:
+    out = tmp_path / "outputs"
+    _touch(out / "preview.png", b"not a real png")
+    job = Job(
+        id="job1",
+        kind="unknown-test-job",
+        status="succeeded",
+        created_at="2026-01-01T00:00:00+00:00",
+        updated_at="2026-01-01T00:00:00+00:00",
+        params={},
+        result={"out_dir": str(out), "preview_url": "/outputs/preview.png"},
+    )
+    ctx = SimpleNamespace(output_root=out)
+
+    row = _job_response(cast(Any, ctx), job)
+
+    assert row["result"]["preview_url"] == "/outputs/preview.png"
+    assert not row["result"]["preview_url"].startswith("data:image/")
+
+
+def test_build_dem_output_uses_container_name(tmp_path: Path) -> None:
+    out = tmp_path / "outputs"
+    dem = _touch(out / "areas" / "zion-west" / "dem.tif")
+    spec = get_spec("build-dem")
+    assert spec is not None
+
+    result = normalize_result(
+        spec,
+        {
+            "name": "zion-west",
+            "dem_path": str(dem),
+            "dem_url": "/outputs/areas/zion-west/dem.tif",
+            "bounds_wgs84": [-113.1, 37.1, -112.9, 37.3],
+        },
+    )
+    assets = extract_asset_candidates(result, output_root=out)
+
+    assert result["outputs"][0]["label"] == "zion-west"
+    assert result["layers"][0]["label"] == "zion-west"
+    assert assets[0].metadata["label"] == "zion-west"

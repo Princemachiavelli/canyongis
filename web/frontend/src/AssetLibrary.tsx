@@ -91,6 +91,52 @@ function canonicalAssetForJob(assets: Asset[], jobId: string): Asset | undefined
     .sort(assetSort)[0];
 }
 
+function assetOutputKey(asset: Asset): string | undefined {
+  const key = asset.metadata.output_key;
+  return typeof key === "string" && key ? key : undefined;
+}
+
+function assetRole(asset: Asset): string | undefined {
+  const role = asset.metadata.role;
+  return typeof role === "string" && role ? role : undefined;
+}
+
+function previewLayerKey(asset: Asset): string | undefined {
+  const key = asset.metadata.layer_key;
+  return typeof key === "string" && key ? key : undefined;
+}
+
+function previewParentForJob(assets: Asset[], preview: Asset): Asset | undefined {
+  if (!preview.job_id) return undefined;
+  const siblings = assets.filter(
+    (asset) => asset.job_id === preview.job_id && !isPreviewAsset(asset),
+  );
+  if (siblings.length === 0) return undefined;
+  if (siblings.length === 1) return siblings[0];
+
+  const layerKey = previewLayerKey(preview);
+  if (layerKey) {
+    const keyMatches = siblings.filter((asset) => {
+      const outputKey = assetOutputKey(asset);
+      return Boolean(
+        outputKey &&
+          (layerKey === outputKey ||
+            layerKey === `panel_${outputKey}` ||
+            layerKey.includes(outputKey)),
+      );
+    });
+    if (keyMatches.length === 1) return keyMatches[0];
+  }
+
+  const role = assetRole(preview);
+  if (role) {
+    const roleMatches = siblings.filter((asset) => assetRole(asset) === role);
+    if (roleMatches.length === 1) return roleMatches[0];
+  }
+
+  return canonicalAssetForJob(assets, preview.job_id);
+}
+
 function descriptorsForAsset(asset: Asset, job: Job | undefined, name: string): LayerDescriptor[] {
   if (isPreviewAsset(asset)) {
     const synthesized = synthesizedLayerFromAsset(asset, name);
@@ -115,7 +161,24 @@ function buildTree(assets: Asset[], edges: AssetLineageEdge[]): AssetTreeData {
   const assetsById = new Map(assets.map((asset) => [asset.id, asset]));
   const childrenByParent = new Map<string, Asset[]>();
   const hasParent = new Set<string>();
+  const parentByChild = new Map<string, string>();
   const canonicalByJob = new Map<string, Asset>();
+  const attachChild = (parent: Asset, child: Asset) => {
+    if (parent.id === child.id) return;
+    const existingParentId = parentByChild.get(child.id);
+    if (existingParentId && existingParentId !== parent.id) {
+      const existingChildren = childrenByParent.get(existingParentId) ?? [];
+      childrenByParent.set(
+        existingParentId,
+        existingChildren.filter((asset) => asset.id !== child.id),
+      );
+    }
+    const children = childrenByParent.get(parent.id) ?? [];
+    if (!children.some((asset) => asset.id === child.id)) children.push(child);
+    childrenByParent.set(parent.id, children);
+    hasParent.add(child.id);
+    parentByChild.set(child.id, parent.id);
+  };
   for (const asset of assets) {
     if (!asset.job_id || isPreviewAsset(asset)) continue;
     if (!canonicalByJob.has(asset.job_id)) {
@@ -127,17 +190,19 @@ function buildTree(assets: Asset[], edges: AssetLineageEdge[]): AssetTreeData {
     const consumer = assetsById.get(edge.consumer);
     if (!producer || !consumer) continue;
     const canonical = consumer.job_id ? canonicalByJob.get(consumer.job_id) : undefined;
-    const parent = isPreviewAsset(consumer) && canonical ? canonical : producer;
-    const children = childrenByParent.get(parent.id) ?? [];
-    if (!children.some((asset) => asset.id === consumer.id)) children.push(consumer);
-    childrenByParent.set(parent.id, children);
-    hasParent.add(consumer.id);
+    const previewParent = isPreviewAsset(consumer)
+      ? previewParentForJob(assets, consumer)
+      : undefined;
+    const parent = previewParent ?? (isPreviewAsset(consumer) && canonical ? canonical : producer);
+    attachChild(parent, consumer);
     if (canonical && canonical.id !== consumer.id && !hasParent.has(canonical.id)) {
-      const parentChildren = childrenByParent.get(producer.id) ?? [];
-      if (!parentChildren.some((asset) => asset.id === canonical.id)) parentChildren.push(canonical);
-      childrenByParent.set(producer.id, parentChildren);
-      hasParent.add(canonical.id);
+      attachChild(producer, canonical);
     }
+  }
+  for (const asset of assets) {
+    if (!isPreviewAsset(asset) || parentByChild.has(asset.id)) continue;
+    const parent = previewParentForJob(assets, asset);
+    if (parent) attachChild(parent, asset);
   }
   for (const children of childrenByParent.values()) children.sort(assetSort);
   return {
