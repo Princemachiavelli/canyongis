@@ -103,6 +103,42 @@ def _validate_kml_container(
         )
 
 
+def _set_kml_container_params(params: dict[str, Any], container_dem_job_id: str | None) -> None:
+    params["container_dem_job_id"] = container_dem_job_id
+    inputs = params.get("_inputs")
+    inputs = dict(inputs) if isinstance(inputs, dict) else {}
+    if container_dem_job_id:
+        inputs["container"] = container_dem_job_id
+    else:
+        inputs.pop("container", None)
+    if inputs:
+        params["_inputs"] = inputs
+    else:
+        params.pop("_inputs", None)
+
+
+def _assign_kml_container_if_valid(
+    ctx: Any,
+    result: dict[str, Any],
+    params: dict[str, Any],
+    container_dem_job_id: str | None,
+    progress_cb,
+) -> None:
+    if not container_dem_job_id:
+        _set_kml_container_params(params, None)
+        result.pop("container_dem_job_id", None)
+        return
+    try:
+        _validate_kml_container(ctx, container_dem_job_id, result["bounds_wgs84"])
+    except Exception as exc:
+        progress_cb(f"KML not assigned to DEM container {container_dem_job_id}: {exc}")
+        _set_kml_container_params(params, None)
+        result.pop("container_dem_job_id", None)
+        return
+    _set_kml_container_params(params, container_dem_job_id)
+    result["container_dem_job_id"] = container_dem_job_id
+
+
 def _kml_import_path(ctx: Any, job_id: str, name: str) -> Path:
     return ctx.output_root / "kml" / job_id / _safe_kml_name(name)
 
@@ -173,7 +209,13 @@ def _run_build_dem(*, ctx: Any, req: BuildDemToolRequest, progress_cb, **_: Any)
 
 
 def _run_ropewiki_kml_import(
-    *, ctx: Any, req: RopewikiKmlImportRequest, progress_cb, job_id: str, **_: Any
+    *,
+    ctx: Any,
+    req: RopewikiKmlImportRequest,
+    params: dict[str, Any],
+    progress_cb,
+    job_id: str,
+    **_: Any,
 ) -> dict[str, Any]:
     source = req.source.strip()
     if not source:
@@ -206,13 +248,8 @@ def _run_ropewiki_kml_import(
             "file_title": file_title,
             "download_url": download_url,
         },
-        container_dem_job_id=req.container_dem_job_id,
     )
-    try:
-        _validate_kml_container(ctx, req.container_dem_job_id, result["bounds_wgs84"])
-    except Exception:
-        kml_path.unlink(missing_ok=True)
-        raise
+    _assign_kml_container_if_valid(ctx, result, params, req.container_dem_job_id, progress_cb)
     return result
 
 

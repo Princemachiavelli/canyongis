@@ -5,6 +5,7 @@ import json
 import os
 import shutil
 import tempfile
+import urllib.error
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass
@@ -24,6 +25,11 @@ ROPEWIKI_API_URL = "https://ropewiki.com/api.php"
 ROPEWIKI_PAGE_URL = "https://ropewiki.com/{title}"
 TNM_API_URL = "https://tnmaccess.nationalmap.gov/api/v1/products"
 TNM_1M_DATASET = "Digital Elevation Model (DEM) 1 meter"
+TNM_UNAVAILABLE_MESSAGE = (
+    "TNM/ScienceBase is currently unavailable or returned an upstream error while "
+    "searching for DEM products. This does not necessarily mean 1m DEM data is "
+    "missing for the AOI; try the DEM mosaic job again later."
+)
 
 
 @dataclass
@@ -502,15 +508,27 @@ def _item_download_url(item: dict[str, Any]) -> str | None:
 
 
 def query_tnm_products(bounds_wgs84: tuple[float, float, float, float]) -> list[dict[str, Any]]:
-    data = _http_get_json(
-        TNM_API_URL,
-        {
-            "datasets": TNM_1M_DATASET,
-            "bbox": ",".join(f"{coord:.8f}" for coord in bounds_wgs84),
-            "prodFormats": "GeoTIFF",
-            "max": 50,
-        },
-    )
+    try:
+        data = _http_get_json(
+            TNM_API_URL,
+            {
+                "datasets": TNM_1M_DATASET,
+                "bbox": ",".join(f"{coord:.8f}" for coord in bounds_wgs84),
+                "prodFormats": "GeoTIFF",
+                "max": 50,
+            },
+        )
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(TNM_UNAVAILABLE_MESSAGE) from exc
+    except urllib.error.HTTPError as exc:
+        if exc.code in {502, 503, 504}:
+            raise RuntimeError(TNM_UNAVAILABLE_MESSAGE) from exc
+        raise
+    except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
+        raise RuntimeError(TNM_UNAVAILABLE_MESSAGE) from exc
+    error_message = data.get("errorMessage")
+    if isinstance(error_message, str) and error_message:
+        raise RuntimeError(f"{TNM_UNAVAILABLE_MESSAGE} TNM said: {error_message}")
     return list(data.get("items", []))
 
 

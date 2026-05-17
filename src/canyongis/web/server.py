@@ -41,6 +41,15 @@ from .dispatcher import DispatchError, submit_tool_job
 
 JobStatus = Literal["queued", "running", "succeeded", "failed", "canceled"]
 DEFAULT_PROJECT_NAME = "Personal"
+ASSET_BOUNDS_SQL = """
+COALESCE(
+    a.bounds_wgs84,
+    CASE WHEN jsonb_typeof(a.metadata->'bounds_wgs84') = 'array'
+         THEN a.metadata->'bounds_wgs84' END,
+    CASE WHEN a.kind = 'raster.dem' AND jsonb_typeof(j.result->'bounds_wgs84') = 'array'
+         THEN j.result->'bounds_wgs84' END
+)
+"""
 
 
 def _coerce_job_id_str(raw: Any) -> str | None:
@@ -231,18 +240,28 @@ class JobStore:
         new_ids: list[str] = []
         with self.conn.cursor() as cur:
             for cand in candidates:
+                bounds = cand.metadata.get("bounds_wgs84")
                 cur.execute(
-                    "SELECT 1 FROM canyongis_assets WHERE project_id = %s AND path = %s LIMIT 1",
+                    "SELECT id FROM canyongis_assets WHERE project_id = %s AND path = %s LIMIT 1",
                     (project_id, cand.path),
                 )
-                if cur.fetchone() is not None:
+                existing = cur.fetchone()
+                if existing is not None:
+                    if bounds is not None:
+                        cur.execute(
+                            """
+                            UPDATE canyongis_assets
+                            SET bounds_wgs84 = COALESCE(bounds_wgs84, %s)
+                            WHERE id = %s
+                            """,
+                            (Jsonb(bounds), existing[0]),
+                        )
                     continue
                 asset_id = new_asset_id()
                 try:
                     size_bytes = Path(cand.path).stat().st_size
                 except OSError:
                     size_bytes = None
-                bounds = cand.metadata.get("bounds_wgs84")
                 cur.execute(
                     """
                     INSERT INTO canyongis_assets
@@ -285,6 +304,12 @@ class JobStore:
         recorded = job.params.get("_inputs") if isinstance(job.params, dict) else None
         if not isinstance(recorded, dict) or not recorded:
             return 0
+        if job.kind == "kml-import" and not (
+            isinstance(job.result, dict) and isinstance(job.result.get("container_dem_job_id"), str)
+        ):
+            recorded = {k: v for k, v in recorded.items() if k != "container"}
+            if not recorded:
+                return 0
         input_kinds = {ispec.key: ispec.kind for ispec in spec.inputs}
         if job.kind == "kml-import":
             input_kinds.setdefault("container", "raster.dem")
@@ -377,9 +402,7 @@ def _is_allowed_map_host(hostname: str | None) -> bool:
     if not hostname:
         return False
     host = hostname.lower().removeprefix("www.")
-    return host in {"maps.app.goo.gl", "goo.gl", "google.com"} or host.endswith(
-        ".google.com"
-    )
+    return host in {"maps.app.goo.gl", "goo.gl", "google.com"} or host.endswith(".google.com")
 
 
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
@@ -715,6 +738,42 @@ def _validate_kml_container(
         )
 
 
+def _set_kml_container_params(params: dict[str, Any], container_dem_job_id: str | None) -> None:
+    params["container_dem_job_id"] = container_dem_job_id
+    inputs = params.get("_inputs")
+    inputs = dict(inputs) if isinstance(inputs, dict) else {}
+    if container_dem_job_id:
+        inputs["container"] = container_dem_job_id
+    else:
+        inputs.pop("container", None)
+    if inputs:
+        params["_inputs"] = inputs
+    else:
+        params.pop("_inputs", None)
+
+
+def _assign_kml_container_if_valid(
+    ctx: WebContext,
+    result: dict[str, Any],
+    params: dict[str, Any],
+    container_dem_job_id: str | None,
+    progress_cb,
+) -> None:
+    if not container_dem_job_id:
+        _set_kml_container_params(params, None)
+        result.pop("container_dem_job_id", None)
+        return
+    try:
+        _validate_kml_container(ctx, container_dem_job_id, result["bounds_wgs84"])
+    except Exception as exc:
+        progress_cb(f"KML not assigned to DEM container {container_dem_job_id}: {exc}")
+        _set_kml_container_params(params, None)
+        result.pop("container_dem_job_id", None)
+        return
+    _set_kml_container_params(params, container_dem_job_id)
+    result["container_dem_job_id"] = container_dem_job_id
+
+
 def _parsed_kml_layer_result(kml_path: Path) -> dict[str, Any]:
     features = parse_kml(kml_path)
     all_geoms = []
@@ -912,7 +971,12 @@ def _require_project_member(ctx: WebContext, project_id: str, user: User) -> Non
 
 def _load_asset_summary(cur, asset_id: str) -> dict[str, Any] | None:
     cur.execute(
-        "SELECT id, kind, path, url, job_id, bounds_wgs84 FROM canyongis_assets WHERE id = %s",
+        f"""
+        SELECT a.id, a.kind, a.path, a.url, a.job_id, {ASSET_BOUNDS_SQL}
+        FROM canyongis_assets a
+        LEFT JOIN canyongis_jobs j ON j.id = a.job_id
+        WHERE a.id = %s
+        """,
         (asset_id,),
     )
     row = cur.fetchone()
@@ -993,14 +1057,16 @@ def _walk_lineage_downward(
 def _require_asset_access(ctx: WebContext, asset_id: str, user: User) -> None:
     """Raise 404 if the asset is invisible to ``user``.
 
-    Visible = the asset's owning project has the user as a member, OR the
-    asset is linked into some project the user is a member of.
+    Visible = the user created it, the asset's owning project has the user as
+    a member, OR the asset is linked into some project the user is a member of.
     """
     with ctx.store.conn.cursor() as cur:
         cur.execute(
             """
             SELECT 1 FROM canyongis_assets a
             WHERE a.id = %s AND (
+                a.created_by_user_id = %s
+                OR
                 EXISTS (
                     SELECT 1 FROM canyongis_project_memberships m
                     WHERE m.project_id = a.project_id AND m.user_id = %s
@@ -1013,7 +1079,7 @@ def _require_asset_access(ctx: WebContext, asset_id: str, user: User) -> None:
             )
             LIMIT 1
             """,
-            (asset_id, user.id, user.id),
+            (asset_id, user.id, user.id, user.id),
         )
         if cur.fetchone() is None:
             raise HTTPException(status_code=404, detail=f"asset {asset_id} not found")
@@ -1029,6 +1095,10 @@ class LoginRequest(BaseModel):
 
 class AssetLinkRequest(BaseModel):
     asset_id: str = Field(..., min_length=1)
+
+
+class ProjectRequest(BaseModel):
+    name: str = Field(..., min_length=1)
 
 
 def create_app(
@@ -1108,6 +1178,137 @@ def create_app(
             projects = [{"id": row[0], "name": row[1], "role": row[2]} for row in cur.fetchall()]
         return {"projects": projects}
 
+    @app.post("/api/projects")
+    def create_project(req: ProjectRequest, user: User = CurrentUserDep) -> dict[str, Any]:
+        name = req.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="project name is required")
+        project_id = uuid.uuid4().hex[:16]
+        with ctx.store.conn.cursor() as cur:
+            cur.execute(
+                "INSERT INTO canyongis_projects (id, name, created_by_user_id) VALUES (%s, %s, %s)",
+                (project_id, name, user.id),
+            )
+            cur.execute(
+                "INSERT INTO canyongis_project_memberships (project_id, user_id, role) "
+                "VALUES (%s, %s, 'owner')",
+                (project_id, user.id),
+            )
+        return {"id": project_id, "name": name, "role": "owner"}
+
+    @app.patch("/api/projects/{project_id}")
+    def update_project(
+        project_id: str, req: ProjectRequest, user: User = CurrentUserDep
+    ) -> dict[str, Any]:
+        name = req.name.strip()
+        if not name:
+            raise HTTPException(status_code=400, detail="project name is required")
+        with ctx.store.conn.cursor() as cur:
+            cur.execute(
+                "SELECT role FROM canyongis_project_memberships WHERE project_id = %s AND user_id = %s",
+                (project_id, user.id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail=f"project {project_id} not found")
+            role = row[0]
+            if role == "viewer":
+                raise HTTPException(status_code=403, detail="viewers cannot rename projects")
+            cur.execute("UPDATE canyongis_projects SET name = %s WHERE id = %s", (name, project_id))
+        return {"id": project_id, "name": name, "role": role}
+
+    @app.delete("/api/projects/{project_id}")
+    def delete_project(project_id: str, user: User = CurrentUserDep) -> dict[str, Any]:
+        """Hide a project without deleting its library assets."""
+        with ctx.store.conn.cursor() as cur:
+            cur.execute(
+                "SELECT role FROM canyongis_project_memberships WHERE project_id = %s AND user_id = %s",
+                (project_id, user.id),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail=f"project {project_id} not found")
+            role = row[0]
+            if role == "owner":
+                cur.execute(
+                    "DELETE FROM canyongis_project_asset_links WHERE project_id = %s",
+                    (project_id,),
+                )
+                cur.execute(
+                    "DELETE FROM canyongis_project_memberships WHERE project_id = %s",
+                    (project_id,),
+                )
+            else:
+                cur.execute(
+                    "DELETE FROM canyongis_project_memberships WHERE project_id = %s AND user_id = %s",
+                    (project_id, user.id),
+                )
+        return {"deleted": True, "project_id": project_id}
+
+    @app.get("/api/assets")
+    def list_asset_library(kind: str | None = None, user: User = CurrentUserDep) -> dict[str, Any]:
+        filters = [
+            "a.deleted_at IS NULL",
+            """
+            (
+                a.created_by_user_id = %s
+                OR EXISTS (
+                    SELECT 1 FROM canyongis_project_memberships m
+                    WHERE m.project_id = a.project_id AND m.user_id = %s
+                )
+                OR EXISTS (
+                    SELECT 1 FROM canyongis_project_asset_links l
+                    JOIN canyongis_project_memberships m ON m.project_id = l.project_id
+                    WHERE l.asset_id = a.id AND m.user_id = %s
+                )
+            )
+            """,
+        ]
+        params: list[Any] = [user.id, user.id, user.id]
+        if kind:
+            filters.append("(a.kind = %s OR a.kind LIKE %s)")
+            params.extend([kind, f"{kind}.%"])
+        with ctx.store.conn.cursor() as cur:
+            cur.execute(
+                f"""
+                SELECT * FROM (
+                    SELECT DISTINCT ON (a.id)
+                           a.id, a.project_id, p.name, a.job_id, a.kind, a.path, a.url,
+                           {ASSET_BOUNDS_SQL}, a.format, a.media_type, a.size_bytes,
+                           a.metadata, a.created_at, FALSE AS linked, NULL::text AS linked_at
+                    FROM canyongis_assets a
+                    JOIN canyongis_projects p ON p.id = a.project_id
+                    LEFT JOIN canyongis_jobs j ON j.id = a.job_id
+                    WHERE {" AND ".join(filters)}
+                    ORDER BY a.id, a.created_at DESC
+                ) assets
+                ORDER BY created_at DESC
+                """,
+                params,
+            )
+            rows = cur.fetchall()
+        assets = [
+            {
+                "id": row[0],
+                "project_id": row[1],
+                "project_name": row[2],
+                "job_id": row[3],
+                "kind": row[4],
+                "path": row[5],
+                "url": row[6],
+                "bounds_wgs84": row[7],
+                "format": row[8],
+                "media_type": row[9],
+                "size_bytes": row[10],
+                "metadata": row[11] or {},
+                "created_at": row[12],
+                "linked": row[13],
+                "linked_at": row[14],
+            }
+            for row in rows
+        ]
+        return {"assets": assets}
+
     @app.get("/api/projects/{project_id}/assets")
     def list_project_assets(
         project_id: str,
@@ -1123,20 +1324,22 @@ def create_app(
         """
         _require_project_member(ctx, project_id, user)
         params: list[Any] = [project_id, project_id]
-        sql = """
+        sql = f"""
             SELECT a.id, a.project_id, p.name, a.job_id, a.kind, a.path, a.url,
-                   a.bounds_wgs84, a.format, a.media_type, a.size_bytes,
+                   {ASSET_BOUNDS_SQL}, a.format, a.media_type, a.size_bytes,
                    a.metadata, a.created_at, FALSE AS linked, NULL::text AS linked_at
             FROM canyongis_assets a
             JOIN canyongis_projects p ON p.id = a.project_id
+            LEFT JOIN canyongis_jobs j ON j.id = a.job_id
             WHERE a.project_id = %s AND a.deleted_at IS NULL
             UNION ALL
             SELECT a.id, a.project_id, p.name, a.job_id, a.kind, a.path, a.url,
-                   a.bounds_wgs84, a.format, a.media_type, a.size_bytes,
+                   {ASSET_BOUNDS_SQL}, a.format, a.media_type, a.size_bytes,
                    a.metadata, a.created_at, TRUE AS linked, l.linked_at
             FROM canyongis_assets a
             JOIN canyongis_projects p ON p.id = a.project_id
             JOIN canyongis_project_asset_links l ON l.asset_id = a.id
+            LEFT JOIN canyongis_jobs j ON j.id = a.job_id
             WHERE l.project_id = %s AND a.deleted_at IS NULL
         """
         if kind:
@@ -1430,17 +1633,8 @@ def create_app(
                 kml_path,
                 Path(name).stem,
                 source={"type": "file", "filename": original_name},
-                container_dem_job_id=container_dem_job_id,
             )
-            try:
-                _validate_kml_container(
-                    ctx,
-                    container_dem_job_id,
-                    result["bounds_wgs84"],
-                )
-            except Exception:
-                kml_path.unlink(missing_ok=True)
-                raise
+            _assign_kml_container_if_valid(ctx, result, params, container_dem_job_id, progress_cb)
             return result
 
         job = ctx.submit(

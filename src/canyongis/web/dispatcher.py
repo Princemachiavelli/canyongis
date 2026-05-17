@@ -102,6 +102,7 @@ def submit_tool_job(
                 ctx=ctx,
                 req=req,
                 inputs=inputs,
+                params=params,
                 progress_cb=progress_cb,
                 output_url=ctx.output_url,
                 job_id=job_id,

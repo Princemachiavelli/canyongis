@@ -14,6 +14,7 @@ import psycopg
 import pytest
 from pydantic import BaseModel
 
+from canyongis.web import source_jobs
 from canyongis.web.dem_jobs import DemJobSpec, OutputSpec, get_spec, register
 from canyongis.web.server import Job, create_app
 
@@ -204,6 +205,164 @@ def test_typed_asset_kind_lands_on_canyongis_assets(
         )
         kinds = [r[0] for r in cur.fetchall()]
     assert "raster.score.ravine.tpi" in kinds
+
+
+def test_dem_asset_api_falls_back_to_job_bounds(live_postgres, tmp_path: Path, monkeypatch) -> None:
+    monkeypatch.setenv("CANYONGIS_SINGLE_USER", "1")
+    app = create_app(output_root=tmp_path / "out", postgres=live_postgres)
+    client = TestClient(app)
+    ctx = app.state.ctx
+    project_id = _project_id(ctx)
+    dem = _insert_dem_job(ctx, job_id="dem-fallback")
+
+    with ctx.store.conn.cursor() as cur:
+        cur.execute("SELECT id FROM canyongis_assets WHERE job_id = %s", (dem.id,))
+        asset_id = cur.fetchone()[0]
+        cur.execute(
+            """
+            UPDATE canyongis_assets
+            SET bounds_wgs84 = NULL, metadata = metadata - 'bounds_wgs84'
+            WHERE id = %s
+            """,
+            (asset_id,),
+        )
+
+    project_assets = client.get(f"/api/projects/{project_id}/assets").json()["assets"]
+    library_assets = client.get("/api/assets?kind=raster.dem").json()["assets"]
+
+    assert next(a for a in project_assets if a["id"] == asset_id)["bounds_wgs84"] == [
+        1.0,
+        2.0,
+        3.0,
+        4.0,
+    ]
+    assert next(a for a in library_assets if a["id"] == asset_id)["bounds_wgs84"] == [
+        1.0,
+        2.0,
+        3.0,
+        4.0,
+    ]
+
+
+def test_kml_file_import_without_container_succeeds(
+    live_postgres, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("CANYONGIS_SINGLE_USER", "1")
+    app = create_app(output_root=tmp_path / "out", postgres=live_postgres)
+    client = TestClient(app)
+    kml = b"""
+    <kml xmlns="http://www.opengis.net/kml/2.2">
+      <Document>
+        <Placemark>
+          <name>Descent</name>
+          <LineString><coordinates>-112.0,37.0,0 -112.1,37.1,0</coordinates></LineString>
+        </Placemark>
+      </Document>
+    </kml>
+    """
+
+    response = client.post(
+        "/api/jobs/import-kml-file",
+        files={"file": ("route.kml", kml, "application/vnd.google-earth.kml+xml")},
+    )
+    assert response.status_code == 200, response.text
+    row = _wait_for_job(client, response.json()["id"])
+
+    assert row["status"] == "succeeded", row.get("error")
+    assert row["result"]["bounds_wgs84"] == [-112.1, 37.0, -112.0, 37.1]
+    assert "container_dem_job_id" not in row["result"]
+
+
+def test_kml_file_import_outside_container_succeeds_unassigned(
+    live_postgres, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("CANYONGIS_SINGLE_USER", "1")
+    app = create_app(output_root=tmp_path / "out", postgres=live_postgres)
+    client = TestClient(app)
+    ctx = app.state.ctx
+    dem = _insert_dem_job(ctx, job_id="dem-outside-file")
+    kml = b"""
+    <kml xmlns="http://www.opengis.net/kml/2.2">
+      <Document>
+        <Placemark>
+          <name>Descent</name>
+          <LineString><coordinates>-112.0,37.0,0 -112.1,37.1,0</coordinates></LineString>
+        </Placemark>
+      </Document>
+    </kml>
+    """
+
+    response = client.post(
+        "/api/jobs/import-kml-file",
+        data={"container_dem_job_id": dem.id},
+        files={"file": ("route.kml", kml, "application/vnd.google-earth.kml+xml")},
+    )
+    assert response.status_code == 200, response.text
+    row = _wait_for_job(client, response.json()["id"])
+
+    assert row["status"] == "succeeded", row.get("error")
+    assert "container_dem_job_id" not in row["result"]
+    assert row["params"]["container_dem_job_id"] is None
+    assert "_inputs" not in row["params"]
+    with ctx.store.conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM canyongis_job_inputs WHERE job_id = %s AND input_key = %s",
+            (row["id"], "container"),
+        )
+        assert cur.fetchone() is None
+
+
+def test_ropewiki_kml_import_outside_container_succeeds_unassigned(
+    live_postgres, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("CANYONGIS_SINGLE_USER", "1")
+    app = create_app(output_root=tmp_path / "out", postgres=live_postgres)
+    client = TestClient(app)
+    ctx = app.state.ctx
+    dem = _insert_dem_job(ctx, job_id="dem-outside-ropewiki")
+
+    monkeypatch.setattr(
+        source_jobs,
+        "_find_kml_file_title",
+        lambda _ref: ("File:Outside_Canyon.kml", "Outside Canyon"),
+    )
+    monkeypatch.setattr(
+        source_jobs, "_get_kml_download_url", lambda _file_title: "https://example.com/outside.kml"
+    )
+
+    def fake_download(_url: str, path: Path) -> None:
+        path.write_text(
+            """
+            <kml xmlns="http://www.opengis.net/kml/2.2">
+              <Document>
+                <Placemark>
+                  <name>Descent</name>
+                  <LineString><coordinates>-112.0,37.0,0 -112.1,37.1,0</coordinates></LineString>
+                </Placemark>
+              </Document>
+            </kml>
+            """
+        )
+
+    monkeypatch.setattr(source_jobs, "_download_file", fake_download)
+
+    response = client.post(
+        "/api/jobs/import-kml-ropewiki",
+        json={"source": "https://ropewiki.com/Outside_Canyon", "container_dem_job_id": dem.id},
+    )
+    assert response.status_code == 200, response.text
+    row = _wait_for_job(client, response.json()["id"])
+
+    assert row["status"] == "succeeded", row.get("error")
+    assert "container_dem_job_id" not in row["result"]
+    assert row["params"]["container_dem_job_id"] is None
+    assert "_inputs" not in row["params"]
+    with ctx.store.conn.cursor() as cur:
+        cur.execute(
+            "SELECT 1 FROM canyongis_job_inputs WHERE job_id = %s AND input_key = %s",
+            (row["id"], "container"),
+        )
+        assert cur.fetchone() is None
 
 
 def test_consumer_job_records_typed_edge(live_postgres, tmp_path: Path, monkeypatch) -> None:

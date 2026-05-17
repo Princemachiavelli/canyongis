@@ -386,6 +386,18 @@ label {
     cursor: not-allowed;
 }
 
+.projectPicker input {
+    width: 150px;
+    min-height: 28px;
+    font-size: 12px;
+}
+
+.projectPicker button {
+    min-height: 28px;
+    font-size: 12px;
+    padding: 0 8px;
+}
+
 .jobs {
     display: grid;
     gap: 8px;
@@ -1361,8 +1373,13 @@ button.miniButton {
     color: #2c3a42;
     font-size: 12px;
     font-weight: 700;
-    text-transform: uppercase;
-    letter-spacing: 0.05em;
+}
+
+.assetGroupMeta {
+    margin-top: 4px;
+    color: #65737c;
+    font-size: 11px;
+    font-variant-numeric: tabular-nums;
 }
 
 .assetCount {
@@ -1478,6 +1495,29 @@ button.miniButton {
     border-radius: 999px;
     padding: 2px 7px;
     background: #f0f3f5;
+}
+
+.assetLibraryDrawer {
+    position: fixed;
+    top: 58px;
+    left: 18px;
+    bottom: 18px;
+    z-index: 1260;
+    width: min(440px, calc(100vw - 36px));
+    border: 1px solid #b9c2c8;
+    border-radius: 12px;
+    overflow: hidden;
+    background: #f8fafb;
+    box-shadow: 0 18px 60px rgba(15, 23, 42, 0.24);
+}
+
+.assetLibraryDrawer .panel {
+    height: 100%;
+    border-right: none;
+}
+
+.assetLibrary .panelHeader {
+    justify-content: space-between;
 }
 
 .assetActions,

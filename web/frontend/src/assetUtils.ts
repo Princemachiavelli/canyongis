@@ -44,6 +44,7 @@ export function assetName(asset: Asset, job?: Job): string {
   const outputKey = asset.metadata.output_key;
   const jobName =
     (job?.result?.name as string | undefined) ?? (job?.params.name as string | undefined);
+  if (jobName && asset.kind === "raster.dem") return jobName;
   if (jobName && typeof outputKey === "string") return `${jobName} ${outputKey}`;
   if (jobName) return jobName;
   if (asset.path) return asset.path.split("/").pop() ?? asset.id;

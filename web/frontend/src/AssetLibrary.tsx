@@ -1,10 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Box, Eye, LocateFixed, Play, Search, Tags, Trash2 } from "lucide-react";
+import { Box, Eye, LocateFixed, Play, Plus, Search, Tags, Trash2, X } from "lucide-react";
 import {
   getProjectPipeline,
+  linkProjectAsset,
+  listAssetLibrary,
   listProjectAssets,
   setKmlContainer,
+  unlinkProjectAsset,
   type Asset,
   type AssetLineageEdge,
   type Job,
@@ -30,6 +33,8 @@ type AssetLibraryProps = {
   projectId?: string;
   jobs: Job[];
   specs: JobSpec[];
+  variant?: "project" | "library";
+  currentProjectAssetIds?: Set<string>;
   selectedAssetId?: string;
   onSelectAsset: (assetId: string) => void;
   onRunTool: (
@@ -37,6 +42,7 @@ type AssetLibraryProps = {
     initialInputs: Record<string, string | undefined>,
   ) => void;
   onDeleteJob: (job: Job) => void;
+  onClose?: () => void;
 };
 
 type AssetGroup = {
@@ -73,6 +79,11 @@ function formatBytes(value: number | null): string | undefined {
   const mb = value / (1024 * 1024);
   if (mb >= 1) return `${mb.toFixed(mb >= 10 ? 0 : 1)} MB`;
   return `${(value / 1024).toFixed(1)} KB`;
+}
+
+function formatBounds(bounds: ReturnType<typeof assetBounds>): string | undefined {
+  if (!bounds) return undefined;
+  return `${bounds.west.toFixed(4)}, ${bounds.south.toFixed(4)} to ${bounds.east.toFixed(4)}, ${bounds.north.toFixed(4)}`;
 }
 
 function lineageGroup(kind: string): { key: string; label: string } {
@@ -337,19 +348,27 @@ function AssetRow({
   job,
   specs,
   demJobs,
+  variant,
+  inCurrentProject,
   selected,
   onSelectAsset,
   onRunTool,
   onDeleteJob,
+  onAddAsset,
+  onRemoveAsset,
 }: {
   asset: Asset;
   job?: Job;
   specs: JobSpec[];
   demJobs: Job[];
+  variant: "project" | "library";
+  inCurrentProject: boolean;
   selected: boolean;
   onSelectAsset: (assetId: string) => void;
   onRunTool: AssetLibraryProps["onRunTool"];
   onDeleteJob: AssetLibraryProps["onDeleteJob"];
+  onAddAsset?: (asset: Asset) => void;
+  onRemoveAsset?: (asset: Asset) => void;
 }) {
   const setActiveDemJob = useAppStore((s) => s.setActiveDemJob);
   const toggleFootprint = useAppStore((s) => s.toggleFootprint);
@@ -370,6 +389,7 @@ function AssetRow({
   const descriptors = useMemo(() => descriptorsForAsset(asset, job, name), [asset, job, name]);
   const tools = useMemo(() => compatibleSpecs(asset, specs), [asset, specs]);
   const size = formatBytes(asset.size_bytes);
+  const boundsText = formatBounds(bounds);
   const canDeleteJob = Boolean(
     job && !asset.linked && job.status !== "queued" && job.status !== "running",
   );
@@ -398,7 +418,10 @@ function AssetRow({
       </div>
       <div className="assetMeta">
         <span>{asset.kind}</span>
+        {job && <span>job {job.id.slice(0, 8)}</span>}
+        {asset.path && <span>{asset.path.split("/").pop()}</span>}
         {size && <span>{size}</span>}
+        {boundsText && <span>bounds {boundsText}</span>}
       </div>
       {isRouteAsset(asset) && job && (
         <ContainerPicker job={job} demJobs={demJobs} expanded={selected} />
@@ -486,6 +509,27 @@ function AssetRow({
           }
           return null;
         })}
+        {variant === "library" && asset.kind === "raster.dem" && (
+          <button
+            className="miniButton"
+            disabled={inCurrentProject}
+            onClick={() => onAddAsset?.(asset)}
+            title="Add this container to the current project"
+          >
+            <Plus size={12} />
+            {inCurrentProject ? "In project" : "Add container"}
+          </button>
+        )}
+        {variant === "project" && asset.linked && (
+          <button
+            className="miniButton"
+            onClick={() => onRemoveAsset?.(asset)}
+            title="Remove this linked asset from the current project"
+          >
+            <X size={12} />
+            Remove
+          </button>
+        )}
         {job && canDeleteJob && (
           <button
             className="danger miniButton"
@@ -523,20 +567,28 @@ function AssetTreeChildren({
   jobsById,
   specs,
   demJobs,
+  variant,
+  currentProjectAssetIds,
   selectedAssetId,
   onSelectAsset,
   onRunTool,
   onDeleteJob,
+  onAddAsset,
+  onRemoveAsset,
 }: {
   parentId: string;
   childrenByParent: Map<string, Asset[]>;
   jobsById: Map<string, Job>;
   specs: JobSpec[];
   demJobs: Job[];
+  variant: "project" | "library";
+  currentProjectAssetIds: Set<string>;
   selectedAssetId?: string;
   onSelectAsset: (assetId: string) => void;
   onRunTool: AssetLibraryProps["onRunTool"];
   onDeleteJob: AssetLibraryProps["onDeleteJob"];
+  onAddAsset?: (asset: Asset) => void;
+  onRemoveAsset?: (asset: Asset) => void;
 }) {
   const groups = groupAssets(childrenByParent.get(parentId) ?? []);
   if (groups.length === 0) return null;
@@ -556,10 +608,14 @@ function AssetTreeChildren({
                   job={asset.job_id ? jobsById.get(asset.job_id) : undefined}
                   specs={specs}
                   demJobs={demJobs}
+                  variant={variant}
+                  inCurrentProject={currentProjectAssetIds.has(asset.id)}
                   selected={asset.id === selectedAssetId}
                   onSelectAsset={onSelectAsset}
                   onRunTool={onRunTool}
                   onDeleteJob={onDeleteJob}
+                  onAddAsset={onAddAsset}
+                  onRemoveAsset={onRemoveAsset}
                 />
                 <AssetTreeChildren
                   parentId={asset.id}
@@ -567,10 +623,14 @@ function AssetTreeChildren({
                   jobsById={jobsById}
                   specs={specs}
                   demJobs={demJobs}
+                  variant={variant}
+                  currentProjectAssetIds={currentProjectAssetIds}
                   selectedAssetId={selectedAssetId}
                   onSelectAsset={onSelectAsset}
                   onRunTool={onRunTool}
                   onDeleteJob={onDeleteJob}
+                  onAddAsset={onAddAsset}
+                  onRemoveAsset={onRemoveAsset}
                 />
               </div>
             ))}
@@ -585,23 +645,53 @@ export function AssetLibrary({
   projectId,
   jobs,
   specs,
+  variant = "project",
+  currentProjectAssetIds,
   selectedAssetId,
   onSelectAsset,
   onRunTool,
   onDeleteJob,
+  onClose,
 }: AssetLibraryProps) {
   const [search, setSearch] = useState("");
+  const queryClient = useQueryClient();
   const assetsQuery = useQuery({
-    queryKey: ["project-assets", projectId],
-    queryFn: () => listProjectAssets(projectId as string),
-    enabled: Boolean(projectId),
+    queryKey: variant === "library" ? ["asset-library"] : ["project-assets", projectId],
+    queryFn: () =>
+      variant === "library"
+        ? listAssetLibrary()
+        : listProjectAssets(projectId as string),
+    enabled: variant === "library" || Boolean(projectId),
     refetchInterval: 2000,
   });
   const pipelineQuery = useQuery({
     queryKey: ["project-pipeline", projectId],
     queryFn: () => getProjectPipeline(projectId as string),
-    enabled: Boolean(projectId),
+    enabled: variant === "project" && Boolean(projectId),
     refetchInterval: 2000,
+  });
+
+  const linkMutation = useMutation({
+    mutationFn: (asset: Asset) => {
+      if (!projectId) throw new Error("Choose a project before adding assets");
+      return linkProjectAsset(projectId, asset.id);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["project-assets"] });
+      queryClient.invalidateQueries({ queryKey: ["project-pipeline"] });
+      queryClient.invalidateQueries({ queryKey: ["asset-library"] });
+    },
+  });
+  const unlinkMutation = useMutation({
+    mutationFn: (asset: Asset) => {
+      if (!projectId) throw new Error("Choose a project before removing assets");
+      return unlinkProjectAsset(projectId, asset.id);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["project-assets"] });
+      queryClient.invalidateQueries({ queryKey: ["project-pipeline"] });
+      queryClient.invalidateQueries({ queryKey: ["asset-library"] });
+    },
   });
 
   const jobsById = useMemo(() => new Map(jobs.map((job) => [job.id, job])), [jobs]);
@@ -614,21 +704,28 @@ export function AssetLibrary({
   );
   const tree = useMemo<AssetTreeData>(() => {
     const assets = assetsQuery.data ?? [];
-    const edges = pipelineQuery.data?.edges ?? [];
+    const edges = variant === "project" ? (pipelineQuery.data?.edges ?? []) : [];
     const visibleIds = expandMatches(matchingAssetIds(assets, jobsById, search), edges);
     return buildTree(
       assets.filter((asset) => visibleIds.has(asset.id)),
       edges,
     );
-  }, [assetsQuery.data, jobsById, pipelineQuery.data, search]);
+  }, [assetsQuery.data, jobsById, pipelineQuery.data, search, variant]);
   const demRoots = tree.roots.filter((asset) => asset.kind === "raster.dem");
   const otherRoots = tree.roots.filter((asset) => asset.kind !== "raster.dem");
+  const activeAssetIds = currentProjectAssetIds ?? new Set((assetsQuery.data ?? []).map((a) => a.id));
+  const title = variant === "library" ? "Asset Library" : "Current Project";
 
   return (
     <aside className="panel assetLibrary">
       <div className="panelHeader">
         <Tags size={16} />
-        <h1>Asset Library</h1>
+        <h1>{title}</h1>
+        {onClose && (
+          <button className="miniButton" onClick={onClose} title="Close asset library">
+            <X size={12} />
+          </button>
+        )}
       </div>
       <label className="assetSearch">
         <Search size={14} />
@@ -638,20 +735,34 @@ export function AssetLibrary({
           onChange={(event) => setSearch(event.target.value)}
         />
       </label>
-      {!projectId && <div className="empty">Choose a project to show assets.</div>}
+      {variant === "project" && !projectId && (
+        <div className="empty">Choose a project to show assets.</div>
+      )}
       {assetsQuery.error && <pre className="error">{String(assetsQuery.error)}</pre>}
-      {projectId && assetsQuery.isLoading && <div className="empty">Loading assets...</div>}
+      {(variant === "library" || projectId) && assetsQuery.isLoading && (
+        <div className="empty">Loading assets...</div>
+      )}
       {pipelineQuery.error && <pre className="error">{String(pipelineQuery.error)}</pre>}
-      {projectId && !assetsQuery.isLoading && tree.roots.length === 0 && (
-        <div className="empty">No matching assets in this project.</div>
+      {(variant === "library" || projectId) && !assetsQuery.isLoading && tree.roots.length === 0 && (
+        <div className="empty">
+          {variant === "library" ? "No matching assets in the library." : "No matching assets in this project."}
+        </div>
+      )}
+      {(linkMutation.error || unlinkMutation.error) && (
+        <pre className="error">
+          {String((linkMutation.error ?? unlinkMutation.error) as Error)}
+        </pre>
       )}
       <div className="assetGroups">
         {demRoots.map((asset) => (
           <details key={`aoi:${asset.id}`} className="assetGroup" open>
             <summary>
-              <span>AOI Bounds</span>
+              <span>{assetName(asset, asset.job_id ? jobsById.get(asset.job_id) : undefined)}</span>
               <span className="assetCount">1</span>
             </summary>
+            {formatBounds(assetBounds(asset)) && (
+              <div className="assetGroupMeta">bounds {formatBounds(assetBounds(asset))}</div>
+            )}
             <div className="assetRows">
               <div className="assetTreeNode">
                 <AssetRow
@@ -659,10 +770,14 @@ export function AssetLibrary({
                   job={asset.job_id ? jobsById.get(asset.job_id) : undefined}
                   specs={specs}
                   demJobs={demJobs}
+                  variant={variant}
+                  inCurrentProject={activeAssetIds.has(asset.id)}
                   selected={asset.id === selectedAssetId}
                   onSelectAsset={onSelectAsset}
                   onRunTool={onRunTool}
                   onDeleteJob={onDeleteJob}
+                  onAddAsset={(a) => linkMutation.mutate(a)}
+                  onRemoveAsset={(a) => unlinkMutation.mutate(a)}
                 />
                 <AssetTreeChildren
                   parentId={asset.id}
@@ -670,10 +785,14 @@ export function AssetLibrary({
                   jobsById={jobsById}
                   specs={specs}
                   demJobs={demJobs}
+                  variant={variant}
+                  currentProjectAssetIds={activeAssetIds}
                   selectedAssetId={selectedAssetId}
                   onSelectAsset={onSelectAsset}
                   onRunTool={onRunTool}
                   onDeleteJob={onDeleteJob}
+                  onAddAsset={(a) => linkMutation.mutate(a)}
+                  onRemoveAsset={(a) => unlinkMutation.mutate(a)}
                 />
               </div>
             </div>
@@ -693,10 +812,14 @@ export function AssetLibrary({
                     job={asset.job_id ? jobsById.get(asset.job_id) : undefined}
                     specs={specs}
                     demJobs={demJobs}
+                    variant={variant}
+                    inCurrentProject={activeAssetIds.has(asset.id)}
                     selected={asset.id === selectedAssetId}
                     onSelectAsset={onSelectAsset}
                     onRunTool={onRunTool}
                     onDeleteJob={onDeleteJob}
+                    onAddAsset={(a) => linkMutation.mutate(a)}
+                    onRemoveAsset={(a) => unlinkMutation.mutate(a)}
                   />
                   <AssetTreeChildren
                     parentId={asset.id}
@@ -704,10 +827,14 @@ export function AssetLibrary({
                     jobsById={jobsById}
                     specs={specs}
                     demJobs={demJobs}
+                    variant={variant}
+                    currentProjectAssetIds={activeAssetIds}
                     selectedAssetId={selectedAssetId}
                     onSelectAsset={onSelectAsset}
                     onRunTool={onRunTool}
                     onDeleteJob={onDeleteJob}
+                    onAddAsset={(a) => linkMutation.mutate(a)}
+                    onRemoveAsset={(a) => unlinkMutation.mutate(a)}
                   />
                 </div>
               ))}

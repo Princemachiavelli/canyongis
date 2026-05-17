@@ -4,6 +4,7 @@ import json
 from pathlib import Path
 
 import numpy as np
+import pytest
 import rasterio
 from pyproj import Transformer
 from rasterio.transform import from_origin
@@ -11,6 +12,7 @@ from shapely.geometry import LineString
 
 from canyongis.ingest import (
     TNM_1M_DATASET,
+    TNM_UNAVAILABLE_MESSAGE,
     RopewikiPageRef,
     choose_tnm_product,
     dem_covers_bounds,
@@ -19,6 +21,7 @@ from canyongis.ingest import (
     ingest_ropewiki_page,
     normalize_ropewiki_title,
     parse_ropewiki_ref,
+    query_tnm_products,
 )
 
 
@@ -427,3 +430,28 @@ def test_ingest_skips_when_tnm_has_no_1m_dem(monkeypatch, tmp_path):
 
     assert result.status == "skipped_no_dem"
     assert result.dem_path is None
+
+
+def test_query_tnm_products_reports_sciencebase_outage_payload(monkeypatch):
+    monkeypatch.setattr(
+        "canyongis.ingest._http_get_json",
+        lambda url, params: {
+            "errorMessage": "[BadRequest] '('Connection aborted.', RemoteDisconnected())'"
+        },
+    )
+
+    with pytest.raises(RuntimeError, match="TNM/ScienceBase is currently unavailable") as exc:
+        query_tnm_products((-112.99, 37.01, -112.93, 37.06))
+
+    assert TNM_UNAVAILABLE_MESSAGE in str(exc.value)
+    assert "RemoteDisconnected" in str(exc.value)
+
+
+def test_query_tnm_products_reports_malformed_sciencebase_response(monkeypatch):
+    def fail_json(url, params):
+        raise json.JSONDecodeError("bad response", "{errorMessage=down}", 1)
+
+    monkeypatch.setattr("canyongis.ingest._http_get_json", fail_json)
+
+    with pytest.raises(RuntimeError, match="try the DEM mosaic job again later"):
+        query_tnm_products((-112.99, 37.01, -112.93, 37.06))

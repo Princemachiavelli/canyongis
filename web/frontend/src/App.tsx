@@ -1,7 +1,8 @@
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
+  Archive,
   GitBranch,
   Layers,
   Map as MapIcon,
@@ -198,6 +199,7 @@ export function App() {
   const [bulkMaxResults, setBulkMaxResults] = useState(50);
   const [selectedAssetId, setSelectedAssetId] = useState<string | undefined>();
   const [inspectorTool, setInspectorTool] = useState<InspectorTool | undefined>();
+  const [libraryOpen, setLibraryOpen] = useState(false);
   const [pipelineOpen, setPipelineOpen] = useState(false);
   const [jobsOpen, setJobsOpen] = useState(false);
 
@@ -225,6 +227,10 @@ export function App() {
     () => assetsQuery.data ?? [],
     [assetsQuery.data],
   );
+  const projectAssetIds = useMemo(
+    () => new Set(projectAssets.map((asset) => asset.id)),
+    [projectAssets],
+  );
   const runningJobCount = useMemo(
     () => jobs.filter((job) => job.status === "queued" || job.status === "running").length,
     [jobs],
@@ -233,6 +239,12 @@ export function App() {
     () => specs.find((s) => s.key === "ravine-spine"),
     [specs],
   );
+
+  useEffect(() => {
+    if (!activeDemJob || !jobsQuery.data) return;
+    if (jobsQuery.data.some((job) => job.id === activeDemJob.id)) return;
+    setActiveDemJob(undefined);
+  }, [activeDemJob, jobsQuery.data, setActiveDemJob]);
 
   // Auto-show the track-profile job's geojson when its parent KML track is selected.
   const selectedProfileJob = useMemo(() => {
@@ -503,6 +515,13 @@ export function App() {
         <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
           <ProjectPicker queryClient={queryClient} />
           <button
+            className={libraryOpen ? "toggled" : ""}
+            onClick={() => setLibraryOpen((open) => !open)}
+          >
+            <Archive size={16} />
+            Library
+          </button>
+          <button
             className={pipelineOpen ? "toggled" : ""}
             onClick={() => setPipelineOpen((open) => !open)}
           >
@@ -529,6 +548,7 @@ export function App() {
           projectId={activeProjectId}
           jobs={jobs}
           specs={specs}
+          variant="project"
           selectedAssetId={selectedAssetId}
           onSelectAsset={(assetId) => {
             setSelectedAssetId(assetId);
@@ -813,6 +833,26 @@ export function App() {
           onRunTool={runInspectorTool}
         />
       </section>
+
+      {libraryOpen && (
+        <div className="assetLibraryDrawer">
+          <AssetLibrary
+            projectId={activeProjectId}
+            jobs={jobs}
+            specs={specs}
+            variant="library"
+            currentProjectAssetIds={projectAssetIds}
+            selectedAssetId={selectedAssetId}
+            onSelectAsset={(assetId) => {
+              setSelectedAssetId(assetId);
+              setInspectorTool(undefined);
+            }}
+            onRunTool={onRunAssetTool}
+            onDeleteJob={deleteJob}
+            onClose={() => setLibraryOpen(false)}
+          />
+        </div>
+      )}
 
       {jobsOpen && (
         <JobActivityPanel

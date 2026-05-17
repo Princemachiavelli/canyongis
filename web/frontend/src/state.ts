@@ -116,7 +116,11 @@ export const useAppStore = create<AppState>((set) => ({
     } else {
       localStorage.removeItem("activeProjectId");
     }
-    set({ activeProjectId: id });
+    set((state) =>
+      state.activeProjectId === id
+        ? { activeProjectId: id }
+        : { activeProjectId: id, activeDemJob: undefined, selectedKmlTrack: undefined },
+    );
   },
   setAuthenticatedUser: (user) => set({ authenticatedUser: user }),
 }));

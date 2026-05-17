@@ -150,6 +150,32 @@ export async function listProjects(): Promise<Project[]> {
   return data.projects;
 }
 
+export async function createProject(name: string): Promise<Project> {
+  return request<Project>("/api/projects", {
+    method: "POST",
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function updateProject(projectId: string, name: string): Promise<Project> {
+  return request<Project>(`/api/projects/${projectId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ name }),
+  });
+}
+
+export async function deleteProject(projectId: string): Promise<{ deleted: boolean; project_id: string }> {
+  return request(`/api/projects/${projectId}`, { method: "DELETE" });
+}
+
+export async function listAssetLibrary(kind?: string): Promise<Asset[]> {
+  const params = new URLSearchParams();
+  if (kind) params.set("kind", kind);
+  const suffix = params.size > 0 ? `?${params.toString()}` : "";
+  const data = await request<{ assets: Asset[] }>(`/api/assets${suffix}`);
+  return data.assets;
+}
+
 export async function listProjectAssets(
   projectId: string,
   kind?: string,
