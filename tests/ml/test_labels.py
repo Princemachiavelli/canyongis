@@ -3,7 +3,32 @@ from __future__ import annotations
 import numpy as np
 from rasterio.transform import from_origin
 
-from canyongis.ml.labels import soft_label_from_mask
+from canyongis.ml.config import MLConfig
+from canyongis.ml.labels import build_reliable_negative_weight, soft_label_from_mask
+
+
+def test_reliable_negative_weight_partitions_pixels():
+    cfg = MLConfig()  # 7 feature channels, no geomorphons
+    names = cfg.channel_names()
+    h = w = 4
+    stack = np.zeros((len(names), h, w), dtype=np.float32)
+    # Make the whole tile a reliable negative by default: flat, low relief, far from drainage.
+    stack[names.index("slope_deg")] = 1.0
+    stack[names.index("local_relief")] = 0.5
+    stack[names.index("distance_to_drainage_log1p")] = np.log1p(500.0)
+    canyon_y = np.zeros((h, w), dtype=np.float32)
+    valid_dem = np.ones((h, w), dtype=bool)
+
+    # A labeled positive pixel, a steep pixel (unknown), and an invalid pixel.
+    canyon_y[0, 0] = 1.0
+    stack[names.index("slope_deg"), 1, 1] = 45.0  # steep -> not reliable negative
+    valid_dem[2, 2] = False
+
+    weight = build_reliable_negative_weight(stack, canyon_y, valid_dem, cfg)
+    assert weight[0, 0] == 1.0  # positive corridor trusted
+    assert weight[3, 3] == 1.0  # reliable negative trusted
+    assert weight[1, 1] == cfg.ignore_weight  # steep + unlabeled -> unknown
+    assert weight[2, 2] == 0.0  # invalid DEM always 0
 
 
 def test_soft_label_peak_on_line():

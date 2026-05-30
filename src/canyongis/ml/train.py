@@ -322,7 +322,14 @@ def train_fold(
                 segment_started = time.perf_counter()
             with torch.autocast(device_type=device.type, enabled=use_amp):
                 out = model(batch["image"])
-                loss_dict = loss_fn(out, {"canyon": batch["canyon"], "rappel": batch["rappel"]})
+                loss_dict = loss_fn(
+                    out,
+                    {
+                        "canyon": batch["canyon"],
+                        "rappel": batch["rappel"],
+                        "canyon_weight": batch["canyon_weight"],
+                    },
+                )
                 loss = loss_dict["loss"] / accum
             if collect_timing:
                 _record_timing(
@@ -417,8 +424,9 @@ def train_fold(
                 if collect_timing:
                     segment_started = time.perf_counter()
                 out = model(batch["image"])
-                cldice = soft_cldice_metric(out["canyon_logits"], batch["canyon"])
-                dice = soft_dice_metric(out["canyon_logits"], batch["canyon"])
+                weight = batch["canyon_weight"]
+                cldice = soft_cldice_metric(out["canyon_logits"], batch["canyon"], weight=weight)
+                dice = soft_dice_metric(out["canyon_logits"], batch["canyon"], weight=weight)
                 if collect_timing:
                     _record_timing(
                         val_timing,

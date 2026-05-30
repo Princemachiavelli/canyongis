@@ -164,6 +164,12 @@ def feature_stack_signature(cfg: MLConfig) -> dict[str, object]:
         "geomorphon_skip_m": cfg.geomorphon_skip_m,
         "geomorphon_flat_deg": cfg.geomorphon_flat_deg,
         "geomorphon_dist_m": cfg.geomorphon_dist_m,
+        # The cached weight raster is derived from these thresholds; changing them
+        # must invalidate the cache so the weight is recomputed.
+        "reliable_negative_relief_max_m": cfg.reliable_negative_relief_max_m,
+        "reliable_negative_slope_max_deg": cfg.reliable_negative_slope_max_deg,
+        "reliable_negative_distance_min_m": cfg.reliable_negative_distance_min_m,
+        "ignore_weight": cfg.ignore_weight,
     }
 
 

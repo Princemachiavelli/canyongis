@@ -24,6 +24,17 @@ class MLConfig:
     rappel_sigma_m: float = 3.0
     label_floor: float = 0.05
 
+    # --- Reliable-negative / PU loss mask ---
+    # A buffered mosaic contains unlabeled canyons; treating its whole interior as
+    # negative biases the loss. We only trust two kinds of pixel: the labeled positive
+    # corridor, and "reliable negatives" — gentle, low-relief terrain far from any
+    # drainage, where a canyon is implausible. Everything else is unknown and gets
+    # `ignore_weight` (default 0 = excluded from the loss).
+    reliable_negative_relief_max_m: float = 2.0
+    reliable_negative_slope_max_deg: float = 10.0
+    reliable_negative_distance_min_m: float = 50.0
+    ignore_weight: float = 0.0
+
     # --- Tiling ---
     tile_size: int = 256
     train_stride: int = 128

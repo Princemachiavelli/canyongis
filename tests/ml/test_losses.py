@@ -48,6 +48,35 @@ def test_soft_bce_pu_lower_weight_on_unlabeled():
     assert high < low
 
 
+def test_soft_bce_pu_weight_excludes_ignored_pixels():
+    # An ignored pixel (weight 0) must not contribute to the loss, regardless of
+    # how wrong the prediction is there.
+    logits = torch.zeros(1, 1, 2, 2)
+    logits[..., 0, 0] = 8.0  # confident positive where target is 0 (would be a big loss)
+    target = torch.zeros_like(logits)
+    weight = torch.ones_like(logits)
+    weight[..., 0, 0] = 0.0  # ignore that pixel
+    masked = soft_bce_pu(logits, target, pi=0.0, weight=weight).item()
+    only_others = soft_bce_pu(logits[..., 1:, :], target[..., 1:, :], pi=0.0).item()
+    assert masked == only_others
+
+
+def test_soft_cldice_precision_ignores_unlabeled_detection():
+    # A predicted line in an unknown (weight 0) region should NOT be penalized as a
+    # false positive — this is the PU fix so the model can detect unlabeled canyons.
+    target = torch.zeros(1, 1, 16, 16)
+    target[:, :, 4, :] = 1.0
+    logits = torch.full_like(target, -8.0)
+    logits[:, :, 4, :] = 8.0  # predict the labeled line
+    logits[:, :, 12, :] = 8.0  # also predict an UNLABELED line
+
+    weight = torch.ones_like(target)
+    weight[:, :, 12, :] = 0.0  # the unlabeled line lives in an ignore region
+    unmasked = soft_cldice(logits, target, iters=2).item()
+    masked = soft_cldice(logits, target, iters=2, weight=weight).item()
+    assert masked < unmasked
+
+
 def _gaussian_heatmap(size: int, sigma: float) -> torch.Tensor:
     """Single-peak Gaussian heatmap, peak == 1.0 at center."""
     coords = torch.arange(size, dtype=torch.float32)

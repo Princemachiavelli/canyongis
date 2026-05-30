@@ -7,7 +7,18 @@ from torch import nn
 from .config import MLConfig
 
 
-def soft_bce_pu(logits: torch.Tensor, target: torch.Tensor, pi: float) -> torch.Tensor:
+def _weighted_mean(per_pixel: torch.Tensor, weight: torch.Tensor | None) -> torch.Tensor:
+    if weight is None:
+        return per_pixel.mean()
+    return (per_pixel * weight).sum() / weight.sum().clamp_min(1.0)
+
+
+def soft_bce_pu(
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    pi: float,
+    weight: torch.Tensor | None = None,
+) -> torch.Tensor:
     """BCE with positive-unlabeled down-weighting.
 
     target is the soft label in [0, 1]. We treat `target` as the "positive posterior"
@@ -15,16 +26,28 @@ def soft_bce_pu(logits: torch.Tensor, target: torch.Tensor, pi: float) -> torch.
     term by (1 - pi), so that fully-unlabeled pixels (target == 0) receive weight
     (1 - pi) instead of 1. This prevents unmapped canyons from acting as strong
     negatives when pi is small.
+
+    `weight` is an optional per-pixel trust mask in [0, 1]: pixels in unknown regions
+    (e.g. the unlabeled interior of a buffered mosaic, which may hide real canyons)
+    are weighted toward 0 so they neither train as positives nor as negatives.
     """
     log_p = F.logsigmoid(logits)
     log_1mp = F.logsigmoid(-logits)
     pos_term = -target * log_p
     neg_term = -(1.0 - target) * log_1mp * (1.0 - pi)
-    return (pos_term + neg_term).mean()
+    return _weighted_mean(pos_term + neg_term, weight)
 
 
-def soft_dice(logits: torch.Tensor, target: torch.Tensor, smooth: float = 1.0) -> torch.Tensor:
+def soft_dice(
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    smooth: float = 1.0,
+    weight: torch.Tensor | None = None,
+) -> torch.Tensor:
     p = torch.sigmoid(logits)
+    if weight is not None:
+        p = p * weight
+        target = target * weight
     dims = tuple(range(1, p.ndim))
     num = 2.0 * (p * target).sum(dim=dims) + smooth
     den = (p + target).sum(dim=dims) + smooth
@@ -57,18 +80,30 @@ def soft_cldice(
     target: torch.Tensor,
     iters: int = 3,
     smooth: float = 1.0,
+    weight: torch.Tensor | None = None,
 ) -> torch.Tensor:
-    """Topology-preserving loss for thin tubular structures (Shit et al. 2021)."""
+    """Topology-preserving loss for thin tubular structures (Shit et al. 2021).
+
+    The precision term penalizes predicted-skeleton pixels that miss the target — but in
+    a buffered mosaic the model will correctly light up *unlabeled* canyons, which the
+    naive precision term punishes as false positives, directly fighting the PU framing.
+    `weight` (a per-pixel trust mask in [0, 1]) restricts the precision term to trusted
+    pixels so detections in unknown regions are neither rewarded nor penalized. Recall is
+    driven by `skel_t`, which lives only inside the labeled corridor, so it is unaffected.
+    """
     p = torch.sigmoid(logits)
     # Ensure channel dim for pooling ops.
     if p.ndim == 3:
         p = p.unsqueeze(1)
         target = target.unsqueeze(1)
+        if weight is not None:
+            weight = weight.unsqueeze(1)
     skel_p = _soft_skeleton(p, iters)
     skel_t = _soft_skeleton(target, iters)
 
-    t_prec = (skel_p * target).sum(dim=(1, 2, 3)) + smooth
-    t_prec = t_prec / (skel_p.sum(dim=(1, 2, 3)) + smooth)
+    prec_w = skel_p if weight is None else skel_p * weight
+    t_prec = (prec_w * target).sum(dim=(1, 2, 3)) + smooth
+    t_prec = t_prec / (prec_w.sum(dim=(1, 2, 3)) + smooth)
 
     t_rec = (skel_t * p).sum(dim=(1, 2, 3)) + smooth
     t_rec = t_rec / (skel_t.sum(dim=(1, 2, 3)) + smooth)
@@ -117,10 +152,15 @@ class MultiTaskLoss(nn.Module):
         r_logits = outputs["rappel_logits"]
         c_target = targets["canyon"]
         r_target = targets["rappel"]
+        c_weight = targets.get("canyon_weight")
 
-        bce = soft_bce_pu(c_logits, c_target, pi=self.cfg.pu_prior)
+        bce = soft_bce_pu(c_logits, c_target, pi=self.cfg.pu_prior, weight=c_weight)
         cld = soft_cldice(
-            c_logits, c_target, iters=self.cfg.cldice_iter, smooth=self.cfg.cldice_smooth
+            c_logits,
+            c_target,
+            iters=self.cfg.cldice_iter,
+            smooth=self.cfg.cldice_smooth,
+            weight=c_weight,
         )
         canyon = self.cfg.bce_cldice_ratio * bce + (1.0 - self.cfg.bce_cldice_ratio) * cld
         rappel = gaussian_focal_loss(
@@ -138,11 +178,18 @@ class MultiTaskLoss(nn.Module):
 
 
 @torch.no_grad()
-def soft_dice_metric(logits: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+def soft_dice_metric(
+    logits: torch.Tensor, target: torch.Tensor, weight: torch.Tensor | None = None
+) -> torch.Tensor:
     """Utility for monitoring — returns Dice score (higher = better) in [0, 1]."""
-    return 1.0 - soft_dice(logits, target)
+    return 1.0 - soft_dice(logits, target, weight=weight)
 
 
 @torch.no_grad()
-def soft_cldice_metric(logits: torch.Tensor, target: torch.Tensor, iters: int = 3) -> torch.Tensor:
-    return 1.0 - soft_cldice(logits, target, iters=iters)
+def soft_cldice_metric(
+    logits: torch.Tensor,
+    target: torch.Tensor,
+    iters: int = 3,
+    weight: torch.Tensor | None = None,
+) -> torch.Tensor:
+    return 1.0 - soft_cldice(logits, target, iters=iters, weight=weight)

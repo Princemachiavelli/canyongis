@@ -28,13 +28,14 @@ The earlier rule-based detector (`masks.py`, hand-tuned thresholds on slope, TPI
    - Rasterize descent polylines to a 1 px-wide mask, then apply a distance-transform Gaussian (`y = exp(-0.5 * (d / σ)²)`) to produce soft labels that tolerate label offset error.
    - Rasterize rappel/drop-in points and blur into a keypoint heatmap.
    - `σ` is configurable per KML via the manifest (higher for less precise traces).
+   - **Reliable-negative weight raster.** A buffered mosaic almost always contains canyons that are *not* in the KML, so its unlabeled interior cannot be treated as negative space. `build_reliable_negative_weight` emits a per-pixel trust weight in [0, 1]: `1` for the labeled positive corridor and for "reliable negatives" (gentle, low-relief terrain far from any drainage — thresholds `reliable_negative_{relief_max_m,slope_max_deg,distance_min_m}`); `ignore_weight` (default `0`) everywhere else, dropping unknown pixels from the loss. Cached as `weight.tif` alongside the labels and carried through augmentation as a synced mask.
 
 4. **Model** (`ml/model.py`)
    - U-Net backbone via `segmentation_models_pytorch` with a **ResNet-18 encoder** (default; fits 8 GB VRAM at batch 6–8 × 256² with AMP, and runs on macOS MPS at batch 4 fp32). ResNet-34 is a config switch for when data scales to thousands of KMLs.
    - Two 1×1-conv heads on top of the decoder: `head_canyon` (segmentation) and `head_rappel` (keypoint heatmap).
 
 5. **Loss & Training** (`ml/losses.py`, `ml/train.py`)
-   - **Canyon loss** = `0.5 · soft-BCE-PU + 0.5 · soft-clDice`. Soft-BCE-PU down-weights the negative term by `(1 − π)` so unlabeled pixels aren't treated as strong negatives (positive-unlabeled learning framing). Soft-clDice (Shit et al. 2021) preserves thin-curvilinear topology.
+   - **Canyon loss** = `0.5 · soft-BCE-PU + 0.5 · soft-clDice`, both masked by the reliable-negative weight raster (per-pixel, in [0, 1]). Soft-BCE-PU down-weights the negative term by `(1 − π)` so unlabeled pixels aren't treated as strong negatives (positive-unlabeled learning framing); the weight further zeroes out unknown pixels entirely. Soft-clDice (Shit et al. 2021) preserves thin-curvilinear topology — its **precision term is masked by the weight** so the model is *not* penalized for correctly lighting up unlabeled canyons (recall is driven by the target skeleton, which lives only in the labeled corridor, so it is unaffected).
    - **Rappel loss** = Gaussian focal loss (CornerNet/CenterNet variant; α=2, β=4) on the keypoint heatmap. Standard focal loss assumes hard binary targets and its modulator collapses on Gaussian-soft labels; the CornerNet form separates the focal exponent on the prediction from a `(1−y)^β` heatmap-aware down-weighting on the negative term.
    - AdamW, cosine LR schedule with warmup, AMP on CUDA only (MPS autocast is unreliable as of torch 2.2).
    - **Spatial K-fold cross-validation** (default K=5). Whole DEMs/canyons are assigned to seeded, balanced folds so no tile from a held-out DEM appears in training.

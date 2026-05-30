@@ -145,6 +145,7 @@
               postgresqlWithPostGIS
               python.pkgs.pytest
               python.pkgs.pytest-cov
+	      #python.pkgs.napari
             ];
             shellHook = ''
               # Make the in-tree source importable without a `pip install -e .`

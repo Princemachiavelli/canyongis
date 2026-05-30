@@ -28,10 +28,12 @@ def build_train_transform(cfg: MLConfig) -> A.Compose:
                 p=cfg.random_erasing_prob,
             ),
         ],
-        additional_targets={"canyon": "mask", "rappel": "mask"},
+        additional_targets={"canyon": "mask", "rappel": "mask", "canyon_weight": "mask"},
     )
 
 
 def build_eval_transform(cfg: MLConfig) -> A.Compose:
     _ = cfg
-    return A.Compose([], additional_targets={"canyon": "mask", "rappel": "mask"})
+    return A.Compose(
+        [], additional_targets={"canyon": "mask", "rappel": "mask", "canyon_weight": "mask"}
+    )

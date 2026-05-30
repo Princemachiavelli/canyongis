@@ -22,7 +22,7 @@ from torch.utils.data import Dataset
 from ..io import log, read_dem
 from .config import MLConfig
 from .features import apply_norm, build_feature_stack, feature_stack_signature
-from .labels import build_labels_from_kml_paths
+from .labels import build_labels_from_kml_paths, build_reliable_negative_weight
 
 # -----------------------------------------------------------------------------
 # Manifest
@@ -102,6 +102,7 @@ def _cache_paths(cache_dir: Path, dem_id: str) -> dict[str, Path]:
         "features": d / "features.tif",
         "canyon": d / "canyon_label.tif",
         "rappel": d / "rappel_label.tif",
+        "weight": d / "weight.tif",
         "meta": d / "meta.json",
     }
 
@@ -243,6 +244,7 @@ def _write_zarr_cache(
     stack: np.ndarray,
     canyon_y: np.ndarray,
     rappel_y: np.ndarray,
+    weight: np.ndarray,
     cfg: MLConfig,
 ) -> None:
     import zarr
@@ -274,6 +276,13 @@ def _write_zarr_cache(
         compressors=compressors,
         overwrite=True,
     )
+    root.create_array(
+        "weight",
+        data=weight.astype(np.float32, copy=False),
+        chunks=(block_size, block_size),
+        compressors=compressors,
+        overwrite=True,
+    )
 
 
 def _write_geotiff_cache(
@@ -281,6 +290,7 @@ def _write_geotiff_cache(
     stack: np.ndarray,
     canyon_y: np.ndarray,
     rappel_y: np.ndarray,
+    weight: np.ndarray,
     transform,
     crs,
     cfg: MLConfig,
@@ -302,6 +312,7 @@ def _write_geotiff_cache(
 
     _write_cache_raster(paths["canyon"], canyon_y, transform, crs, cfg, dtype="float32")
     _write_cache_raster(paths["rappel"], rappel_y, transform, crs, cfg, dtype="float32")
+    _write_cache_raster(paths["weight"], weight, transform, crs, cfg, dtype="float32")
 
 
 def _prepare_cache_entry(entry: ManifestEntry, cache_dir: str | Path, cfg: MLConfig) -> str:
@@ -327,11 +338,12 @@ def _prepare_cache_entry(entry: ManifestEntry, cache_dir: str | Path, cfg: MLCon
     valid_dem = np.isfinite(elev)
     canyon_y = np.where(valid_dem, canyon_y, 0.0).astype(np.float32, copy=False)
     rappel_y = np.where(valid_dem, rappel_y, 0.0).astype(np.float32, copy=False)
+    weight = build_reliable_negative_weight(stack, canyon_y, valid_dem, cfg)
 
     if _cache_format(cfg) == "zarr":
-        _write_zarr_cache(paths, stack, canyon_y, rappel_y, cfg)
+        _write_zarr_cache(paths, stack, canyon_y, rappel_y, weight, cfg)
     else:
-        _write_geotiff_cache(paths, stack, canyon_y, rappel_y, transform, crs, cfg)
+        _write_geotiff_cache(paths, stack, canyon_y, rappel_y, weight, transform, crs, cfg)
 
     paths["meta"].write_text(
         json.dumps(
@@ -619,6 +631,7 @@ class TileDataset(Dataset):
                     "features": root["features"],
                     "canyon": root["canyon"],
                     "rappel": root["rappel"],
+                    "weight": root["weight"],
                 }
             else:
                 self._src_cache[dem_id] = {
@@ -626,6 +639,7 @@ class TileDataset(Dataset):
                     "features": rasterio.open(paths["features"]),
                     "canyon": rasterio.open(paths["canyon"]),
                     "rappel": rasterio.open(paths["rappel"]),
+                    "weight": rasterio.open(paths["weight"]),
                 }
         return self._src_cache[dem_id]
 
@@ -643,11 +657,13 @@ class TileDataset(Dataset):
             )
             canyon = np.asarray(src["canyon"][row : row + tile, col : col + tile], dtype=np.float32)
             rappel = np.asarray(src["rappel"][row : row + tile, col : col + tile], dtype=np.float32)
+            weight = np.asarray(src["weight"][row : row + tile, col : col + tile], dtype=np.float32)
         else:
             win = Window(rec.col, rec.row, tile, tile)
             feat = src["features"].read(window=win).astype(np.float32)  # (C, H, W)
             canyon = src["canyon"].read(1, window=win).astype(np.float32)  # (H, W)
             rappel = src["rappel"].read(1, window=win).astype(np.float32)  # (H, W)
+            weight = src["weight"].read(1, window=win).astype(np.float32)  # (H, W)
 
         feat = apply_norm(feat, self.norm_stats)
 
@@ -657,15 +673,18 @@ class TileDataset(Dataset):
                 image=np.transpose(feat, (1, 2, 0)),
                 canyon=canyon,
                 rappel=rappel,
+                canyon_weight=weight,
             )
             feat = np.transpose(out["image"], (2, 0, 1))
             canyon = out["canyon"]
             rappel = out["rappel"]
+            weight = out["canyon_weight"]
 
         return {
             "image": torch.from_numpy(np.ascontiguousarray(feat)),
             "canyon": torch.from_numpy(np.ascontiguousarray(canyon)).unsqueeze(0),
             "rappel": torch.from_numpy(np.ascontiguousarray(rappel)).unsqueeze(0),
+            "canyon_weight": torch.from_numpy(np.ascontiguousarray(weight)).unsqueeze(0),
             "has_positive": torch.tensor(rec.has_positive, dtype=torch.bool),
         }
 

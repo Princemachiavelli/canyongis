@@ -77,6 +77,41 @@ def soft_label_from_mask(
     return y
 
 
+def build_reliable_negative_weight(
+    stack: np.ndarray,
+    canyon_y: np.ndarray,
+    valid_dem: np.ndarray,
+    cfg: MLConfig,
+) -> np.ndarray:
+    """Per-pixel loss-trust weight in [0, 1] for positive-unlabeled canyon learning.
+
+    A buffered mosaic almost certainly contains canyons that are not in the KML, so
+    its unlabeled interior cannot be treated as reliable negative space. We trust only:
+      - the labeled positive corridor (`canyon_y > 0`), and
+      - "reliable negatives": gentle, low-relief terrain far from any drainage, where a
+        canyon is geomorphically implausible.
+    Everything else is `unknown` and receives `cfg.ignore_weight` (default 0, i.e. it is
+    dropped from the loss entirely). Invalid (NaN) DEM pixels always get weight 0.
+    """
+    names = cfg.channel_names()
+    slope = stack[names.index("slope_deg")]
+    local_relief = stack[names.index("local_relief")]
+    distance_log = stack[names.index("distance_to_drainage_log1p")]
+    distance_m = np.expm1(distance_log)
+
+    reliable_negative = (
+        (local_relief < cfg.reliable_negative_relief_max_m)
+        & (slope < cfg.reliable_negative_slope_max_deg)
+        & (distance_m > cfg.reliable_negative_distance_min_m)
+        & (canyon_y <= 0.0)
+    )
+    weight = np.full(canyon_y.shape, np.float32(cfg.ignore_weight), dtype=np.float32)
+    weight[reliable_negative] = 1.0
+    weight[canyon_y > 0.0] = 1.0
+    weight[~valid_dem] = 0.0
+    return weight
+
+
 def build_labels_from_kml(
     kml_path: str | Path,
     dem_transform,
