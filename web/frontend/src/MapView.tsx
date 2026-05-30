@@ -8,6 +8,14 @@ import type { Bounds } from "./api";
 import type { LayerDescriptor } from "./layers";
 import { useAppStore } from "./state";
 
+// Map/layer zoom ceiling. Leaflet's GridLayer hides a tile layer when
+// Math.round(map.getZoom()) > layer.options.maxZoom. Fractional zooms can
+// round up past the map's nominal cap, so we keep the layer's maxZoom well
+// above MapContainer's maxZoom to avoid the layer flickering off near the
+// limit. The tiles upscale visually from maxNativeZoom anyway.
+const LAYER_MAX_ZOOM = 28;
+const MAP_MAX_ZOOM = 22;
+
 function leafletBounds(bounds: [number, number, number, number]): L.LatLngBoundsExpression {
   return [
     [bounds[1], bounds[0]],
@@ -31,6 +39,23 @@ function PanController() {
     map.fitBounds(toLeafletBounds(panRequest.bounds), { padding: [24, 24] });
   }, [map, panRequest]);
 
+  return null;
+}
+
+// Expose the Leaflet map instance + Leaflet itself on window for ad-hoc
+// debugging from the browser DevTools console (e.g. `window.__map.eachLayer`
+// when chasing zoom / tile-render issues). Cheap; lives on every page.
+function DebugExpose() {
+  const map = useMap();
+  useEffect(() => {
+    const w = window as unknown as { __map?: L.Map; __L?: typeof L };
+    w.__map = map;
+    w.__L = L;
+    return () => {
+      delete w.__map;
+      delete w.__L;
+    };
+  }, [map]);
   return null;
 }
 
@@ -121,14 +146,34 @@ function RasterLayer({ descriptor, opacity }: { descriptor: LayerDescriptor; opa
 
   useEffect(() => {
     if (!sourceUrl) return;
-    let layer: L.Layer;
-    if (sourceType === "pmtiles") {
-      const source = new PMTiles(sourceUrl);
+    let cancelled = false;
+    let added: L.Layer | undefined;
+    const setupPmtiles = async (url: string) => {
+      const source = new PMTiles(url);
+      // The pmtiles `leafletRasterLayer` adapter calls source.getZxy(coord.z, …)
+      // directly; pmtiles refuses any z outside [archive.minZoom, archive.maxZoom]
+      // and the adapter then sets `display: none` on the tile. Without an
+      // accurate maxNativeZoom on the Leaflet layer, this triggers the moment
+      // the user zooms past the archive's native zoom. Read the header so we
+      // always have the correct native range, even when the backend didn't
+      // populate descriptor.source.{min_zoom,max_zoom}.
+      let nativeMin = minZoom;
+      let nativeMax = maxZoom;
+      try {
+        const header = await source.getHeader();
+        if (cancelled) return;
+        nativeMin = nativeMin ?? header.minZoom;
+        nativeMax = nativeMax ?? header.maxZoom;
+      } catch (err) {
+        if (cancelled) return;
+        console.warn("pmtiles header read failed; using backend-provided zooms", err);
+      }
       const tileLayer = leafletRasterLayer(source, {
         opacity,
-        minZoom,
-        maxNativeZoom: maxZoom,
-        maxZoom: 22,
+        minZoom: nativeMin,
+        minNativeZoom: nativeMin,
+        maxNativeZoom: nativeMax,
+        maxZoom: LAYER_MAX_ZOOM,
       });
       tileLayer.on("add", () => {
         const el = tileLayer.getContainer();
@@ -137,7 +182,14 @@ function RasterLayer({ descriptor, opacity }: { descriptor: LayerDescriptor; opa
           el.style.opacity = String(opacity);
         }
       });
-      layer = tileLayer;
+      if (cancelled) return;
+      tileLayer.addTo(map);
+      added = tileLayer;
+      layerRef.current = tileLayer;
+    };
+
+    if (sourceType === "pmtiles") {
+      void setupPmtiles(sourceUrl);
     } else if (sourceType === "image" && descriptor.bounds_wgs84) {
       const imgLayer = L.imageOverlay(sourceUrl, leafletBounds(descriptor.bounds_wgs84), {
         opacity,
@@ -148,15 +200,16 @@ function RasterLayer({ descriptor, opacity }: { descriptor: LayerDescriptor; opa
           if (el) el.style.mixBlendMode = blend;
         });
       }
-      layer = imgLayer;
+      imgLayer.addTo(map);
+      added = imgLayer;
+      layerRef.current = imgLayer;
     } else {
       return;
     }
-    layer.addTo(map);
-    layerRef.current = layer;
     return () => {
+      cancelled = true;
       layerRef.current = undefined;
-      layer.removeFrom(map);
+      if (added) added.removeFrom(map);
     };
   }, [map, sourceType, sourceUrl, minZoom, maxZoom, blend, boundsKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
@@ -447,7 +500,7 @@ export function MapView({ layers = [] }: { layers?: LayerDescriptor[] }) {
     <MapContainer
       center={[37.3, -112.9]}
       zoom={10}
-      maxZoom={22}
+      maxZoom={MAP_MAX_ZOOM}
       preferCanvas
       className="map"
     >
@@ -456,17 +509,18 @@ export function MapView({ layers = [] }: { layers?: LayerDescriptor[] }) {
         url="https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png"
         opacity={osmOpacity}
         maxNativeZoom={19}
-        maxZoom={22}
+        maxZoom={LAYER_MAX_ZOOM}
       />
       <TileLayer
         attribution="Tiles &copy; Esri"
         url="https://server.arcgisonline.com/ArcGIS/rest/services/World_Imagery/MapServer/tile/{z}/{y}/{x}"
         opacity={esriOpacity}
         maxNativeZoom={19}
-        maxZoom={22}
+        maxZoom={LAYER_MAX_ZOOM}
       />
       <MapControls />
       <PanController />
+      <DebugExpose />
       {layers.map((descriptor) => (
         <LayerRenderer key={descriptor.id} descriptor={descriptor} />
       ))}

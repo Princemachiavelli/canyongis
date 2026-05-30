@@ -54,7 +54,8 @@ function formatBounds(b: Bounds): string {
 
 type SearchAction =
   | { kind: "jump"; lat: number; lng: number; label: string }
-  | { kind: "ropewiki"; source: string };
+  | { kind: "ropewiki"; source: string }
+  | { kind: "kml-url"; source: string; label: string };
 
 type NominatimResult = {
   lat: string;
@@ -126,6 +127,15 @@ function isRopewikiUrl(url: URL): boolean {
   return url.hostname.toLowerCase().replace(/^www\./, "") === "ropewiki.com";
 }
 
+function isCaltopoUrl(url: URL): boolean {
+  const host = url.hostname.toLowerCase().replace(/^www\./, "");
+  return host === "caltopo.com" || host.endsWith(".caltopo.com");
+}
+
+function isDirectKmlUrl(url: URL): boolean {
+  return url.pathname.toLowerCase().endsWith(".kml");
+}
+
 function isGoogleMapsUrl(url: URL): boolean {
   const host = url.hostname.toLowerCase().replace(/^www\./, "");
   return (
@@ -157,6 +167,12 @@ async function classifySearch(value: string): Promise<SearchAction> {
   if (directCoords) return directCoords;
   const url = searchUrl(trimmed);
   if (url && isRopewikiUrl(url)) return { kind: "ropewiki", source: trimmed };
+  if (url && isCaltopoUrl(url)) {
+    return { kind: "kml-url", source: trimmed, label: "CalTopo map" };
+  }
+  if (url && isDirectKmlUrl(url)) {
+    return { kind: "kml-url", source: trimmed, label: "KML URL" };
+  }
   if (url && isGoogleMapsUrl(url)) {
     const coords = coordsFromText(trimmed);
     if (coords) return coords;
@@ -196,6 +212,7 @@ export function App() {
   const [ropewikiSource, setRopewikiSource] = useState("");
   const [searchText, setSearchText] = useState("");
   const [searchStatus, setSearchStatus] = useState<string | undefined>();
+  const [pendingPanJobId, setPendingPanJobId] = useState<string | undefined>();
   const [bulkMaxResults, setBulkMaxResults] = useState(50);
   const [selectedAssetId, setSelectedAssetId] = useState<string | undefined>();
   const [inspectorTool, setInspectorTool] = useState<InspectorTool | undefined>();
@@ -375,6 +392,10 @@ export function App() {
         const job = await importRopewikiKml(action.source, activeDemJob?.id);
         return { kind: "ropewiki" as const, job };
       }
+      if (action.kind === "kml-url") {
+        const job = await importRopewikiKml(action.source, activeDemJob?.id);
+        return { kind: "kml-url" as const, job, label: action.label };
+      }
       requestPan(pointBounds(action.lat, action.lng));
       return { kind: "jump" as const, label: action.label };
     },
@@ -382,11 +403,40 @@ export function App() {
       if (result.kind === "ropewiki") {
         invalidate();
         setSearchStatus("Ropewiki KML import queued");
+        setPendingPanJobId(result.job.id);
+      } else if (result.kind === "kml-url") {
+        invalidate();
+        setSearchStatus(`${result.label} import queued`);
+        setPendingPanJobId(result.job.id);
       } else {
         setSearchStatus(`Jumped to ${result.label}`);
       }
     },
   });
+
+  useEffect(() => {
+    if (!pendingPanJobId) return;
+    const job = jobs.find((candidate) => candidate.id === pendingPanJobId);
+    if (!job) return;
+    if (job.status === "succeeded") {
+      const bounds = job.result?.bounds_wgs84;
+      if (Array.isArray(bounds) && bounds.length === 4) {
+        const [west, south, east, north] = bounds.map((v) => Number(v));
+        if ([west, south, east, north].every(Number.isFinite)) {
+          const lat = (south + north) / 2;
+          const lng = (west + east) / 2;
+          if (Math.abs(north - south) < 1e-6 && Math.abs(east - west) < 1e-6) {
+            requestPan(pointBounds(lat, lng));
+          } else {
+            requestPan({ west, south, east, north });
+          }
+        }
+      }
+      setPendingPanJobId(undefined);
+    } else if (job.status === "failed" || job.status === "canceled") {
+      setPendingPanJobId(undefined);
+    }
+  }, [pendingPanJobId, jobs, requestPan]);
   const deleteJobMutation = useMutation({
     mutationFn: (job: Job) => {
       if (job.kind === "kml-layer") {

@@ -27,7 +27,15 @@ from .ravine_compare import (
     _write_score_geotiff,
 )
 
+# Slope clamp ceiling for the VAT blend. RVT's published default is 50°, which
+# is tuned for archaeological / agricultural terrain. Canyon walls regularly
+# exceed 50° (and saturate to a single colour), which wipes out detail in the
+# lower / steeper half of canyon maps. 70° covers most real canyon slopes and
+# only the vertical-cliff pixels saturate.
+VAT_SLOPE_MAX_DEG = 70.0
+
 RVT_VIS_KEYS: tuple[str, ...] = (
+    "vat",
     "slope",
     "svf",
     "asvf",
@@ -41,6 +49,7 @@ RVT_VIS_KEYS: tuple[str, ...] = (
 )
 
 RVT_VIS_LABELS: dict[str, str] = {
+    "vat": "VAT (archaeological topography)",
     "slope": "Slope (RVT)",
     "svf": "Sky-view factor",
     "asvf": "Anisotropic SVF",
@@ -52,6 +61,10 @@ RVT_VIS_LABELS: dict[str, str] = {
     "mstp": "Enhanced multi-scale topographic position (e4MSTP)",
     "slrm": "Simple local relief (SLRM)",
 }
+
+# Base-layer keys: these render as a complete grayscale/RGB composite suitable
+# for the map's base layer slot (not as a translucent overlay).
+RVT_BASE_LAYER_KEYS: frozenset[str] = frozenset({"vat"})
 
 
 def _save_rgb_panel(rgb: np.ndarray, valid_mask: np.ndarray, transform, crs, out_path: Path):
@@ -198,6 +211,98 @@ def export_rvt_previews(
         score = rvt.vis.slrm(dem=filled, radius_cell=20)
         write_score("slrm", np.asarray(score, dtype=np.float32))
 
+    def _vat() -> None:
+        # VAT - Archaeological combination (Kokalj et al.): the four-layer blend
+        # that ships as RVT's reference archaeological visualization. Layer
+        # parameters mirror rvt.blend.create_blender_file_example, except the
+        # Slope gradient ceiling is widened (see VAT_SLOPE_MAX_DEG) to keep
+        # detail on steep canyon walls.
+        comb = rvt.blend.BlenderCombination()
+        comb.add_dem_arr(filled, pixel_size)
+        comb.create_layer(
+            vis_method="Sky-View Factor",
+            normalization="value",
+            minimum=0.7,
+            maximum=1.0,
+            blend_mode="multiply",
+            opacity=25,
+        )
+        comb.create_layer(
+            vis_method="Openness - Positive",
+            normalization="value",
+            minimum=68,
+            maximum=93,
+            blend_mode="overlay",
+            opacity=50,
+        )
+        comb.create_layer(
+            vis_method="Slope gradient",
+            normalization="value",
+            minimum=0,
+            maximum=VAT_SLOPE_MAX_DEG,
+            blend_mode="luminosity",
+            opacity=50,
+        )
+        comb.create_layer(
+            vis_method="Hillshade",
+            normalization="value",
+            minimum=0,
+            maximum=1,
+            blend_mode="normal",
+            opacity=100,
+        )
+        rendered = np.asarray(
+            comb.render_all_images(save_visualizations=False, save_float=True)
+        )
+
+        # render_all_images returns either a 2D luminosity array or a 3D
+        # (channels-first / channels-last) RGB array depending on which blend
+        # modes were active. We want the panel to be saved as raw grayscale /
+        # RGB — *not* fed through _render_rgba_panel which applies a viridis
+        # colormap and percentile stretch (write_score does that).
+        if rendered.ndim == 3:
+            rgb = rendered
+            if rgb.shape[0] in (3, 4) and rgb.shape[2] not in (3, 4):
+                rgb = np.transpose(rgb, (1, 2, 0))
+            if rgb.shape[2] == 4:
+                rgb = rgb[..., :3]
+        elif rendered.ndim == 2:
+            rgb = np.repeat(rendered[..., None], 3, axis=2)
+        else:
+            raise ValueError(f"unexpected VAT render shape: {rendered.shape}")
+
+        if rgb.dtype != np.uint8:
+            scale = 255.0 if float(np.nanmax(rgb)) <= 1.0 + 1e-6 else 1.0
+            rgb_u8 = np.clip(rgb.astype(np.float32) * scale, 0, 255).astype(np.uint8)
+        else:
+            rgb_u8 = rgb
+
+        tif_path = out_dir / "rvt_vat.tif"
+        if rendered.ndim == 2:
+            _write_score_geotiff(tif_path, np.asarray(rendered, dtype=np.float32), profile)
+        else:
+            # No useful single-band score for an RGB blend; mirror the panel
+            # path so downstream consumers still have a valid file reference.
+            tif_path = out_dir / "panel_rvt_vat.webp"
+
+        panel = Image.fromarray(rgb_u8, mode="RGB")
+        panel_path = out_dir / "panel_rvt_vat.webp"
+        bounds, tile_archive = _save_panel_previews(
+            panel, valid_mask, transform, crs, panel_path
+        )
+        artifacts["vat"] = PreviewArtifacts(
+            out_dir=str(out_dir),
+            bounds_wgs84=bounds,
+            panel_path=str(panel_path),
+            tif_path=str(tif_path),
+            meta={
+                "vat_slope_max_deg": VAT_SLOPE_MAX_DEG,
+                "vat_archaeological": True,
+            },
+            tile_archive=tile_archive,
+        )
+
+    attempt("vat", _vat)
     attempt("slope", _slope)
     if {"svf", "asvf", "opns_pos"} & set(requested):
         attempt("svf-family", _svf_family)

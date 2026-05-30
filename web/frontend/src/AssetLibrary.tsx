@@ -1,12 +1,27 @@
 import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Box, Eye, LocateFixed, Play, Plus, Search, Tags, Trash2, X } from "lucide-react";
+import {
+  Box,
+  Eye,
+  LocateFixed,
+  Play,
+  Plus,
+  RefreshCw,
+  Search,
+  Tags,
+  Trash2,
+  X,
+} from "lucide-react";
 import {
   getProjectPipeline,
+  hideProjectAsset,
   linkProjectAsset,
   listAssetLibrary,
+  listHiddenProjectAssets,
   listProjectAssets,
   setKmlContainer,
+  syncKmlImport,
+  unhideProjectAsset,
   unlinkProjectAsset,
   type Asset,
   type AssetLineageEdge,
@@ -15,6 +30,7 @@ import {
 } from "./api";
 import { useAppStore } from "./state";
 import {
+  assetLayerSourceType,
   assetSynthesizedLayerId,
   descriptorsFromJob,
   isPreviewAsset,
@@ -45,6 +61,12 @@ type AssetLibraryProps = {
   onClose?: () => void;
 };
 
+type AssetRowExtras = {
+  hiddenInActiveProject: boolean;
+  onHide?: (asset: Asset) => void;
+  onUnhide?: (asset: Asset) => void;
+};
+
 type AssetGroup = {
   key: string;
   label: string;
@@ -54,10 +76,17 @@ type AssetGroup = {
 type AssetTreeData = {
   roots: Asset[];
   childrenByParent: Map<string, Asset[]>;
+  previewByParentId: Map<string, Asset>;
 };
 
 function isRouteAsset(asset: Asset): boolean {
   return asset.kind === "vector.kml.route" || asset.kind.startsWith("vector.kml.route.");
+}
+
+function syncableJob(job: Job | undefined): boolean {
+  if (!job || job.kind !== "kml-import" || job.status !== "succeeded") return false;
+  const source = (job.result as { source?: { type?: string } } | undefined)?.source;
+  return source?.type === "ropewiki" || source?.type === "caltopo" || source?.type === "url";
 }
 
 function kmlJobContainerId(job: Job): string | undefined {
@@ -174,6 +203,8 @@ function buildTree(assets: Asset[], edges: AssetLineageEdge[]): AssetTreeData {
   const hasParent = new Set<string>();
   const parentByChild = new Map<string, string>();
   const canonicalByJob = new Map<string, Asset>();
+  const previewByParentId = new Map<string, Asset>();
+  const previewHosts = new Set<string>();
   const attachChild = (parent: Asset, child: Asset) => {
     if (parent.id === child.id) return;
     const existingParentId = parentByChild.get(child.id);
@@ -190,6 +221,12 @@ function buildTree(assets: Asset[], edges: AssetLineageEdge[]): AssetTreeData {
     hasParent.add(child.id);
     parentByChild.set(child.id, parent.id);
   };
+  const attachPreview = (parent: Asset, preview: Asset) => {
+    if (parent.id === preview.id) return;
+    if (!previewByParentId.has(parent.id)) previewByParentId.set(parent.id, preview);
+    previewHosts.add(preview.id);
+    hasParent.add(preview.id);
+  };
   for (const asset of assets) {
     if (!asset.job_id || isPreviewAsset(asset)) continue;
     if (!canonicalByJob.has(asset.job_id)) {
@@ -201,24 +238,31 @@ function buildTree(assets: Asset[], edges: AssetLineageEdge[]): AssetTreeData {
     const consumer = assetsById.get(edge.consumer);
     if (!producer || !consumer) continue;
     const canonical = consumer.job_id ? canonicalByJob.get(consumer.job_id) : undefined;
-    const previewParent = isPreviewAsset(consumer)
-      ? previewParentForJob(assets, consumer)
-      : undefined;
-    const parent = previewParent ?? (isPreviewAsset(consumer) && canonical ? canonical : producer);
-    attachChild(parent, consumer);
+    if (isPreviewAsset(consumer)) {
+      const previewParent =
+        previewParentForJob(assets, consumer) ?? canonical ?? producer;
+      attachPreview(previewParent, consumer);
+      if (canonical && canonical.id !== consumer.id && !hasParent.has(canonical.id)) {
+        attachChild(producer, canonical);
+      }
+      continue;
+    }
+    attachChild(producer, consumer);
     if (canonical && canonical.id !== consumer.id && !hasParent.has(canonical.id)) {
       attachChild(producer, canonical);
     }
   }
   for (const asset of assets) {
-    if (!isPreviewAsset(asset) || parentByChild.has(asset.id)) continue;
+    if (!isPreviewAsset(asset)) continue;
+    if (previewHosts.has(asset.id)) continue;
     const parent = previewParentForJob(assets, asset);
-    if (parent) attachChild(parent, asset);
+    if (parent) attachPreview(parent, asset);
   }
   for (const children of childrenByParent.values()) children.sort(assetSort);
   return {
     roots: assets.filter((asset) => !hasParent.has(asset.id)).sort(assetSort),
     childrenByParent,
+    previewByParentId,
   };
 }
 
@@ -351,11 +395,15 @@ function AssetRow({
   variant,
   inCurrentProject,
   selected,
+  preview,
+  hiddenInActiveProject,
   onSelectAsset,
   onRunTool,
   onDeleteJob,
   onAddAsset,
   onRemoveAsset,
+  onHide,
+  onUnhide,
 }: {
   asset: Asset;
   job?: Job;
@@ -364,11 +412,15 @@ function AssetRow({
   variant: "project" | "library";
   inCurrentProject: boolean;
   selected: boolean;
+  preview?: Asset;
+  hiddenInActiveProject: boolean;
   onSelectAsset: (assetId: string) => void;
   onRunTool: AssetLibraryProps["onRunTool"];
   onDeleteJob: AssetLibraryProps["onDeleteJob"];
   onAddAsset?: (asset: Asset) => void;
   onRemoveAsset?: (asset: Asset) => void;
+  onHide?: (asset: Asset) => void;
+  onUnhide?: (asset: Asset) => void;
 }) {
   const setActiveDemJob = useAppStore((s) => s.setActiveDemJob);
   const toggleFootprint = useAppStore((s) => s.toggleFootprint);
@@ -393,10 +445,52 @@ function AssetRow({
   const canDeleteJob = Boolean(
     job && !asset.linked && job.status !== "queued" && job.status !== "running",
   );
+  const queryClient = useQueryClient();
+  const canSync = isRouteAsset(asset) && syncableJob(job);
+  const syncMutation = useMutation({
+    mutationFn: () => {
+      if (!job) throw new Error("no job");
+      return syncKmlImport(job.id);
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["jobs"] });
+      queryClient.invalidateQueries({ queryKey: ["project-assets"] });
+      queryClient.invalidateQueries({ queryKey: ["asset-library"] });
+      queryClient.invalidateQueries({ queryKey: ["project-pipeline"] });
+    },
+  });
+
+  const previewLayerId = preview ? assetSynthesizedLayerId(preview.id) : undefined;
+  const previewActive = Boolean(
+    previewLayerId && (baseLayerId === previewLayerId || overlayLayerId === previewLayerId),
+  );
+  const togglePreviewOverlay = () => {
+    if (!preview || !previewLayerId) return;
+    const role = typeof preview.metadata.role === "string" ? preview.metadata.role : undefined;
+    if (role === "base") {
+      setBaseLayer(baseLayerId === previewLayerId ? undefined : previewLayerId);
+    } else {
+      setOverlayLayer(overlayLayerId === previewLayerId ? undefined : previewLayerId);
+    }
+  };
 
   return (
     <div className={`assetRow ${selected ? "selected" : ""}`}>
       <div className="assetRowHead">
+        {preview && preview.url && (
+          <button
+            type="button"
+            className={`assetPreviewIcon${previewActive ? " active" : ""}`}
+            title={previewActive ? "Hide preview on map" : "Show preview on map"}
+            onClick={togglePreviewOverlay}
+          >
+            {assetLayerSourceType(preview) === "image" ? (
+              <img src={preview.url} alt="" loading="lazy" />
+            ) : (
+              <Eye size={16} />
+            )}
+          </button>
+        )}
         <button
           type="button"
           className="assetNameButton"
@@ -509,35 +603,73 @@ function AssetRow({
           }
           return null;
         })}
-        {variant === "library" && asset.kind === "raster.dem" && (
+        {canSync && (
           <button
             className="miniButton"
-            disabled={inCurrentProject}
-            onClick={() => onAddAsset?.(asset)}
-            title="Add this container to the current project"
+            disabled={syncMutation.isPending}
+            onClick={() => syncMutation.mutate()}
+            title={
+              syncMutation.error
+                ? `Sync failed: ${(syncMutation.error as Error).message}`
+                : "Re-fetch the KML from its source URL"
+            }
           >
-            <Plus size={12} />
-            {inCurrentProject ? "In project" : "Add container"}
+            <RefreshCw size={12} />
+            {syncMutation.isPending ? "Syncing..." : "Sync"}
           </button>
         )}
-        {variant === "project" && asset.linked && (
+        {variant === "library" && (
+          <>
+            {hiddenInActiveProject ? (
+              <button
+                className="miniButton"
+                onClick={() => onUnhide?.(asset)}
+                title="Un-hide this asset in the active project"
+              >
+                <Plus size={12} />
+                Add to project
+              </button>
+            ) : asset.kind === "raster.dem" || !inCurrentProject ? (
+              <button
+                className="miniButton"
+                disabled={inCurrentProject}
+                onClick={() => onAddAsset?.(asset)}
+                title={
+                  asset.kind === "raster.dem"
+                    ? "Add this container to the current project"
+                    : "Link this asset into the current project"
+                }
+              >
+                <Plus size={12} />
+                {inCurrentProject ? "In project" : "Add to project"}
+              </button>
+            ) : null}
+            {job && canDeleteJob && (
+              <button
+                className="danger miniButton"
+                title="Delete this job and its output files (asset library only)"
+                onClick={() => onDeleteJob(job)}
+              >
+                <Trash2 size={12} />
+                Delete job
+              </button>
+            )}
+          </>
+        )}
+        {variant === "project" && (
           <button
             className="miniButton"
-            onClick={() => onRemoveAsset?.(asset)}
-            title="Remove this linked asset from the current project"
+            onClick={() =>
+              asset.linked ? onRemoveAsset?.(asset) : onHide?.(asset)
+            }
+            title={
+              asset.linked
+                ? "Unlink this asset from the current project"
+                : "Hide this asset in the current project (still available in the asset library)"
+            }
           >
             <X size={12} />
-            Remove
-          </button>
-        )}
-        {job && canDeleteJob && (
-          <button
-            className="danger miniButton"
-            title="Delete this job and its output files"
-            onClick={() => onDeleteJob(job)}
-          >
-            <Trash2 size={12} />
-            Delete job
+            Remove from project
           </button>
         )}
       </div>
@@ -564,31 +696,39 @@ function AssetRow({
 function AssetTreeChildren({
   parentId,
   childrenByParent,
+  previewByParentId,
   jobsById,
   specs,
   demJobs,
   variant,
   currentProjectAssetIds,
+  hiddenInActiveProjectIds,
   selectedAssetId,
   onSelectAsset,
   onRunTool,
   onDeleteJob,
   onAddAsset,
   onRemoveAsset,
+  onHide,
+  onUnhide,
 }: {
   parentId: string;
   childrenByParent: Map<string, Asset[]>;
+  previewByParentId: Map<string, Asset>;
   jobsById: Map<string, Job>;
   specs: JobSpec[];
   demJobs: Job[];
   variant: "project" | "library";
   currentProjectAssetIds: Set<string>;
+  hiddenInActiveProjectIds: Set<string>;
   selectedAssetId?: string;
   onSelectAsset: (assetId: string) => void;
   onRunTool: AssetLibraryProps["onRunTool"];
   onDeleteJob: AssetLibraryProps["onDeleteJob"];
   onAddAsset?: (asset: Asset) => void;
   onRemoveAsset?: (asset: Asset) => void;
+  onHide?: AssetRowExtras["onHide"];
+  onUnhide?: AssetRowExtras["onUnhide"];
 }) {
   const groups = groupAssets(childrenByParent.get(parentId) ?? []);
   if (groups.length === 0) return null;
@@ -611,26 +751,34 @@ function AssetTreeChildren({
                   variant={variant}
                   inCurrentProject={currentProjectAssetIds.has(asset.id)}
                   selected={asset.id === selectedAssetId}
+                  preview={previewByParentId.get(asset.id)}
+                  hiddenInActiveProject={hiddenInActiveProjectIds.has(asset.id)}
                   onSelectAsset={onSelectAsset}
                   onRunTool={onRunTool}
                   onDeleteJob={onDeleteJob}
                   onAddAsset={onAddAsset}
                   onRemoveAsset={onRemoveAsset}
+                  onHide={onHide}
+                  onUnhide={onUnhide}
                 />
                 <AssetTreeChildren
                   parentId={asset.id}
                   childrenByParent={childrenByParent}
+                  previewByParentId={previewByParentId}
                   jobsById={jobsById}
                   specs={specs}
                   demJobs={demJobs}
                   variant={variant}
                   currentProjectAssetIds={currentProjectAssetIds}
+                  hiddenInActiveProjectIds={hiddenInActiveProjectIds}
                   selectedAssetId={selectedAssetId}
                   onSelectAsset={onSelectAsset}
                   onRunTool={onRunTool}
                   onDeleteJob={onDeleteJob}
                   onAddAsset={onAddAsset}
                   onRemoveAsset={onRemoveAsset}
+                  onHide={onHide}
+                  onUnhide={onUnhide}
                 />
               </div>
             ))}
@@ -671,27 +819,49 @@ export function AssetLibrary({
     refetchInterval: 2000,
   });
 
+  const hiddenQuery = useQuery({
+    queryKey: ["project-hidden-assets", projectId],
+    queryFn: () => listHiddenProjectAssets(projectId as string),
+    enabled: Boolean(projectId),
+    refetchInterval: 5000,
+  });
+  const hiddenInActiveProjectIds = useMemo(
+    () => new Set(hiddenQuery.data ?? []),
+    [hiddenQuery.data],
+  );
+  const invalidateProjectAndLibrary = () => {
+    queryClient.invalidateQueries({ queryKey: ["project-assets"] });
+    queryClient.invalidateQueries({ queryKey: ["project-pipeline"] });
+    queryClient.invalidateQueries({ queryKey: ["project-hidden-assets"] });
+    queryClient.invalidateQueries({ queryKey: ["asset-library"] });
+  };
   const linkMutation = useMutation({
     mutationFn: (asset: Asset) => {
       if (!projectId) throw new Error("Choose a project before adding assets");
       return linkProjectAsset(projectId, asset.id);
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["project-assets"] });
-      queryClient.invalidateQueries({ queryKey: ["project-pipeline"] });
-      queryClient.invalidateQueries({ queryKey: ["asset-library"] });
-    },
+    onSuccess: invalidateProjectAndLibrary,
   });
   const unlinkMutation = useMutation({
     mutationFn: (asset: Asset) => {
       if (!projectId) throw new Error("Choose a project before removing assets");
       return unlinkProjectAsset(projectId, asset.id);
     },
-    onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["project-assets"] });
-      queryClient.invalidateQueries({ queryKey: ["project-pipeline"] });
-      queryClient.invalidateQueries({ queryKey: ["asset-library"] });
+    onSuccess: invalidateProjectAndLibrary,
+  });
+  const hideMutation = useMutation({
+    mutationFn: (asset: Asset) => {
+      if (!projectId) throw new Error("Choose a project before hiding assets");
+      return hideProjectAsset(projectId, asset.id);
     },
+    onSuccess: invalidateProjectAndLibrary,
+  });
+  const unhideMutation = useMutation({
+    mutationFn: (asset: Asset) => {
+      if (!projectId) throw new Error("Choose a project before un-hiding assets");
+      return unhideProjectAsset(projectId, asset.id);
+    },
+    onSuccess: invalidateProjectAndLibrary,
   });
 
   const jobsById = useMemo(() => new Map(jobs.map((job) => [job.id, job])), [jobs]);
@@ -773,26 +943,34 @@ export function AssetLibrary({
                   variant={variant}
                   inCurrentProject={activeAssetIds.has(asset.id)}
                   selected={asset.id === selectedAssetId}
+                  preview={tree.previewByParentId.get(asset.id)}
+                  hiddenInActiveProject={hiddenInActiveProjectIds.has(asset.id)}
                   onSelectAsset={onSelectAsset}
                   onRunTool={onRunTool}
                   onDeleteJob={onDeleteJob}
                   onAddAsset={(a) => linkMutation.mutate(a)}
                   onRemoveAsset={(a) => unlinkMutation.mutate(a)}
+                  onHide={(a) => hideMutation.mutate(a)}
+                  onUnhide={(a) => unhideMutation.mutate(a)}
                 />
                 <AssetTreeChildren
                   parentId={asset.id}
                   childrenByParent={tree.childrenByParent}
+                  previewByParentId={tree.previewByParentId}
                   jobsById={jobsById}
                   specs={specs}
                   demJobs={demJobs}
                   variant={variant}
                   currentProjectAssetIds={activeAssetIds}
+                  hiddenInActiveProjectIds={hiddenInActiveProjectIds}
                   selectedAssetId={selectedAssetId}
                   onSelectAsset={onSelectAsset}
                   onRunTool={onRunTool}
                   onDeleteJob={onDeleteJob}
                   onAddAsset={(a) => linkMutation.mutate(a)}
                   onRemoveAsset={(a) => unlinkMutation.mutate(a)}
+                  onHide={(a) => hideMutation.mutate(a)}
+                  onUnhide={(a) => unhideMutation.mutate(a)}
                 />
               </div>
             </div>
@@ -815,26 +993,34 @@ export function AssetLibrary({
                     variant={variant}
                     inCurrentProject={activeAssetIds.has(asset.id)}
                     selected={asset.id === selectedAssetId}
+                    preview={tree.previewByParentId.get(asset.id)}
+                    hiddenInActiveProject={hiddenInActiveProjectIds.has(asset.id)}
                     onSelectAsset={onSelectAsset}
                     onRunTool={onRunTool}
                     onDeleteJob={onDeleteJob}
                     onAddAsset={(a) => linkMutation.mutate(a)}
                     onRemoveAsset={(a) => unlinkMutation.mutate(a)}
+                    onHide={(a) => hideMutation.mutate(a)}
+                    onUnhide={(a) => unhideMutation.mutate(a)}
                   />
                   <AssetTreeChildren
                     parentId={asset.id}
                     childrenByParent={tree.childrenByParent}
+                    previewByParentId={tree.previewByParentId}
                     jobsById={jobsById}
                     specs={specs}
                     demJobs={demJobs}
                     variant={variant}
                     currentProjectAssetIds={activeAssetIds}
+                    hiddenInActiveProjectIds={hiddenInActiveProjectIds}
                     selectedAssetId={selectedAssetId}
                     onSelectAsset={onSelectAsset}
                     onRunTool={onRunTool}
                     onDeleteJob={onDeleteJob}
                     onAddAsset={(a) => linkMutation.mutate(a)}
                     onRemoveAsset={(a) => unlinkMutation.mutate(a)}
+                    onHide={(a) => hideMutation.mutate(a)}
+                    onUnhide={(a) => unhideMutation.mutate(a)}
                   />
                 </div>
               ))}

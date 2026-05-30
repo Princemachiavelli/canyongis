@@ -1483,6 +1483,35 @@ button.miniButton {
     letter-spacing: 0.04em;
 }
 
+.assetPreviewIcon {
+    flex: 0 0 auto;
+    width: 32px;
+    height: 32px;
+    padding: 0;
+    border: 1px solid #d1dae0;
+    border-radius: 5px;
+    overflow: hidden;
+    background: #f0f3f5;
+    cursor: pointer;
+    line-height: 0;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #65737c;
+}
+
+.assetPreviewIcon img {
+    width: 100%;
+    height: 100%;
+    object-fit: cover;
+    display: block;
+}
+
+.assetPreviewIcon.active {
+    border-color: #1f7fbf;
+    box-shadow: 0 0 0 2px rgba(31, 127, 191, 0.25);
+}
+
 .assetMeta {
     display: flex;
     flex-wrap: wrap;

@@ -212,6 +212,31 @@ export async function unlinkProjectAsset(
   });
 }
 
+export async function hideProjectAsset(
+  projectId: string,
+  assetId: string,
+): Promise<{ hidden: boolean; mode: "hidden" | "unlinked"; asset_id: string; project_id: string }> {
+  return request(`/api/projects/${projectId}/assets/${assetId}/hide`, {
+    method: "POST",
+  });
+}
+
+export async function unhideProjectAsset(
+  projectId: string,
+  assetId: string,
+): Promise<{ unhidden: boolean; asset_id: string; project_id: string }> {
+  return request(`/api/projects/${projectId}/assets/${assetId}/unhide`, {
+    method: "POST",
+  });
+}
+
+export async function listHiddenProjectAssets(projectId: string): Promise<string[]> {
+  const data = await request<{ asset_ids: string[] }>(
+    `/api/projects/${projectId}/assets/hidden`,
+  );
+  return data.asset_ids;
+}
+
 export async function getProjectPipeline(projectId: string): Promise<ProjectPipeline> {
   return request<ProjectPipeline>(`/api/projects/${projectId}/pipeline`);
 }
@@ -295,6 +320,10 @@ export async function setKmlContainer(
     method: "POST",
     body: JSON.stringify({ container_dem_job_id: containerDemJobId }),
   });
+}
+
+export async function syncKmlImport(kmlJobId: string): Promise<Job> {
+  return request<Job>(`/api/jobs/${kmlJobId}/sync-kml`, { method: "POST" });
 }
 
 export async function importRopewikiBulk(args: {

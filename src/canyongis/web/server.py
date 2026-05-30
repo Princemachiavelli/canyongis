@@ -38,6 +38,7 @@ from .auth import (
 from .db import PostgresConfig, apply_migrations
 from .dem_jobs import get_spec, list_specs, normalize_result
 from .dispatcher import DispatchError, submit_tool_job
+from .source_jobs import resync_kml_import
 
 JobStatus = Literal["queued", "running", "succeeded", "failed", "canceled"]
 DEFAULT_PROJECT_NAME = "Personal"
@@ -1320,10 +1321,11 @@ def create_app(
         ``kind`` is a prefix match against the typed taxonomy
         (``raster.score`` matches ``raster.score.ravine.tpi`` etc.). Linked
         rows are flagged with ``linked: true`` and carry the originating
-        project's name on the row.
+        project's name on the row. Assets hidden in this project via
+        ``canyongis_project_hidden_assets`` are excluded.
         """
         _require_project_member(ctx, project_id, user)
-        params: list[Any] = [project_id, project_id]
+        params: list[Any] = [project_id, project_id, project_id]
         sql = f"""
             SELECT a.id, a.project_id, p.name, a.job_id, a.kind, a.path, a.url,
                    {ASSET_BOUNDS_SQL}, a.format, a.media_type, a.size_bytes,
@@ -1332,6 +1334,10 @@ def create_app(
             JOIN canyongis_projects p ON p.id = a.project_id
             LEFT JOIN canyongis_jobs j ON j.id = a.job_id
             WHERE a.project_id = %s AND a.deleted_at IS NULL
+              AND NOT EXISTS (
+                  SELECT 1 FROM canyongis_project_hidden_assets h
+                  WHERE h.project_id = %s AND h.asset_id = a.id
+              )
             UNION ALL
             SELECT a.id, a.project_id, p.name, a.job_id, a.kind, a.path, a.url,
                    {ASSET_BOUNDS_SQL}, a.format, a.media_type, a.size_bytes,
@@ -1416,6 +1422,86 @@ def create_app(
             deleted = (cur.rowcount or 0) > 0
         return {"deleted": deleted, "asset_id": asset_id, "project_id": project_id}
 
+    @app.post("/api/projects/{project_id}/assets/{asset_id}/hide")
+    def hide_project_asset(
+        project_id: str,
+        asset_id: str,
+        user: User = CurrentUserDep,
+    ) -> dict[str, Any]:
+        """Hide an asset from the project view without deleting it.
+
+        For linked assets, unlinks instead (so the asset library still owns the
+        underlying record). For native (project-owned) assets, inserts into
+        ``canyongis_project_hidden_assets`` so it is filtered out of project
+        listings. The asset library is unaffected.
+        """
+        _require_project_member(ctx, project_id, user)
+        with ctx.store.conn.cursor() as cur:
+            cur.execute(
+                "SELECT project_id FROM canyongis_assets WHERE id = %s AND deleted_at IS NULL",
+                (asset_id,),
+            )
+            row = cur.fetchone()
+            if row is None:
+                raise HTTPException(status_code=404, detail=f"asset {asset_id} not found")
+            owner_project = row[0]
+            if owner_project != project_id:
+                cur.execute(
+                    "DELETE FROM canyongis_project_asset_links "
+                    "WHERE project_id = %s AND asset_id = %s",
+                    (project_id, asset_id),
+                )
+                return {
+                    "hidden": (cur.rowcount or 0) > 0,
+                    "mode": "unlinked",
+                    "asset_id": asset_id,
+                    "project_id": project_id,
+                }
+            cur.execute(
+                """
+                INSERT INTO canyongis_project_hidden_assets (project_id, asset_id, hidden_by_user_id)
+                VALUES (%s, %s, %s)
+                ON CONFLICT DO NOTHING
+                """,
+                (project_id, asset_id, user.id),
+            )
+            inserted = (cur.rowcount or 0) > 0
+        return {
+            "hidden": inserted,
+            "mode": "hidden",
+            "asset_id": asset_id,
+            "project_id": project_id,
+        }
+
+    @app.get("/api/projects/{project_id}/assets/hidden")
+    def list_hidden_project_assets(
+        project_id: str, user: User = CurrentUserDep
+    ) -> dict[str, Any]:
+        _require_project_member(ctx, project_id, user)
+        with ctx.store.conn.cursor() as cur:
+            cur.execute(
+                "SELECT asset_id FROM canyongis_project_hidden_assets WHERE project_id = %s",
+                (project_id,),
+            )
+            ids = [row[0] for row in cur.fetchall()]
+        return {"asset_ids": ids}
+
+    @app.post("/api/projects/{project_id}/assets/{asset_id}/unhide")
+    def unhide_project_asset(
+        project_id: str,
+        asset_id: str,
+        user: User = CurrentUserDep,
+    ) -> dict[str, Any]:
+        _require_project_member(ctx, project_id, user)
+        with ctx.store.conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM canyongis_project_hidden_assets "
+                "WHERE project_id = %s AND asset_id = %s",
+                (project_id, asset_id),
+            )
+            unhidden = (cur.rowcount or 0) > 0
+        return {"unhidden": unhidden, "asset_id": asset_id, "project_id": project_id}
+
     @app.get("/api/projects/{project_id}/pipeline")
     def project_pipeline(project_id: str, user: User = CurrentUserDep) -> dict[str, Any]:
         _require_project_member(ctx, project_id, user)
@@ -1426,6 +1512,10 @@ def create_app(
                     SELECT a.id, a.job_id, a.kind, a.path, a.url, a.metadata, a.created_at
                     FROM canyongis_assets a
                     WHERE a.project_id = %s AND a.deleted_at IS NULL
+                      AND NOT EXISTS (
+                          SELECT 1 FROM canyongis_project_hidden_assets h
+                          WHERE h.project_id = %s AND h.asset_id = a.id
+                      )
                     UNION
                     SELECT a.id, a.job_id, a.kind, a.path, a.url, a.metadata, a.created_at
                     FROM canyongis_assets a
@@ -1436,7 +1526,7 @@ def create_app(
                 FROM visible_assets
                 ORDER BY created_at
                 """,
-                (project_id, project_id),
+                (project_id, project_id, project_id),
             )
             assets = [
                 {
@@ -1455,6 +1545,10 @@ def create_app(
                 WITH visible_assets AS (
                     SELECT a.id, a.job_id FROM canyongis_assets a
                     WHERE a.project_id = %s AND a.deleted_at IS NULL
+                      AND NOT EXISTS (
+                          SELECT 1 FROM canyongis_project_hidden_assets h
+                          WHERE h.project_id = %s AND h.asset_id = a.id
+                      )
                     UNION
                     SELECT a.id, a.job_id FROM canyongis_assets a
                     JOIN canyongis_project_asset_links l ON l.asset_id = a.id
@@ -1466,7 +1560,7 @@ def create_app(
                 JOIN visible_assets consumer ON consumer.job_id = i.job_id
                 ORDER BY consumer.id, i.input_key, producer.id
                 """,
-                (project_id, project_id),
+                (project_id, project_id, project_id),
             )
             edges = [
                 {"consumer": row[0], "input_key": row[1], "producer": row[2]}
@@ -1725,6 +1819,90 @@ def create_app(
             if new_container:
                 ctx.store.register_job_inputs(job)
         return asdict(job)
+
+    @app.post("/api/jobs/{kml_job_id}/sync-kml")
+    def sync_kml_import_endpoint(
+        kml_job_id: str,
+        user: User = CurrentUserDep,
+        project_id: str = ActiveProjectDep,
+    ) -> dict[str, Any]:
+        job = ctx.job_or_404(kml_job_id)
+        if job.kind != "kml-import":
+            raise HTTPException(status_code=400, detail="job is not a kml-import")
+        if job.status != "succeeded" or not job.result:
+            raise HTTPException(status_code=400, detail="kml-import job has not succeeded")
+        if job.project_id != project_id:
+            raise HTTPException(status_code=404, detail=f"job not found: {kml_job_id}")
+        existing_source = job.result.get("source")
+        if not isinstance(existing_source, dict):
+            raise HTTPException(status_code=400, detail="kml-import has no source metadata")
+        if existing_source.get("type") not in ("ropewiki", "caltopo", "url"):
+            raise HTTPException(
+                status_code=400,
+                detail="kml-import was not created from a URL and cannot be synced",
+            )
+        kml_path_str = job.result.get("kml_path")
+        if not isinstance(kml_path_str, str) or not kml_path_str:
+            raise HTTPException(status_code=400, detail="kml-import has no stored KML path")
+        kml_path = Path(kml_path_str)
+        progress: list[str] = []
+        try:
+            rebuilt = resync_kml_import(
+                ctx,
+                job_id=kml_job_id,
+                source=existing_source,
+                kml_path=kml_path,
+                progress_cb=progress.append,
+            )
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"sync failed: {exc}") from exc
+        with ctx.lock:
+            now = ctx.now()
+            new_result = dict(job.result)
+            for key in (
+                "kml_path",
+                "kml_url",
+                "out_dir",
+                "bounds_wgs84",
+                "descent_geojson",
+                "approach_geojson",
+                "unclassified_geojson",
+                "points_geojson",
+                "counts",
+            ):
+                if key in rebuilt:
+                    new_result[key] = rebuilt[key]
+            merged_source = dict(rebuilt.get("source") or {})
+            merged_source["synced_at"] = now
+            new_result["source"] = merged_source
+            job.result = new_result
+            job.updated_at = now
+            existing_progress = list(job.progress or [])
+            existing_progress.extend(progress)
+            job.progress = existing_progress[-PROGRESS_CAP:]
+            ctx.store.upsert(job)
+            bounds = new_result.get("bounds_wgs84")
+            try:
+                size_bytes = kml_path.stat().st_size
+            except OSError:
+                size_bytes = None
+            with ctx.store.conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE canyongis_assets
+                    SET bounds_wgs84 = %s, size_bytes = COALESCE(%s, size_bytes)
+                    WHERE job_id = %s AND path = %s
+                    """,
+                    (
+                        Jsonb(bounds) if isinstance(bounds, list) else None,
+                        size_bytes,
+                        kml_job_id,
+                        str(kml_path),
+                    ),
+                )
+        return _job_response(ctx, job)
 
     @app.post("/api/jobs/build-dem")
     def build_dem(

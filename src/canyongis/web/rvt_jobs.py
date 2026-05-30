@@ -8,7 +8,12 @@ from typing import Any
 
 from pydantic import BaseModel, Field
 
-from ..rvt_preview import RVT_VIS_KEYS, RVT_VIS_LABELS, export_rvt_previews
+from ..rvt_preview import (
+    RVT_BASE_LAYER_KEYS,
+    RVT_VIS_KEYS,
+    RVT_VIS_LABELS,
+    export_rvt_previews,
+)
 from .dem_jobs import (
     DemJobSpec,
     LayerSpec,
@@ -86,9 +91,9 @@ register(
             LayerSpec(
                 key=f"panel_rvt_{k}",
                 label=RVT_VIS_LABELS[k],
-                kind="raster-overlay",
+                kind="base-raster" if k in RVT_BASE_LAYER_KEYS else "raster-overlay",
                 url_field=f"panel_rvt_{k}_url",
-                role="relief-visualization",
+                role="base" if k in RVT_BASE_LAYER_KEYS else "relief-visualization",
             )
             for k in RVT_VIS_KEYS
         ),

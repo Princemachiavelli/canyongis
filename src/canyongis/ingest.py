@@ -275,6 +275,54 @@ def list_ropewiki_canyons_in_bbox(
     return out
 
 
+def get_ropewiki_page_coords(ref: RopewikiPageRef) -> tuple[float, float] | None:
+    """Return ``(latitude, longitude)`` for a Ropewiki page, or ``None`` if absent.
+
+    Uses one Semantic MediaWiki ``action=ask`` call with a title selector.
+    Ropewiki's canyon Infobox sets ``Has latitude`` / ``Has longitude``.
+    """
+    if ref.title is None:
+        page = _get_page(ref)
+        title = page.get("title")
+        if not isinstance(title, str) or not title:
+            return None
+    else:
+        title = ref.title
+    query = "|".join(
+        [f"[[{title.replace('_', ' ')}]]", "?Has latitude", "?Has longitude", "limit=1"]
+    )
+    data = _ropewiki_query(action="ask", query=query)
+
+    def _first_float(values: list[Any]) -> float | None:
+        for value in values:
+            if isinstance(value, (int, float)):
+                return float(value)
+            if isinstance(value, dict):
+                for key in ("value", "raw"):
+                    v = value.get(key)
+                    if isinstance(v, (int, float)):
+                        return float(v)
+                    if isinstance(v, str):
+                        try:
+                            return float(v)
+                        except ValueError:
+                            continue
+            if isinstance(value, str):
+                try:
+                    return float(value)
+                except ValueError:
+                    continue
+        return None
+
+    for _result_title, info in _smw_results(data):
+        printouts = info.get("printouts") or {}
+        lat = _first_float(printouts.get("Has latitude") or [])
+        lon = _first_float(printouts.get("Has longitude") or [])
+        if lat is not None and lon is not None:
+            return (lat, lon)
+    return None
+
+
 def batch_resolve_page_kmls(page_titles: list[str]) -> dict[str, str | None]:
     """For each page title, return the first ``.kml`` File attachment title (or None).
 

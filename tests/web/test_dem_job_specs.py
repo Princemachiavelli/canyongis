@@ -69,6 +69,19 @@ def test_normalize_result_preserves_existing_metadata() -> None:
     assert normalized == result
 
 
+def test_rvt_vat_registers_as_base_raster_layer() -> None:
+    spec = get_spec("rvt")
+    assert spec is not None
+    vat_layer = next((L for L in spec.layers if L.key == "panel_rvt_vat"), None)
+    assert vat_layer is not None, "VAT layer should be registered under the rvt job"
+    assert vat_layer.kind == "base-raster"
+    assert vat_layer.role == "base"
+    slope_layer = next(L for L in spec.layers if L.key == "panel_rvt_slope")
+    assert slope_layer.kind == "raster-overlay"
+    assert slope_layer.role == "relief-visualization"
+    assert any(v.key == "vat" for v in spec.visualizations)
+
+
 def test_kml_import_output_uses_route_name_as_label() -> None:
     spec = get_spec("kml-import")
     assert spec is not None

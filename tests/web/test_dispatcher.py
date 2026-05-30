@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -215,6 +216,177 @@ def test_source_tools_are_exposed_in_specs_and_tools(
     assert sum(1 for tool in tools if tool["id"] == "build-dem") == 1
 
 
+def test_kml_source_classifier_recognizes_url_types() -> None:
+    assert source_jobs.classify_kml_source("https://ropewiki.com/Foo") == "ropewiki"
+    assert source_jobs.classify_kml_source("https://caltopo.com/m/ABC") == "caltopo"
+    assert source_jobs.classify_kml_source("https://example.com/route.kml") == "url"
+    assert source_jobs.classify_kml_source("Foo_Canyon") == "ropewiki"
+
+
+def test_caltopo_kml_url_rewrites_public_map_url() -> None:
+    # CalTopo's public map URL has no usable .kml endpoint — fetching .kml redirects
+    # to a login page — so we route to the JSON since/0 feed and convert features
+    # to KML in-process. Also strip slug + #fragment when extracting the map ID.
+    assert (
+        source_jobs.caltopo_kml_url("https://caltopo.com/m/ABC123")
+        == "https://caltopo.com/api/v1/map/ABC123/since/0"
+    )
+    assert (
+        source_jobs.caltopo_kml_url("https://caltopo.com/m/ABC123/slug")
+        == "https://caltopo.com/api/v1/map/ABC123/since/0"
+    )
+    # Regression: the URL the user hit in production: caltopo.com/m/<ID>#
+    assert (
+        source_jobs.caltopo_kml_url("https://caltopo.com/m/90P3LRQ#")
+        == "https://caltopo.com/api/v1/map/90P3LRQ/since/0"
+    )
+
+
+def test_caltopo_features_to_kml_converts_points_and_lines() -> None:
+    # Shape mirrors what caltopo.com/api/v1/map/<ID>/since/0 actually returns
+    # (see real fetch against 90P3LRQ during development).
+    sample = {
+        "result": {
+            "state": {
+                "features": [
+                    {
+                        "geometry": {
+                            "coordinates": [-117.7550809, 34.356111, 0, 0],
+                            "type": "Point",
+                        },
+                        "type": "Feature",
+                        "properties": {
+                            "title": "Big Horn Mine",
+                            "description": "Rock fall danger above",
+                            "class": "Marker",
+                        },
+                    },
+                    {
+                        "geometry": {
+                            "coordinates": [
+                                [-117.75222, 34.37297],
+                                [-117.75229, 34.37296],
+                                [-117.75268, 34.37308],
+                            ],
+                            "type": "LineString",
+                        },
+                        "type": "Feature",
+                        "properties": {"title": "Approach", "class": "Shape"},
+                    },
+                ]
+            }
+        }
+    }
+    kml = source_jobs._caltopo_features_to_kml(sample, document_name="90P3LRQ")
+    text = kml.decode("utf-8")
+    assert "<name>90P3LRQ</name>" in text
+    assert "<name>Big Horn Mine</name>" in text
+    assert "<description>Rock fall danger above</description>" in text
+    assert "-117.7550809,34.356111,0" in text
+    assert "<LineString>" in text
+    assert "-117.75222,34.37297,0 -117.75229,34.37296,0 -117.75268,34.37308,0" in text
+
+
+def test_caltopo_kml_import_uses_json_endpoint_and_writes_features_kml(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Drive _run_ropewiki_kml_import with the CalTopo URL the user reported."""
+    sample_json = json.dumps(
+        {
+            "result": {
+                "state": {
+                    "features": [
+                        {
+                            "geometry": {
+                                "coordinates": [-117.755, 34.356],
+                                "type": "Point",
+                            },
+                            "type": "Feature",
+                            "properties": {"title": "Big Horn Mine"},
+                        }
+                    ]
+                }
+            }
+        }
+    ).encode("utf-8")
+    captured: list[str] = []
+
+    def fake_fetch(url: str, timeout: float = 120.0) -> bytes:
+        captured.append(url)
+        return sample_json
+
+    monkeypatch.setattr(source_jobs, "_fetch_url_bytes", fake_fetch)
+    monkeypatch.setattr(
+        source_jobs,
+        "_assign_kml_container_if_valid",
+        lambda *a, **k: None,
+    )
+
+    ctx = SimpleNamespace(
+        output_root=tmp_path,
+        output_url=lambda p: f"file://{p}",
+        job_or_404=lambda job_id: None,
+    )
+    req = source_jobs.RopewikiKmlImportRequest(source="https://caltopo.com/m/90P3LRQ#")
+
+    result = source_jobs._run_ropewiki_kml_import(
+        ctx=ctx,
+        req=req,
+        params={},
+        progress_cb=lambda _msg: None,
+        job_id="job-1",
+    )
+
+    assert captured == ["https://caltopo.com/api/v1/map/90P3LRQ/since/0"]
+    assert result["source"] == {
+        "type": "caltopo",
+        "source": "https://caltopo.com/m/90P3LRQ#",
+        "download_url": "https://caltopo.com/api/v1/map/90P3LRQ/since/0",
+        "map_id": "90P3LRQ",
+    }
+    assert Path(result["kml_path"]).exists()
+    assert result["counts"]["points"] == 1
+
+
+def test_network_link_follower_chases_inner_href() -> None:
+    network_link_kml = b"""<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <NetworkLink>
+    <name>Live</name>
+    <Link>
+      <href>https://example.com/real.kml?token=xyz</href>
+      <refreshInterval>3600</refreshInterval>
+    </Link>
+  </NetworkLink>
+</kml>"""
+    actual_kml = b"""<?xml version="1.0" encoding="UTF-8"?>
+<kml><Document><Placemark><Point><coordinates>0,0,0</coordinates></Point></Placemark></Document></kml>"""
+    target = source_jobs._network_link_target(network_link_kml, "https://caltopo.com/m/ID.kml")
+    assert target == "https://example.com/real.kml?token=xyz"
+    # _fetch_kml_following_network_link should follow once and stop when the
+    # second fetch yields a non-network-link KML.
+    fetched: list[str] = []
+
+    def fake_fetch(url: str, timeout: float = 120.0) -> bytes:
+        fetched.append(url)
+        return network_link_kml if url.startswith("https://caltopo.com/") else actual_kml
+
+    orig = source_jobs._fetch_url_bytes
+    source_jobs._fetch_url_bytes = fake_fetch
+    try:
+        content, final = source_jobs._fetch_kml_following_network_link(
+            "https://caltopo.com/m/ID.kml", progress_cb=lambda _m: None
+        )
+    finally:
+        source_jobs._fetch_url_bytes = orig
+    assert fetched == [
+        "https://caltopo.com/m/ID.kml",
+        "https://example.com/real.kml?token=xyz",
+    ]
+    assert final == "https://example.com/real.kml?token=xyz"
+    assert content == actual_kml
+
+
 def test_bulk_ropewiki_import_names_children_and_preserves_container(monkeypatch) -> None:
     calls: list[dict[str, Any]] = []
     parent = Job(
@@ -248,11 +420,6 @@ def test_bulk_ropewiki_import_names_children_and_preserves_container(monkeypatch
         lambda bounds, max_results: [
             {"title": "Fantastic Mr. Fox Canyon", "latitude": 37.1, "longitude": -112.9}
         ],
-    )
-    monkeypatch.setattr(
-        source_jobs,
-        "batch_resolve_page_kmls",
-        lambda titles: {"Fantastic Mr. Fox Canyon": "File:Fantastic_Mr._Fox_Canyon.kml"},
     )
     monkeypatch.setattr("canyongis.web.dispatcher.submit_tool_job", fake_submit_tool_job)
 
