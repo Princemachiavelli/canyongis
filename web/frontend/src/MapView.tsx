@@ -4,7 +4,7 @@ import L from "leaflet";
 import "@geoman-io/leaflet-geoman-free";
 import { PMTiles, leafletRasterLayer } from "pmtiles";
 import { GeoJSON, MapContainer, Rectangle, TileLayer, useMap } from "react-leaflet";
-import type { Bounds } from "./api";
+import { getProjectElevation, type Bounds, type ElevationProbe } from "./api";
 import type { LayerDescriptor } from "./layers";
 import { useAppStore } from "./state";
 
@@ -38,6 +38,85 @@ function PanController() {
     if (!panRequest) return;
     map.fitBounds(toLeafletBounds(panRequest.bounds), { padding: [24, 24] });
   }, [map, panRequest]);
+
+  return null;
+}
+
+function formatLatLng(value: number): string {
+  return value.toFixed(6);
+}
+
+function formatElevation(value: number): string {
+  const feet = value * 3.28084;
+  return `${value.toFixed(1)} m (${Math.round(feet).toLocaleString()} ft)`;
+}
+
+function coordinateProbePopup(
+  lat: number,
+  lng: number,
+  result: "loading" | "no-project" | "error" | ElevationProbe,
+): string {
+  let elevation = "Checking project DEMs...";
+  let source = "";
+  if (result === "no-project") {
+    elevation = "Select a project to check elevation.";
+  } else if (result === "error") {
+    elevation = "Elevation lookup failed.";
+  } else if (result !== "loading") {
+    if (result.elevation_m === null) {
+      elevation = result.asset_label
+        ? "Project DEM has no valid elevation at this point."
+        : "No project DEM covers this point.";
+    } else {
+      elevation = formatElevation(result.elevation_m);
+    }
+    if (result.asset_label) {
+      source = `<div class="coordinateProbeSource">DEM: ${escapeHtml(result.asset_label)}</div>`;
+    }
+  }
+  return [
+    '<div class="coordinateProbe">',
+    '<strong>Map Point</strong>',
+    `<div>Lat: <code>${formatLatLng(lat)}</code></div>`,
+    `<div>Lng: <code>${formatLatLng(lng)}</code></div>`,
+    `<div>Elevation: ${escapeHtml(elevation)}</div>`,
+    source,
+    "</div>",
+  ].join("");
+}
+
+function CoordinateProbe() {
+  const map = useMap();
+  const activeProjectId = useAppStore((state) => state.activeProjectId);
+  const requestNonce = useRef(0);
+
+  useEffect(() => {
+    const onContextMenu = (event: L.LeafletMouseEvent) => {
+      event.originalEvent.preventDefault();
+      const { lat, lng } = event.latlng;
+      const nonce = (requestNonce.current += 1);
+      const popup = L.popup({ className: "coordinateProbePopup" })
+        .setLatLng(event.latlng)
+        .setContent(coordinateProbePopup(lat, lng, activeProjectId ? "loading" : "no-project"))
+        .openOn(map);
+
+      if (!activeProjectId) return;
+      void getProjectElevation(activeProjectId, lat, lng)
+        .then((result) => {
+          if (requestNonce.current !== nonce) return;
+          popup.setContent(coordinateProbePopup(lat, lng, result));
+        })
+        .catch(() => {
+          if (requestNonce.current !== nonce) return;
+          popup.setContent(coordinateProbePopup(lat, lng, "error"));
+        });
+    };
+
+    map.on("contextmenu", onContextMenu);
+    return () => {
+      map.off("contextmenu", onContextMenu);
+    };
+  }, [activeProjectId, map]);
 
   return null;
 }
@@ -520,6 +599,7 @@ export function MapView({ layers = [] }: { layers?: LayerDescriptor[] }) {
       />
       <MapControls />
       <PanController />
+      <CoordinateProbe />
       <DebugExpose />
       {layers.map((descriptor) => (
         <LayerRenderer key={descriptor.id} descriptor={descriptor} />

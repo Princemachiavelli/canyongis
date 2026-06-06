@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import shutil
 import traceback
@@ -19,11 +20,13 @@ from typing import Annotated, Any, Literal
 
 import geopandas as gpd
 import psycopg
+import rasterio
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field, ValidationError
+from rasterio.warp import transform as transform_coords
 
 from ..validate import parse_kml
 from .assets import _is_path_key, extract_asset_candidates, new_asset_id
@@ -970,6 +973,108 @@ def _require_project_member(ctx: WebContext, project_id: str, user: User) -> Non
             )
 
 
+def _coerce_wgs84_bounds(value: Any) -> tuple[float, float, float, float] | None:
+    if not isinstance(value, list | tuple) or len(value) != 4:
+        return None
+    try:
+        west, south, east, north = (float(v) for v in value)
+    except (TypeError, ValueError):
+        return None
+    if not all(math.isfinite(v) for v in (west, south, east, north)):
+        return None
+    return west, south, east, north
+
+
+def _bounds_contain_lng_lat(
+    bounds: tuple[float, float, float, float], lng: float, lat: float
+) -> bool:
+    west, south, east, north = bounds
+    return west <= lng <= east and south <= lat <= north
+
+
+def _bounds_area(bounds: tuple[float, float, float, float]) -> float:
+    west, south, east, north = bounds
+    return max(0.0, east - west) * max(0.0, north - south)
+
+
+def _visible_dem_assets_for_point(
+    ctx: WebContext, project_id: str, *, lat: float, lng: float
+) -> list[dict[str, Any]]:
+    with ctx.store.conn.cursor() as cur:
+        cur.execute(
+            f"""
+            WITH visible_dem_assets AS (
+                SELECT a.id, a.path, {ASSET_BOUNDS_SQL} AS bounds_wgs84,
+                       COALESCE(a.metadata->>'label', j.result->>'name', a.id) AS label,
+                       a.created_at
+                FROM canyongis_assets a
+                LEFT JOIN canyongis_jobs j ON j.id = a.job_id
+                WHERE a.project_id = %s AND a.deleted_at IS NULL AND a.kind = 'raster.dem'
+                  AND NOT EXISTS (
+                      SELECT 1 FROM canyongis_project_hidden_assets h
+                      WHERE h.project_id = %s AND h.asset_id = a.id
+                  )
+                UNION ALL
+                SELECT a.id, a.path, {ASSET_BOUNDS_SQL} AS bounds_wgs84,
+                       COALESCE(a.metadata->>'label', j.result->>'name', a.id) AS label,
+                       a.created_at
+                FROM canyongis_assets a
+                JOIN canyongis_project_asset_links l ON l.asset_id = a.id
+                LEFT JOIN canyongis_jobs j ON j.id = a.job_id
+                WHERE l.project_id = %s AND a.deleted_at IS NULL AND a.kind = 'raster.dem'
+            )
+            SELECT id, path, bounds_wgs84, label, created_at
+            FROM visible_dem_assets
+            WHERE path IS NOT NULL
+            """,
+            (project_id, project_id, project_id),
+        )
+        candidates: list[dict[str, Any]] = []
+        for asset_id, path, raw_bounds, label, created_at in cur.fetchall():
+            bounds = _coerce_wgs84_bounds(raw_bounds)
+            if bounds is None or not _bounds_contain_lng_lat(bounds, lng, lat):
+                continue
+            candidates.append(
+                {
+                    "asset_id": asset_id,
+                    "path": path,
+                    "bounds": bounds,
+                    "label": label or asset_id,
+                    "created_at": created_at,
+                }
+            )
+    candidates.sort(key=lambda row: str(row["created_at"] or ""), reverse=True)
+    candidates.sort(key=lambda row: _bounds_area(row["bounds"]))
+    return candidates
+
+
+def _sample_dem_elevation_m(path: str, *, lat: float, lng: float) -> float | None:
+    dem_path = Path(path)
+    if not dem_path.exists():
+        return None
+    try:
+        with rasterio.open(dem_path) as src:
+            if src.crs is not None:
+                projected = transform_coords("EPSG:4326", src.crs, [lng], [lat])
+                xs, ys = projected[0], projected[1]
+                x, y = float(xs[0]), float(ys[0])
+            else:
+                x, y = lng, lat
+            row, col = src.index(x, y)
+            if row < 0 or row >= src.height or col < 0 or col >= src.width:
+                return None
+            sample = next(src.sample([(x, y)], masked=True))
+            mask = getattr(sample, "mask", None)
+            if mask is not None and bool(mask[0]):
+                return None
+            value = float(sample[0])
+            if src.nodata is not None and value == float(src.nodata):
+                return None
+            return value if math.isfinite(value) else None
+    except Exception:
+        return None
+
+
 def _load_asset_summary(cur, asset_id: str) -> dict[str, Any] | None:
     cur.execute(
         f"""
@@ -1084,6 +1189,33 @@ def _require_asset_access(ctx: WebContext, asset_id: str, user: User) -> None:
         )
         if cur.fetchone() is None:
             raise HTTPException(status_code=404, detail=f"asset {asset_id} not found")
+
+
+def _asset_projects(cur, asset_ids: list[str], user: User) -> dict[str, list[dict[str, str]]]:
+    if not asset_ids:
+        return {}
+    cur.execute(
+        """
+        SELECT DISTINCT x.asset_id, x.project_id, p.name
+        FROM (
+            SELECT a.id AS asset_id, a.project_id
+            FROM canyongis_assets a
+            WHERE a.id = ANY(%s)
+            UNION
+            SELECT l.asset_id, l.project_id
+            FROM canyongis_project_asset_links l
+            JOIN canyongis_project_memberships m ON m.project_id = l.project_id
+            WHERE l.asset_id = ANY(%s) AND m.user_id = %s
+        ) x
+        JOIN canyongis_projects p ON p.id = x.project_id
+        ORDER BY p.name, x.project_id
+        """,
+        (asset_ids, asset_ids, user.id),
+    )
+    projects: dict[str, list[dict[str, str]]] = {}
+    for asset_id, project_id, project_name in cur.fetchall():
+        projects.setdefault(asset_id, []).append({"id": project_id, "name": project_name})
+    return projects
 
 
 ActiveProjectDep = Depends(_active_project_id)
@@ -1288,6 +1420,7 @@ def create_app(
                 params,
             )
             rows = cur.fetchall()
+            projects_by_asset = _asset_projects(cur, [row[0] for row in rows], user)
         assets = [
             {
                 "id": row[0],
@@ -1305,6 +1438,7 @@ def create_app(
                 "created_at": row[12],
                 "linked": row[13],
                 "linked_at": row[14],
+                "projects": projects_by_asset.get(row[0], []),
             }
             for row in rows
         ]
@@ -1355,6 +1489,7 @@ def create_app(
         with ctx.store.conn.cursor() as cur:
             cur.execute(sql, params)
             rows = cur.fetchall()
+            projects_by_asset = _asset_projects(cur, [row[0] for row in rows], user)
         assets = [
             {
                 "id": row[0],
@@ -1372,6 +1507,7 @@ def create_app(
                 "created_at": row[12],
                 "linked": row[13],
                 "linked_at": row[14],
+                "projects": projects_by_asset.get(row[0], []),
             }
             for row in rows
         ]
@@ -1474,9 +1610,7 @@ def create_app(
         }
 
     @app.get("/api/projects/{project_id}/assets/hidden")
-    def list_hidden_project_assets(
-        project_id: str, user: User = CurrentUserDep
-    ) -> dict[str, Any]:
+    def list_hidden_project_assets(project_id: str, user: User = CurrentUserDep) -> dict[str, Any]:
         _require_project_member(ctx, project_id, user)
         with ctx.store.conn.cursor() as cur:
             cur.execute(
@@ -1485,6 +1619,41 @@ def create_app(
             )
             ids = [row[0] for row in cur.fetchall()]
         return {"asset_ids": ids}
+
+    @app.get("/api/projects/{project_id}/elevation")
+    def project_elevation_probe(
+        project_id: str,
+        lat: float,
+        lng: float,
+        user: User = CurrentUserDep,
+    ) -> dict[str, Any]:
+        _require_project_member(ctx, project_id, user)
+        if not (
+            math.isfinite(lat) and math.isfinite(lng) and -90 <= lat <= 90 and -180 <= lng <= 180
+        ):
+            raise HTTPException(status_code=400, detail="invalid lat/lng")
+
+        first_match: dict[str, Any] | None = None
+        for candidate in _visible_dem_assets_for_point(ctx, project_id, lat=lat, lng=lng):
+            if first_match is None:
+                first_match = candidate
+            elevation = _sample_dem_elevation_m(str(candidate["path"]), lat=lat, lng=lng)
+            if elevation is not None:
+                return {
+                    "lat": lat,
+                    "lng": lng,
+                    "elevation_m": elevation,
+                    "asset_id": candidate["asset_id"],
+                    "asset_label": candidate["label"],
+                }
+
+        return {
+            "lat": lat,
+            "lng": lng,
+            "elevation_m": None,
+            "asset_id": first_match["asset_id"] if first_match else None,
+            "asset_label": first_match["label"] if first_match else None,
+        }
 
     @app.post("/api/projects/{project_id}/assets/{asset_id}/unhide")
     def unhide_project_asset(

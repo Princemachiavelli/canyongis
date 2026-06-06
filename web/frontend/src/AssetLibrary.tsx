@@ -79,6 +79,17 @@ type AssetTreeData = {
   previewByParentId: Map<string, Asset>;
 };
 
+type JobOutputRun = {
+  job: Job;
+  assets: Asset[];
+};
+
+type JobOutputBundle = {
+  key: string;
+  label: string;
+  runs: JobOutputRun[];
+};
+
 function isRouteAsset(asset: Asset): boolean {
   return asset.kind === "vector.kml.route" || asset.kind.startsWith("vector.kml.route.");
 }
@@ -100,6 +111,12 @@ function demJobLabel(job: Job): string {
   const name =
     (job.result?.name as string | undefined) ?? (job.params.name as string | undefined);
   return name ? `${name} · ${job.id.slice(0, 8)}` : job.id;
+}
+
+function jobRunLabel(job: Job): string {
+  const name =
+    (job.result?.name as string | undefined) ?? (job.params.name as string | undefined);
+  return name ? `${name} · ${job.id.slice(0, 8)}` : job.id.slice(0, 8);
 }
 
 function formatBytes(value: number | null): string | undefined {
@@ -139,6 +156,14 @@ function assetOutputKey(asset: Asset): string | undefined {
 function assetRole(asset: Asset): string | undefined {
   const role = asset.metadata.role;
   return typeof role === "string" && role ? role : undefined;
+}
+
+function assetProjectsText(asset: Asset): string | undefined {
+  if (!asset.projects || asset.projects.length === 0) return undefined;
+  const names = [...new Set(asset.projects.map((project) => project.name))].sort((a, b) =>
+    a.localeCompare(b),
+  );
+  return names.length > 0 ? names.join(", ") : undefined;
 }
 
 function previewLayerKey(asset: Asset): string | undefined {
@@ -311,6 +336,48 @@ function groupAssets(assets: Asset[]): AssetGroup[] {
   return [...byKey.values()].sort((a, b) => a.label.localeCompare(b.label));
 }
 
+function buildJobOutputBundles(
+  assets: Asset[],
+  jobsById: Map<string, Job>,
+  specs: JobSpec[],
+): { bundles: JobOutputBundle[]; looseAssets: Asset[] } {
+  const specByKey = new Map(specs.map((spec) => [spec.key, spec]));
+  const runsByKind = new Map<string, Map<string, JobOutputRun>>();
+  const bundledAssetIds = new Set<string>();
+
+  for (const asset of assets) {
+    if (!asset.job_id || isPreviewAsset(asset)) continue;
+    const job = jobsById.get(asset.job_id);
+    if (!job) continue;
+    const runs = runsByKind.get(job.kind) ?? new Map<string, JobOutputRun>();
+    const run = runs.get(job.id) ?? { job, assets: [] };
+    run.assets.push(asset);
+    runs.set(job.id, run);
+    runsByKind.set(job.kind, runs);
+  }
+
+  const bundles: JobOutputBundle[] = [];
+  for (const [kind, runsMap] of runsByKind) {
+    const runs = [...runsMap.values()]
+      .map((run) => ({ ...run, assets: run.assets.sort(assetSort) }))
+      .sort((a, b) => (a.job.updated_at < b.job.updated_at ? 1 : -1));
+    const shouldBundle = runs.length > 1 || runs.some((run) => run.assets.length > 1);
+    if (!shouldBundle) continue;
+    for (const run of runs) for (const asset of run.assets) bundledAssetIds.add(asset.id);
+    bundles.push({
+      key: kind,
+      label: specByKey.get(kind)?.label ?? kind,
+      runs,
+    });
+  }
+
+  bundles.sort((a, b) => a.label.localeCompare(b.label));
+  return {
+    bundles,
+    looseAssets: assets.filter((asset) => !bundledAssetIds.has(asset.id)),
+  };
+}
+
 function ContainerPicker({
   job,
   demJobs,
@@ -442,6 +509,7 @@ function AssetRow({
   const tools = useMemo(() => compatibleSpecs(asset, specs), [asset, specs]);
   const size = formatBytes(asset.size_bytes);
   const boundsText = formatBounds(bounds);
+  const projectsText = assetProjectsText(asset);
   const canDeleteJob = Boolean(
     job && !asset.linked && job.status !== "queued" && job.status !== "running",
   );
@@ -515,6 +583,7 @@ function AssetRow({
         {job && <span>job {job.id.slice(0, 8)}</span>}
         {asset.path && <span>{asset.path.split("/").pop()}</span>}
         {size && <span>{size}</span>}
+        {projectsText && <span>projects {projectsText}</span>}
         {boundsText && <span>bounds {boundsText}</span>}
       </div>
       {isRouteAsset(asset) && job && (
@@ -693,6 +762,145 @@ function AssetRow({
   );
 }
 
+function JobOutputGroup({
+  bundle,
+  childrenByParent,
+  previewByParentId,
+  jobsById,
+  specs,
+  demJobs,
+  variant,
+  currentProjectAssetIds,
+  hiddenInActiveProjectIds,
+  selectedAssetId,
+  onSelectAsset,
+  onRunTool,
+  onDeleteJob,
+  onAddAsset,
+  onRemoveAsset,
+  onHide,
+  onUnhide,
+}: {
+  bundle: JobOutputBundle;
+  childrenByParent: Map<string, Asset[]>;
+  previewByParentId: Map<string, Asset>;
+  jobsById: Map<string, Job>;
+  specs: JobSpec[];
+  demJobs: Job[];
+  variant: "project" | "library";
+  currentProjectAssetIds: Set<string>;
+  hiddenInActiveProjectIds: Set<string>;
+  selectedAssetId?: string;
+  onSelectAsset: (assetId: string) => void;
+  onRunTool: AssetLibraryProps["onRunTool"];
+  onDeleteJob: AssetLibraryProps["onDeleteJob"];
+  onAddAsset?: (asset: Asset) => void;
+  onRemoveAsset?: (asset: Asset) => void;
+  onHide?: AssetRowExtras["onHide"];
+  onUnhide?: AssetRowExtras["onUnhide"];
+}) {
+  const [selectedJobId, setSelectedJobId] = useState(bundle.runs[0]?.job.id ?? "");
+  const selectedRun = bundle.runs.find((run) => run.job.id === selectedJobId) ?? bundle.runs[0];
+  const [selectedOutputId, setSelectedOutputId] = useState(selectedRun?.assets[0]?.id ?? "");
+  const selectedAsset =
+    selectedRun?.assets.find((asset) => asset.id === selectedOutputId) ?? selectedRun?.assets[0];
+  const outputCount = bundle.runs.reduce((sum, run) => sum + run.assets.length, 0);
+
+  useEffect(() => {
+    if (!bundle.runs.some((run) => run.job.id === selectedJobId)) {
+      setSelectedJobId(bundle.runs[0]?.job.id ?? "");
+    }
+  }, [bundle.runs, selectedJobId]);
+
+  useEffect(() => {
+    if (!selectedRun?.assets.some((asset) => asset.id === selectedOutputId)) {
+      setSelectedOutputId(selectedRun?.assets[0]?.id ?? "");
+    }
+  }, [selectedRun, selectedOutputId]);
+
+  if (!selectedRun || !selectedAsset) return null;
+
+  return (
+    <details className="assetTypeGroup jobOutputGroup" open>
+      <summary>
+        <span>{bundle.label}</span>
+        <span className="assetCount">{outputCount}</span>
+      </summary>
+      <div className="jobOutputControls">
+        {bundle.runs.length > 1 && (
+          <label>
+            <span>Run</span>
+            <select
+              value={selectedRun.job.id}
+              onChange={(event) => setSelectedJobId(event.target.value)}
+            >
+              {bundle.runs.map((run) => (
+                <option key={run.job.id} value={run.job.id}>
+                  {jobRunLabel(run.job)}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+        {selectedRun.assets.length > 1 && (
+          <label>
+            <span>Output</span>
+            <select
+              value={selectedAsset.id}
+              onChange={(event) => setSelectedOutputId(event.target.value)}
+            >
+              {selectedRun.assets.map((asset) => (
+                <option key={asset.id} value={asset.id}>
+                  {assetName(asset, selectedRun.job)}
+                </option>
+              ))}
+            </select>
+          </label>
+        )}
+      </div>
+      <div className="assetTreeNode">
+        <AssetRow
+          asset={selectedAsset}
+          job={selectedRun.job}
+          specs={specs}
+          demJobs={demJobs}
+          variant={variant}
+          inCurrentProject={currentProjectAssetIds.has(selectedAsset.id)}
+          selected={selectedAsset.id === selectedAssetId}
+          preview={previewByParentId.get(selectedAsset.id)}
+          hiddenInActiveProject={hiddenInActiveProjectIds.has(selectedAsset.id)}
+          onSelectAsset={onSelectAsset}
+          onRunTool={onRunTool}
+          onDeleteJob={onDeleteJob}
+          onAddAsset={onAddAsset}
+          onRemoveAsset={onRemoveAsset}
+          onHide={onHide}
+          onUnhide={onUnhide}
+        />
+        <AssetTreeChildren
+          parentId={selectedAsset.id}
+          childrenByParent={childrenByParent}
+          previewByParentId={previewByParentId}
+          jobsById={jobsById}
+          specs={specs}
+          demJobs={demJobs}
+          variant={variant}
+          currentProjectAssetIds={currentProjectAssetIds}
+          hiddenInActiveProjectIds={hiddenInActiveProjectIds}
+          selectedAssetId={selectedAssetId}
+          onSelectAsset={onSelectAsset}
+          onRunTool={onRunTool}
+          onDeleteJob={onDeleteJob}
+          onAddAsset={onAddAsset}
+          onRemoveAsset={onRemoveAsset}
+          onHide={onHide}
+          onUnhide={onUnhide}
+        />
+      </div>
+    </details>
+  );
+}
+
 function AssetTreeChildren({
   parentId,
   childrenByParent,
@@ -730,10 +938,37 @@ function AssetTreeChildren({
   onHide?: AssetRowExtras["onHide"];
   onUnhide?: AssetRowExtras["onUnhide"];
 }) {
-  const groups = groupAssets(childrenByParent.get(parentId) ?? []);
-  if (groups.length === 0) return null;
+  const { bundles, looseAssets } = buildJobOutputBundles(
+    childrenByParent.get(parentId) ?? [],
+    jobsById,
+    specs,
+  );
+  const groups = groupAssets(looseAssets);
+  if (groups.length === 0 && bundles.length === 0) return null;
   return (
     <div className="assetTreeChildren">
+      {bundles.map((bundle) => (
+        <JobOutputGroup
+          key={`${parentId}:job:${bundle.key}`}
+          bundle={bundle}
+          childrenByParent={childrenByParent}
+          previewByParentId={previewByParentId}
+          jobsById={jobsById}
+          specs={specs}
+          demJobs={demJobs}
+          variant={variant}
+          currentProjectAssetIds={currentProjectAssetIds}
+          hiddenInActiveProjectIds={hiddenInActiveProjectIds}
+          selectedAssetId={selectedAssetId}
+          onSelectAsset={onSelectAsset}
+          onRunTool={onRunTool}
+          onDeleteJob={onDeleteJob}
+          onAddAsset={onAddAsset}
+          onRemoveAsset={onRemoveAsset}
+          onHide={onHide}
+          onUnhide={onUnhide}
+        />
+      ))}
       {groups.map((group) => (
         <details key={`${parentId}:${group.key}`} className="assetTypeGroup">
           <summary>
@@ -883,6 +1118,10 @@ export function AssetLibrary({
   }, [assetsQuery.data, jobsById, pipelineQuery.data, search, variant]);
   const demRoots = tree.roots.filter((asset) => asset.kind === "raster.dem");
   const otherRoots = tree.roots.filter((asset) => asset.kind !== "raster.dem");
+  const rootJobOutputs = useMemo(
+    () => buildJobOutputBundles(otherRoots, jobsById, specs),
+    [jobsById, otherRoots, specs],
+  );
   const activeAssetIds = currentProjectAssetIds ?? new Set((assetsQuery.data ?? []).map((a) => a.id));
   const title = variant === "library" ? "Asset Library" : "Current Project";
 
@@ -976,7 +1215,29 @@ export function AssetLibrary({
             </div>
           </details>
         ))}
-        {groupAssets(otherRoots).map((group) => (
+        {rootJobOutputs.bundles.map((bundle) => (
+          <JobOutputGroup
+            key={`root-job:${bundle.key}`}
+            bundle={bundle}
+            childrenByParent={tree.childrenByParent}
+            previewByParentId={tree.previewByParentId}
+            jobsById={jobsById}
+            specs={specs}
+            demJobs={demJobs}
+            variant={variant}
+            currentProjectAssetIds={activeAssetIds}
+            hiddenInActiveProjectIds={hiddenInActiveProjectIds}
+            selectedAssetId={selectedAssetId}
+            onSelectAsset={onSelectAsset}
+            onRunTool={onRunTool}
+            onDeleteJob={onDeleteJob}
+            onAddAsset={(a) => linkMutation.mutate(a)}
+            onRemoveAsset={(a) => unlinkMutation.mutate(a)}
+            onHide={(a) => hideMutation.mutate(a)}
+            onUnhide={(a) => unhideMutation.mutate(a)}
+          />
+        ))}
+        {groupAssets(rootJobOutputs.looseAssets).map((group) => (
           <details key={`root:${group.key}`} className="assetGroup" open>
             <summary>
               <span>{group.label}</span>

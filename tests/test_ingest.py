@@ -447,6 +447,19 @@ def test_query_tnm_products_reports_sciencebase_outage_payload(monkeypatch):
     assert "RemoteDisconnected" in str(exc.value)
 
 
+def test_query_tnm_products_reports_tnm_error_payload(monkeypatch):
+    monkeypatch.setattr(
+        "canyongis.ingest._http_get_json",
+        lambda url, params: {"error": "Expecting value: line 1 column 1 (char 0)"},
+    )
+
+    with pytest.raises(RuntimeError, match="TNM/ScienceBase is currently unavailable") as exc:
+        query_tnm_products((-119.09, 34.42, -119.05, 34.45))
+
+    assert TNM_UNAVAILABLE_MESSAGE in str(exc.value)
+    assert "Expecting value" in str(exc.value)
+
+
 def test_query_tnm_products_reports_malformed_sciencebase_response(monkeypatch):
     def fail_json(url, params):
         raise json.JSONDecodeError("bad response", "{errorMessage=down}", 1)

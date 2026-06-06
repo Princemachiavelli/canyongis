@@ -52,6 +52,7 @@ export type Asset = {
   created_at: string;
   linked: boolean;
   linked_at: string | null;
+  projects?: { id: string; name: string }[];
 };
 
 export type AssetLineageNode = {
@@ -88,6 +89,14 @@ export type ProjectPipelineAsset = {
 export type ProjectPipeline = {
   assets: ProjectPipelineAsset[];
   edges: AssetLineageEdge[];
+};
+
+export type ElevationProbe = {
+  lat: number;
+  lng: number;
+  elevation_m: number | null;
+  asset_id: string | null;
+  asset_label: string | null;
 };
 
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -239,6 +248,15 @@ export async function listHiddenProjectAssets(projectId: string): Promise<string
 
 export async function getProjectPipeline(projectId: string): Promise<ProjectPipeline> {
   return request<ProjectPipeline>(`/api/projects/${projectId}/pipeline`);
+}
+
+export async function getProjectElevation(
+  projectId: string,
+  lat: number,
+  lng: number,
+): Promise<ElevationProbe> {
+  const params = new URLSearchParams({ lat: String(lat), lng: String(lng) });
+  return request<ElevationProbe>(`/api/projects/${projectId}/elevation?${params.toString()}`);
 }
 
 export async function listJobs(): Promise<Job[]> {

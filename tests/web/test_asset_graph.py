@@ -10,9 +10,12 @@ import time
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import psycopg
 import pytest
+import rasterio
 from pydantic import BaseModel
+from rasterio.transform import from_origin
 
 from canyongis.web import source_jobs
 from canyongis.web.dem_jobs import DemJobSpec, OutputSpec, get_spec, register
@@ -242,6 +245,78 @@ def test_dem_asset_api_falls_back_to_job_bounds(live_postgres, tmp_path: Path, m
         3.0,
         4.0,
     ]
+
+
+def test_project_elevation_probe_samples_visible_dem(
+    live_postgres, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("CANYONGIS_SINGLE_USER", "1")
+    app = create_app(output_root=tmp_path / "out", postgres=live_postgres)
+    client = TestClient(app)
+    ctx = app.state.ctx
+    user = ctx.auth.local_user()
+    assert user is not None
+    project_id = ctx.store.ensure_personal_project(user)
+    dem_path = ctx.output_root / "dems" / "probe.tif"
+    dem_path.parent.mkdir(parents=True, exist_ok=True)
+    data = np.asarray([[100.0, 101.0], [90.0, 91.0]], dtype=np.float32)
+    with rasterio.open(
+        dem_path,
+        "w",
+        driver="GTiff",
+        height=2,
+        width=2,
+        count=1,
+        dtype="float32",
+        crs="EPSG:4326",
+        transform=from_origin(-113.0, 37.2, 0.1, 0.1),
+        nodata=-9999.0,
+    ) as dst:
+        dst.write(data, 1)
+
+    job = Job(
+        id="dem-probe",
+        kind="build-dem",
+        status="succeeded",
+        created_at="2026-01-01T00:00:00+00:00",
+        updated_at="2026-01-01T00:00:00+00:00",
+        finished_at="2026-01-01T00:00:00+00:00",
+        params={"name": "probe"},
+        result={
+            "name": "Probe DEM",
+            "dem_path": str(dem_path),
+            "bounds_wgs84": [-113.0, 37.0, -112.8, 37.2],
+            "outputs": [
+                {
+                    "key": "dem",
+                    "label": "Probe DEM",
+                    "role": "dem",
+                    "asset_kind": "raster",
+                    "asset_type": "raster.dem",
+                    "path": str(dem_path),
+                    "metadata": {"bounds_wgs84": [-113.0, 37.0, -112.8, 37.2]},
+                }
+            ],
+        },
+        project_id=project_id,
+        created_by_user_id=user.id,
+    )
+    ctx.store.upsert(job)
+    ctx.store.register_assets(job, project_id=project_id, created_by_user_id=user.id)
+
+    inside = client.get(
+        f"/api/projects/{project_id}/elevation", params={"lat": 37.15, "lng": -112.95}
+    )
+    outside = client.get(
+        f"/api/projects/{project_id}/elevation", params={"lat": 36.5, "lng": -112.95}
+    )
+
+    assert inside.status_code == 200, inside.text
+    assert inside.json()["elevation_m"] == 100.0
+    assert inside.json()["asset_label"] == "Probe DEM"
+    assert outside.status_code == 200, outside.text
+    assert outside.json()["elevation_m"] is None
+    assert outside.json()["asset_id"] is None
 
 
 def test_kml_file_import_without_container_succeeds(

@@ -574,9 +574,10 @@ def query_tnm_products(bounds_wgs84: tuple[float, float, float, float]) -> list[
         raise
     except (urllib.error.URLError, TimeoutError, ConnectionError) as exc:
         raise RuntimeError(TNM_UNAVAILABLE_MESSAGE) from exc
-    error_message = data.get("errorMessage")
-    if isinstance(error_message, str) and error_message:
-        raise RuntimeError(f"{TNM_UNAVAILABLE_MESSAGE} TNM said: {error_message}")
+    for error_key in ("errorMessage", "error", "toastMessage"):
+        error_message = data.get(error_key)
+        if isinstance(error_message, str) and error_message:
+            raise RuntimeError(f"{TNM_UNAVAILABLE_MESSAGE} TNM said: {error_message}")
     return list(data.get("items", []))
 
 

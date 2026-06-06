@@ -15,6 +15,7 @@ from pathlib import Path
 
 import numpy as np
 import rvt.blend
+import rvt.default
 import rvt.vis
 from PIL import Image
 
@@ -27,12 +28,12 @@ from .ravine_compare import (
     _write_score_geotiff,
 )
 
-# Slope clamp ceiling for the VAT blend. RVT's published default is 50°, which
-# is tuned for archaeological / agricultural terrain. Canyon walls regularly
-# exceed 50° (and saturate to a single colour), which wipes out detail in the
-# lower / steeper half of canyon maps. 70° covers most real canyon slopes and
-# only the vertical-cliff pixels saturate.
-VAT_SLOPE_MAX_DEG = 70.0
+# Canyon CVAT blend: keep RVT-py's flat terrain enhancement on low-slope
+# benches/floors, then fade it out before steep canyon walls oversaturate.
+VAT_FLAT_FULL_SLOPE_DEG = 4.0
+VAT_FLAT_ZERO_SLOPE_DEG = 12.0
+VAT_STEEP_BLEND_START_DEG = 35.0
+VAT_STEEP_BLEND_END_DEG = 55.0
 
 RVT_VIS_KEYS: tuple[str, ...] = (
     "vat",
@@ -49,7 +50,7 @@ RVT_VIS_KEYS: tuple[str, ...] = (
 )
 
 RVT_VIS_LABELS: dict[str, str] = {
-    "vat": "VAT (archaeological topography)",
+    "vat": "Combined VAT (archaeological topography)",
     "slope": "Slope (RVT)",
     "svf": "Sky-view factor",
     "asvf": "Anisotropic SVF",
@@ -212,48 +213,118 @@ def export_rvt_previews(
         write_score("slrm", np.asarray(score, dtype=np.float32))
 
     def _vat() -> None:
-        # VAT - Archaeological combination (Kokalj et al.): the four-layer blend
-        # that ships as RVT's reference archaeological visualization. Layer
-        # parameters mirror rvt.blend.create_blender_file_example, except the
-        # Slope gradient ceiling is widened (see VAT_SLOPE_MAX_DEG) to keep
-        # detail on steep canyon walls.
-        comb = rvt.blend.BlenderCombination()
-        comb.add_dem_arr(filled, pixel_size)
-        comb.create_layer(
-            vis_method="Sky-View Factor",
-            normalization="value",
-            minimum=0.7,
-            maximum=1.0,
-            blend_mode="multiply",
-            opacity=25,
+        def render_vat(
+            *,
+            slope_max: float,
+            svf_min: float,
+            opns_min: float,
+            opns_max: float,
+            hs_sun_el: int,
+            svf_r_max: int,
+            svf_noise: int,
+        ) -> np.ndarray:
+            default = rvt.default.DefaultValues()
+            default.hs_sun_el = hs_sun_el
+            default.svf_r_max = svf_r_max
+            default.svf_noise = svf_noise
+
+            comb = rvt.blend.BlenderCombination()
+            comb.add_dem_arr(filled, pixel_size)
+            comb.create_layer(
+                vis_method="Sky-View Factor",
+                normalization="value",
+                minimum=svf_min,
+                maximum=1.0,
+                blend_mode="multiply",
+                opacity=25,
+            )
+            comb.create_layer(
+                vis_method="Openness - Positive",
+                normalization="value",
+                minimum=opns_min,
+                maximum=opns_max,
+                blend_mode="overlay",
+                opacity=50,
+            )
+            comb.create_layer(
+                vis_method="Slope gradient",
+                normalization="value",
+                minimum=0,
+                maximum=slope_max,
+                blend_mode="luminosity",
+                opacity=50,
+            )
+            comb.create_layer(
+                vis_method="Hillshade",
+                normalization="value",
+                minimum=0,
+                maximum=1,
+                blend_mode="normal",
+                opacity=100,
+            )
+            return np.asarray(
+                comb.render_all_images(
+                    default=default,
+                    save_visualizations=False,
+                    save_float=True,
+                ),
+                dtype=np.float32,
+            )
+
+        general = render_vat(
+            slope_max=50,
+            svf_min=0.7,
+            opns_min=68,
+            opns_max=93,
+            hs_sun_el=35,
+            svf_r_max=10,
+            svf_noise=0,
         )
-        comb.create_layer(
-            vis_method="Openness - Positive",
-            normalization="value",
-            minimum=68,
-            maximum=93,
-            blend_mode="overlay",
-            opacity=50,
+        steep = render_vat(
+            slope_max=60,
+            svf_min=0.55,
+            opns_min=55,
+            opns_max=95,
+            hs_sun_el=55,
+            svf_r_max=10,
+            svf_noise=0,
         )
-        comb.create_layer(
-            vis_method="Slope gradient",
-            normalization="value",
-            minimum=0,
-            maximum=VAT_SLOPE_MAX_DEG,
-            blend_mode="luminosity",
-            opacity=50,
+        flat = render_vat(
+            slope_max=15,
+            svf_min=0.9,
+            opns_min=85,
+            opns_max=93,
+            hs_sun_el=15,
+            svf_r_max=20,
+            svf_noise=3,
         )
-        comb.create_layer(
-            vis_method="Hillshade",
-            normalization="value",
-            minimum=0,
-            maximum=1,
-            blend_mode="normal",
-            opacity=100,
+
+        slope = np.asarray(
+            rvt.vis.slope_aspect(
+                dem=filled,
+                resolution_x=pixel_size,
+                resolution_y=pixel_size,
+                output_units="degree",
+                ve_factor=1,
+            )["slope"],
+            dtype=np.float32,
         )
-        rendered = np.asarray(
-            comb.render_all_images(save_visualizations=False, save_float=True)
+        t = np.clip(
+            (slope - VAT_FLAT_FULL_SLOPE_DEG)
+            / (VAT_FLAT_ZERO_SLOPE_DEG - VAT_FLAT_FULL_SLOPE_DEG),
+            0,
+            1,
         )
+        flat_weight = 1.0 - (t * t * (3.0 - 2.0 * t))
+        steep_t = np.clip(
+            (slope - VAT_STEEP_BLEND_START_DEG)
+            / (VAT_STEEP_BLEND_END_DEG - VAT_STEEP_BLEND_START_DEG),
+            0,
+            1,
+        )
+        steep_weight = steep_t * steep_t * (3.0 - 2.0 * steep_t)
+        nonflat = steep * steep_weight + general * (1.0 - steep_weight)
+        rendered = np.asarray(flat * flat_weight + nonflat * (1.0 - flat_weight), dtype=np.float32)
 
         # render_all_images returns either a 2D luminosity array or a 3D
         # (channels-first / channels-last) RGB array depending on which blend
@@ -296,8 +367,11 @@ def export_rvt_previews(
             panel_path=str(panel_path),
             tif_path=str(tif_path),
             meta={
-                "vat_slope_max_deg": VAT_SLOPE_MAX_DEG,
-                "vat_archaeological": True,
+                "vat_combined": True,
+                "vat_flat_full_slope_deg": VAT_FLAT_FULL_SLOPE_DEG,
+                "vat_flat_zero_slope_deg": VAT_FLAT_ZERO_SLOPE_DEG,
+                "vat_steep_blend_start_deg": VAT_STEEP_BLEND_START_DEG,
+                "vat_steep_blend_end_deg": VAT_STEEP_BLEND_END_DEG,
             },
             tile_archive=tile_archive,
         )
