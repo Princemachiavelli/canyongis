@@ -143,6 +143,51 @@ def test_generic_tool_endpoint_with_explicit_dem(
     assert row["result"]["fake_url"].endswith("/explicit.txt")
 
 
+def test_retry_failed_tool_job_reuses_inputs_and_params(
+    live_postgres, tmp_path: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("CANYONGIS_SINGLE_USER", "1")
+    app = create_app(output_root=tmp_path / "out", postgres=live_postgres)
+    client = TestClient(app)
+    ctx = app.state.ctx
+    user = ctx.auth.local_user()
+    assert user is not None
+    project_id = ctx.store.ensure_personal_project(user)
+    dem = _insert_dem_job(
+        ctx, tmp_path, job_id="retry-dem", created_at="2026-01-01T00:00:00+00:00"
+    )
+    failed = Job(
+        id="failed-retry",
+        kind=TEST_TOOL_KEY,
+        status="failed",
+        created_at="2026-01-02T00:00:00+00:00",
+        updated_at="2026-01-02T00:00:00+00:00",
+        params={
+            "dem_job_id": dem.id,
+            "job_key": TEST_TOOL_KEY,
+            "_inputs": {"dem": dem.id},
+            "tag": "retried",
+        },
+        error="original failure",
+        project_id=project_id,
+        created_by_user_id=user.id,
+    )
+    ctx.store.upsert(failed)
+
+    res = client.post("/api/jobs/failed-retry/retry")
+
+    assert res.status_code == 200, res.text
+    retry = res.json()
+    assert retry["id"] != failed.id
+    assert retry["kind"] == TEST_TOOL_KEY
+    assert retry["params"]["dem_job_id"] == dem.id
+    assert retry["params"]["tag"] == "retried"
+    assert retry["params"]["_inputs"] == {"dem": dem.id}
+    row = _wait_for_job(client, retry["id"])
+    assert row["status"] == "succeeded", row.get("error")
+    assert row["result"]["fake_url"].endswith("/retried.txt")
+
+
 def test_generic_tool_endpoint_reports_missing_dem(
     live_postgres, tmp_path: Path, monkeypatch
 ) -> None:

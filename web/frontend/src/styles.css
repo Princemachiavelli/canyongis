@@ -145,7 +145,7 @@ input {
 }
 
 .workspace.assetWorkspace {
-    grid-template-columns: 340px minmax(0, 1fr) 360px;
+    grid-template-columns: var(--project-sidebar-width, 340px) minmax(0, 1fr) var(--inspector-sidebar-width, 360px);
 }
 
 .panel {
@@ -166,6 +166,28 @@ input {
     display: flex;
     align-items: center;
     gap: 8px;
+}
+
+.panelHeaderTitle,
+.panelHeaderActions {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.panelHeaderTitle {
+    min-width: 0;
+}
+
+.panelHeaderTitle h1 {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+
+.panelHeaderActions {
+    flex: 0 0 auto;
 }
 
 h1,
@@ -1029,6 +1051,12 @@ button.miniButton {
     gap: 2px;
 }
 
+.inspectorHeadActions {
+    display: inline-flex !important;
+    align-items: center;
+    gap: 4px !important;
+}
+
 .inspectorHead span {
     color: #65737c;
     font-size: 11px;
@@ -1289,6 +1317,15 @@ button.miniButton {
     font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
     font-size: 11px;
     color: #0c6b58;
+}
+
+.coordinateProbe a {
+    color: #0c6b58;
+    text-decoration: none;
+}
+
+.coordinateProbe a:hover {
+    text-decoration: underline;
 }
 
 .coordinateProbeSource {
@@ -1595,6 +1632,42 @@ button.miniButton {
 
 .assetLibrary .panelHeader {
     justify-content: space-between;
+}
+
+.sidebarRail {
+    min-height: 0;
+    height: calc(100vh - 44px);
+    display: flex;
+    justify-content: center;
+    background: #f8fafb;
+    padding-top: 10px;
+}
+
+.projectSidebarRail {
+    border-right: 1px solid #cbd3d8;
+}
+
+.inspectorSidebarRail {
+    border-left: 1px solid #cbd3d8;
+    background: #fbfcfd;
+}
+
+.sidebarRailButton {
+    width: 32px;
+    min-width: 32px;
+    min-height: 134px;
+    padding: 8px 0;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.sidebarRailButton span {
+    writing-mode: vertical-rl;
+    text-orientation: mixed;
+    color: #46535b;
+    font-size: 11px;
+    font-weight: 650;
+    letter-spacing: 0.04em;
 }
 
 .assetActions,

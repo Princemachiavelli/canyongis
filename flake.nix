@@ -136,12 +136,12 @@
               canyongis
               config.treefmt.build.devShell
             ];
-            packages = [
-              pkgs.grass
-              pkgs.gdal
-              pkgs.pmtiles
-              qgis
-              pkgs.nodejs
+            packages = with pkgs; [
+              grass
+              gdal
+              pmtiles
+              #qgis # very large and slow to build.
+              nodejs
               postgresqlWithPostGIS
               python.pkgs.pytest
               python.pkgs.pytest-cov

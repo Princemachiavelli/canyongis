@@ -42,6 +42,18 @@ function PanController() {
   return null;
 }
 
+function ResizeController() {
+  const map = useMap();
+
+  useEffect(() => {
+    const observer = new ResizeObserver(() => map.invalidateSize({ pan: false }));
+    observer.observe(map.getContainer());
+    return () => observer.disconnect();
+  }, [map]);
+
+  return null;
+}
+
 function formatLatLng(value: number): string {
   return value.toFixed(6);
 }
@@ -49,6 +61,10 @@ function formatLatLng(value: number): string {
 function formatElevation(value: number): string {
   const feet = value * 3.28084;
   return `${value.toFixed(1)} m (${Math.round(feet).toLocaleString()} ft)`;
+}
+
+function caltopoLocationUrl(lat: number, lng: number): string {
+  return `https://caltopo.com/map.html#ll=${formatLatLng(lat)},${formatLatLng(lng)}&z=15`;
 }
 
 function coordinateProbePopup(
@@ -74,11 +90,11 @@ function coordinateProbePopup(
       source = `<div class="coordinateProbeSource">DEM: ${escapeHtml(result.asset_label)}</div>`;
     }
   }
+  const coordinates = `${formatLatLng(lat)},${formatLatLng(lng)}`;
   return [
     '<div class="coordinateProbe">',
     '<strong>Map Point</strong>',
-    `<div>Lat: <code>${formatLatLng(lat)}</code></div>`,
-    `<div>Lng: <code>${formatLatLng(lng)}</code></div>`,
+    `<a href="${caltopoLocationUrl(lat, lng)}" target="_blank" rel="noreferrer"><code>${coordinates}</code></a>`,
     `<div>Elevation: ${escapeHtml(elevation)}</div>`,
     source,
     "</div>",
@@ -598,6 +614,7 @@ export function MapView({ layers = [] }: { layers?: LayerDescriptor[] }) {
         maxZoom={LAYER_MAX_ZOOM}
       />
       <MapControls />
+      <ResizeController />
       <PanController />
       <CoordinateProbe />
       <DebugExpose />

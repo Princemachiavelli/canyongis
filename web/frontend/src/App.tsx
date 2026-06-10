@@ -1,8 +1,10 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
   Archive,
+  ChevronsLeft,
+  ChevronsRight,
   GitBranch,
   Layers,
   Map as MapIcon,
@@ -23,6 +25,7 @@ import {
   listJobs,
   listProjectAssets,
   resolveMapUrl,
+  retryJob,
   runTool,
   uploadKmlFile,
   type Asset,
@@ -219,6 +222,8 @@ export function App() {
   const [libraryOpen, setLibraryOpen] = useState(false);
   const [pipelineOpen, setPipelineOpen] = useState(false);
   const [jobsOpen, setJobsOpen] = useState(false);
+  const [projectSidebarMinimized, setProjectSidebarMinimized] = useState(false);
+  const [inspectorSidebarMinimized, setInspectorSidebarMinimized] = useState(false);
 
   const jobsQuery = useQuery({
     queryKey: ["jobs"],
@@ -455,9 +460,17 @@ export function App() {
     mutationFn: (job: Job) => cancelJob(job.id),
     onSuccess: invalidate,
   });
+  const retryJobMutation = useMutation({
+    mutationFn: (job: Job) => retryJob(job.id),
+    onSuccess: invalidate,
+  });
 
   const deleteJob = (job: Job) => deleteJobMutation.mutate(job);
   const cancelRunningJob = (job: Job) => cancelJobMutation.mutate(job);
+  const retryFailedJob = (job: Job) =>
+    retryJobMutation.mutate(job, {
+      onError: (error) => window.alert(String((error as Error).message)),
+    });
 
   const onRunAssetTool = (
     spec: JobSpec,
@@ -522,6 +535,10 @@ export function App() {
   };
 
   const selectedAoiText = bounds ? formatBounds(bounds) : "No AOI selected";
+  const workspaceStyle = {
+    "--project-sidebar-width": projectSidebarMinimized ? "44px" : "340px",
+    "--inspector-sidebar-width": inspectorSidebarMinimized ? "44px" : "360px",
+  } as CSSProperties;
 
   return (
     <main className="shell">
@@ -593,20 +610,36 @@ export function App() {
         </div>
       </section>
 
-      <section className="workspace assetWorkspace">
-        <AssetLibrary
-          projectId={activeProjectId}
-          jobs={jobs}
-          specs={specs}
-          variant="project"
-          selectedAssetId={selectedAssetId}
-          onSelectAsset={(assetId) => {
-            setSelectedAssetId(assetId);
-            setInspectorTool(undefined);
-          }}
-          onRunTool={onRunAssetTool}
-          onDeleteJob={deleteJob}
-        />
+      <section className="workspace assetWorkspace" style={workspaceStyle}>
+        {projectSidebarMinimized ? (
+          <aside className="sidebarRail projectSidebarRail">
+            <button
+              type="button"
+              className="sidebarRailButton"
+              title="Show Current Project"
+              aria-label="Show Current Project sidebar"
+              onClick={() => setProjectSidebarMinimized(false)}
+            >
+              <ChevronsRight size={14} />
+              <span>Current Project</span>
+            </button>
+          </aside>
+        ) : (
+          <AssetLibrary
+            projectId={activeProjectId}
+            jobs={jobs}
+            specs={specs}
+            variant="project"
+            selectedAssetId={selectedAssetId}
+            onSelectAsset={(assetId) => {
+              setSelectedAssetId(assetId);
+              setInspectorTool(undefined);
+            }}
+            onRunTool={onRunAssetTool}
+            onDeleteJob={deleteJob}
+            onMinimize={() => setProjectSidebarMinimized(true)}
+          />
+        )}
         <section className="mapFrame">
           <div className="mapToolDock">
             <div className="mapToolGroup">
@@ -866,22 +899,38 @@ export function App() {
           <MapView layers={visibleLayers} />
         </section>
 
-        <Inspector
-          projectId={activeProjectId}
-          selectedAssetId={selectedAssetId}
-          tool={inspectorTool}
-          jobs={jobs}
-          specs={specs}
-          isRunningTool={runToolMutation.isPending}
-          onSelectAsset={(assetId) => {
-            setSelectedAssetId(assetId);
-            setInspectorTool(undefined);
-          }}
-          onClearSelection={() => setSelectedAssetId(undefined)}
-          onOpenTool={onRunAssetTool}
-          onCloseTool={() => setInspectorTool(undefined)}
-          onRunTool={runInspectorTool}
-        />
+        {inspectorSidebarMinimized ? (
+          <aside className="sidebarRail inspectorSidebarRail">
+            <button
+              type="button"
+              className="sidebarRailButton"
+              title="Show Inspector"
+              aria-label="Show Inspector sidebar"
+              onClick={() => setInspectorSidebarMinimized(false)}
+            >
+              <ChevronsLeft size={14} />
+              <span>Inspector</span>
+            </button>
+          </aside>
+        ) : (
+          <Inspector
+            projectId={activeProjectId}
+            selectedAssetId={selectedAssetId}
+            tool={inspectorTool}
+            jobs={jobs}
+            specs={specs}
+            isRunningTool={runToolMutation.isPending}
+            onSelectAsset={(assetId) => {
+              setSelectedAssetId(assetId);
+              setInspectorTool(undefined);
+            }}
+            onClearSelection={() => setSelectedAssetId(undefined)}
+            onOpenTool={onRunAssetTool}
+            onCloseTool={() => setInspectorTool(undefined)}
+            onRunTool={runInspectorTool}
+            onMinimize={() => setInspectorSidebarMinimized(true)}
+          />
+        )}
       </section>
 
       {libraryOpen && (
@@ -910,6 +959,7 @@ export function App() {
           onClose={() => setJobsOpen(false)}
           onDeleteJob={deleteJob}
           onCancelJob={cancelRunningJob}
+          onRetryJob={retryFailedJob}
         />
       )}
       {pipelineOpen && (

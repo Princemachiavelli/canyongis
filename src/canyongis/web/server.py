@@ -40,7 +40,7 @@ from .auth import (
 )
 from .db import PostgresConfig, apply_migrations
 from .dem_jobs import get_spec, list_specs, normalize_result
-from .dispatcher import DispatchError, submit_tool_job
+from .dispatcher import DispatchError, retry_tool_job, submit_tool_job
 from .source_jobs import resync_kml_import
 
 JobStatus = Literal["queued", "running", "succeeded", "failed", "canceled"]
@@ -1812,6 +1812,18 @@ def create_app(
     @app.post("/api/jobs/{job_id}/cancel")
     def cancel_job(job_id: str, user: User = CurrentUserDep) -> dict[str, Any]:
         return _job_response(ctx, ctx.cancel_job(job_id, user=user))
+
+    @app.post("/api/jobs/{job_id}/retry")
+    def retry_job(
+        job_id: str,
+        user: User = CurrentUserDep,
+        project_id: str = ActiveProjectDep,
+    ) -> dict[str, Any]:
+        try:
+            job = retry_tool_job(ctx, job_id, user=user, project_id=project_id)
+        except DispatchError as exc:
+            raise HTTPException(status_code=exc.status_code, detail=exc.detail) from exc
+        return asdict(job)
 
     @app.delete("/api/jobs/{job_id}")
     def delete_job(job_id: str, user: User = CurrentUserDep) -> dict[str, Any]:

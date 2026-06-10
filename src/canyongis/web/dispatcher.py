@@ -10,6 +10,9 @@ from pydantic import ValidationError
 from .plugins import get_spec, normalize_result
 
 
+_RETRY_SYSTEM_PARAM_KEYS = {"_inputs", "dem_job_id", "job_key"}
+
+
 @dataclass(frozen=True)
 class DispatchError(Exception):
     status_code: int
@@ -138,3 +141,29 @@ def submit_tool_job(
         return normalize_result(spec, result)
 
     return ctx.submit(spec.key, params, run, user=user, project_id=project_id)
+
+
+def retry_tool_job(ctx: Any, job_id: str, *, user: Any, project_id: str) -> Any:
+    original = ctx.job_or_404(job_id)
+    if original.project_id != project_id:
+        raise DispatchError(404, f"job not found: {job_id}")
+    if original.status != "failed":
+        raise DispatchError(400, "only failed jobs can be retried")
+    if get_spec(original.kind) is None:
+        raise DispatchError(400, f"job kind cannot be retried: {original.kind}")
+
+    raw_params = dict(original.params or {})
+    raw_inputs = raw_params.get("_inputs")
+    inputs = dict(raw_inputs) if isinstance(raw_inputs, dict) else {}
+    params = {k: v for k, v in raw_params.items() if k not in _RETRY_SYSTEM_PARAM_KEYS}
+
+    if original.kind == "kml-import" and not isinstance(params.get("source"), str):
+        raise DispatchError(400, "uploaded KML file jobs cannot be retried; upload the file again")
+
+    return submit_tool_job(
+        ctx,
+        original.kind,
+        {"inputs": inputs, "params": params},
+        user=user,
+        project_id=project_id,
+    )

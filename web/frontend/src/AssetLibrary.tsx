@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Box,
+  ChevronsLeft,
   Eye,
   LocateFixed,
   Play,
@@ -59,6 +60,7 @@ type AssetLibraryProps = {
   ) => void;
   onDeleteJob: (job: Job) => void;
   onClose?: () => void;
+  onMinimize?: () => void;
 };
 
 type AssetRowExtras = {
@@ -1035,6 +1037,7 @@ export function AssetLibrary({
   onRunTool,
   onDeleteJob,
   onClose,
+  onMinimize,
 }: AssetLibraryProps) {
   const [search, setSearch] = useState("");
   const queryClient = useQueryClient();
@@ -1128,13 +1131,27 @@ export function AssetLibrary({
   return (
     <aside className="panel assetLibrary">
       <div className="panelHeader">
-        <Tags size={16} />
-        <h1>{title}</h1>
-        {onClose && (
-          <button className="miniButton" onClick={onClose} title="Close asset library">
-            <X size={12} />
-          </button>
-        )}
+        <div className="panelHeaderTitle">
+          <Tags size={16} />
+          <h1>{title}</h1>
+        </div>
+        <div className="panelHeaderActions">
+          {onMinimize && (
+            <button
+              className="miniButton"
+              onClick={onMinimize}
+              title={`Minimize ${title}`}
+              aria-label={`Minimize ${title} sidebar`}
+            >
+              <ChevronsLeft size={12} />
+            </button>
+          )}
+          {onClose && (
+            <button className="miniButton" onClick={onClose} title="Close asset library">
+              <X size={12} />
+            </button>
+          )}
+        </div>
       </div>
       <label className="assetSearch">
         <Search size={14} />

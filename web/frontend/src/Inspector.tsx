@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { GitBranch, Play, X } from "lucide-react";
+import { ChevronsRight, GitBranch, Play, X } from "lucide-react";
 import {
   getAssetLineage,
   linkProjectAsset,
@@ -35,6 +35,7 @@ type InspectorProps = {
   onOpenTool: (spec: JobSpec, initialInputs: Record<string, string | undefined>) => void;
   onCloseTool: () => void;
   onRunTool: (tool: InspectorTool, result: ToolDialogResult) => void;
+  onMinimize?: () => void;
 };
 
 function nodeLabel(node: AssetLineageNode): string {
@@ -221,6 +222,7 @@ export function Inspector({
   onOpenTool,
   onCloseTool,
   onRunTool,
+  onMinimize,
 }: InspectorProps) {
   const assetsQuery = useQuery({
     queryKey: ["project-assets", projectId],
@@ -240,16 +242,29 @@ export function Inspector({
           <span>Inspector</span>
           <strong>{tool ? "Tool" : selectedAsset ? "Asset" : "Ready"}</strong>
         </div>
-        {(tool || selectedAsset) && (
-          <button
-            type="button"
-            className="iconButton"
-            aria-label="Clear inspector"
-            onClick={tool ? onCloseTool : onClearSelection}
-          >
-            <X size={14} />
-          </button>
-        )}
+        <div className="inspectorHeadActions">
+          {onMinimize && (
+            <button
+              type="button"
+              className="iconButton"
+              title="Minimize Inspector"
+              aria-label="Minimize Inspector sidebar"
+              onClick={onMinimize}
+            >
+              <ChevronsRight size={14} />
+            </button>
+          )}
+          {(tool || selectedAsset) && (
+            <button
+              type="button"
+              className="iconButton"
+              aria-label="Clear inspector"
+              onClick={tool ? onCloseTool : onClearSelection}
+            >
+              <X size={14} />
+            </button>
+          )}
+        </div>
       </div>
 
       {tool ? (

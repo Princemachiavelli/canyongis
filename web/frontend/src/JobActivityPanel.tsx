@@ -1,5 +1,5 @@
 import { Fragment, useMemo } from "react";
-import { Activity, Square, Trash2, X } from "lucide-react";
+import { Activity, RotateCcw, Square, Trash2, X } from "lucide-react";
 import type { Job } from "./api";
 
 const HIDDEN_PARAM_KEYS = new Set(["_inputs", "job_key", "source_job_id", "layer"]);
@@ -84,16 +84,19 @@ function ProgressTail({
   job,
   onDelete,
   onCancel,
+  onRetry,
 }: {
   job: Job;
   onDelete?: (job: Job) => void;
   onCancel?: (job: Job) => void;
+  onRetry?: (job: Job) => void;
 }) {
   const log = job.progress ?? [];
   const hasLog = log.length > 0 || Boolean(job.error);
   const canCancel = job.status === "running" || job.status === "queued";
+  const canRetry = job.status === "failed";
   const canDelete = job.status === "failed" || job.status === "canceled";
-  if (!hasLog && !canCancel && !canDelete) return null;
+  if (!hasLog && !canCancel && !canRetry && !canDelete) return null;
   if (!hasLog && canCancel) {
     return onCancel ? (
       <button className="danger miniButton" onClick={() => onCancel(job)}>
@@ -118,6 +121,12 @@ function ProgressTail({
         <button className="danger miniButton" onClick={() => onCancel(job)}>
           <Square size={12} />
           Cancel job
+        </button>
+      )}
+      {canRetry && onRetry && (
+        <button className="miniButton" onClick={() => onRetry(job)}>
+          <RotateCcw size={12} />
+          Retry job
         </button>
       )}
       {canDelete && onDelete && (
@@ -160,11 +169,13 @@ export function JobActivityPanel({
   onClose,
   onDeleteJob,
   onCancelJob,
+  onRetryJob,
 }: {
   jobs: Job[];
   onClose: () => void;
   onDeleteJob: (job: Job) => void;
   onCancelJob: (job: Job) => void;
+  onRetryJob: (job: Job) => void;
 }) {
   const sorted = useMemo(
     () => [...jobs].sort((a, b) => (a.created_at < b.created_at ? 1 : -1)),
@@ -217,7 +228,12 @@ export function JobActivityPanel({
               <span>{formatJobTime(job.created_at)}</span>
             </div>
             <JobParamsDetails job={job} />
-            <ProgressTail job={job} onDelete={onDeleteJob} onCancel={onCancelJob} />
+            <ProgressTail
+              job={job}
+              onDelete={onDeleteJob}
+              onCancel={onCancelJob}
+              onRetry={onRetryJob}
+            />
           </div>
         ))}
       </section>

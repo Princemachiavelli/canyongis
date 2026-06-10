@@ -276,6 +276,10 @@ export async function cancelJob(jobId: string): Promise<Job> {
   return request<Job>(`/api/jobs/${jobId}/cancel`, { method: "POST" });
 }
 
+export async function retryJob(jobId: string): Promise<Job> {
+  return request<Job>(`/api/jobs/${jobId}/retry`, { method: "POST" });
+}
+
 export async function deleteGeneratedKmlLayer(
   jobId: string,
   layerKey: string,
