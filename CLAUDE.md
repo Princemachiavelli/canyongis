@@ -34,6 +34,7 @@ Defined in `pyproject.toml [project.scripts]`:
 |---|---|---|
 | `canyongis` | `__main__:cli` | Dispatch (`train`/`predict`) or default predict + Folium render |
 | `canyongis-validate` | `validate:cli` | Validate KML descent tracks |
+| `canyongis-baseline` | `baseline:baseline_cli` | GeoNet-style analytical canyon detection (no model): Perona-Malik + curvature heads + D8 tracing + confinement scoring |
 | `canyongis-ropewiki-sync` | `ingest:ingest_ropewiki_cli` | Fetch Ropewiki KML + matching TNM 1m DEM tiles |
 | `canyongis-mosaic-manifest` | `ml.manifest_mosaic:mosaic_manifest_cli` | Build buffered DEM mosaics, update training manifest |
 | `canyongis-ml-train` | `ml.cli:train_cli` | Train U-Net with K-fold CV |

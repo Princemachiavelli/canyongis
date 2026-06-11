@@ -10,6 +10,7 @@ import rasterio
 from pydantic import BaseModel, Field
 from rasterio.warp import transform_bounds
 
+from ..baseline import BaselineConfig, run_baseline
 from ..kml_snap import snap_kml_to_raster
 from ..ravine_spine import export_ravine_spines
 from ..track_profile import _rappels_geojson, analyze_track_profile
@@ -23,6 +24,19 @@ class RavineSpineRequest(BaseModel):
     hysteresis_ratio: float = 0.75
     branch_keep_ratio: float = 0.20
     max_path_slope: float = 0.30
+    parent_kml_job_id: str | None = None
+
+
+class GeonetBaselineRequest(BaseModel):
+    dem_job_id: str | None = None
+    min_area_m2: float = Field(default=50_000.0, gt=0)
+    curv_quantile: float = Field(default=0.9, gt=0, lt=1)
+    pm_iters: int = Field(default=50, ge=0)
+    depth_radius_m: float = Field(default=150.0, gt=0)
+    confine_depth_m: float = Field(default=10.0, gt=0)
+    min_length_m: float = Field(default=100.0, ge=0)
+    drop_window_m: float = Field(default=10.0, gt=0)
+    min_drop_m: float = Field(default=3.0, gt=0)
     parent_kml_job_id: str | None = None
 
 
@@ -370,6 +384,67 @@ def _run_ravine_spine(
     return payload
 
 
+def _run_geonet_baseline(
+    *, ctx: Any, req: GeonetBaselineRequest, inputs: dict[str, Any], progress_cb, **_: Any
+):
+    dem_job_id = req.dem_job_id or _raw_input_id(inputs, "dem", "dem_job", "dem_job_id")
+    if not dem_job_id:
+        raise ValueError("dem_job_id is required")
+    dem_job = ctx.job_or_404(dem_job_id)
+    if dem_job.status != "succeeded" or not dem_job.result:
+        raise ValueError("DEM job has not succeeded")
+    dem_path = Path(str(dem_job.result["dem_path"]))
+    if req.parent_kml_job_id:
+        parent_kml_job = ctx.job_or_404(req.parent_kml_job_id)
+        if parent_kml_job.status != "succeeded" or not parent_kml_job.result:
+            raise ValueError("parent KML job has not succeeded")
+
+    out_dir = (
+        ctx.output_root / "jobs" / f"geonet-baseline-{ctx.now().replace(':', '').replace('.', '')}"
+    )
+    cfg = BaselineConfig(
+        pm_iters=req.pm_iters,
+        curv_quantile=req.curv_quantile,
+        min_area_m2=req.min_area_m2,
+        depth_radius_m=req.depth_radius_m,
+        confine_depth_m=req.confine_depth_m,
+        min_length_m=req.min_length_m,
+        drop_window_m=req.drop_window_m,
+        min_drop_m=req.min_drop_m,
+    )
+    progress_cb(
+        f"geonet-baseline -> {out_dir} "
+        f"(min_area={req.min_area_m2:g}m2, curv_q={req.curv_quantile:g})"
+    )
+    result = run_baseline(dem_path, out_dir, cfg)
+    payload = {
+        **asdict(result),
+        "dem_path": str(dem_path),
+        "dem_job_id": dem_job_id,
+        "parent_kml_job_id": req.parent_kml_job_id,
+        "bounds_wgs84": dem_job.result.get("bounds_wgs84") or _raster_bounds_wgs84(dem_path),
+    }
+    centerlines_path = Path(result.centerlines_kml_path)
+    drops_path = Path(result.drops_kml_path)
+    payload["centerlines_kml_url"] = (
+        ctx.output_url(centerlines_path) if centerlines_path.exists() else None
+    )
+    payload["drops_kml_url"] = ctx.output_url(drops_path) if drops_path.exists() else None
+    layers = []
+    if centerlines_path.exists():
+        layers.append(
+            _layer_from_kml(
+                ctx, key="centerlines_layer", label="GeoNet centerlines", path=centerlines_path
+            )
+        )
+    if drops_path.exists():
+        layers.append(
+            _layer_from_kml(ctx, key="drops_layer", label="Drop candidates", path=drops_path)
+        )
+    payload["layers"] = layers
+    return payload
+
+
 register(
     DemJobSpec(
         key="kml-snap",
@@ -457,6 +532,45 @@ register(
                 "rappel-candidates",
                 "vector",
                 "rappel_candidates_kml_url",
+                asset_type="vector.kml.rappel_candidates",
+            ),
+        ),
+        layers=(),
+    )
+)
+
+
+register(
+    DemJobSpec(
+        key="geonet-baseline",
+        label="GeoNet canyon baseline",
+        description=(
+            "Analytical canyon centerlines straight from a DEM: Perona-Malik smoothing, "
+            "curvature channel heads, D8 flow tracing, and confinement scoring with "
+            "drop (rappel candidate) detection. No trained model required."
+        ),
+        request_model=GeonetBaselineRequest,
+        visualizations=(),
+        runner=_run_geonet_baseline,
+        runner_kind="context",
+        inputs=(InputSpec(key="dem", label="DEM", kind="raster.dem"),),
+        outputs=(
+            OutputSpec(
+                "centerlines",
+                "Canyon centerlines KML",
+                "centerlines_kml_path",
+                "route",
+                "vector",
+                "centerlines_kml_url",
+                asset_type="vector.kml.spine",
+            ),
+            OutputSpec(
+                "drops",
+                "Drop candidates KML",
+                "drops_kml_path",
+                "rappel-candidates",
+                "vector",
+                "drops_kml_url",
                 asset_type="vector.kml.rappel_candidates",
             ),
         ),

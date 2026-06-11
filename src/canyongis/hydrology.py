@@ -25,13 +25,32 @@ def _is_priority_flood_count_keyerror(exc: Exception) -> bool:
     return isinstance(exc, KeyError) and "generator(func=<function count" in str(exc)
 
 
-def compute_flow_accum(
+# D8 direction codes in (N, NE, E, SE, S, SW, W, NW) order — the pysheds default.
+DIRMAP: tuple[int, ...] = (64, 128, 1, 2, 4, 8, 16, 32)
+
+# (row, col) offset a pixel flows to for each D8 code in DIRMAP.
+D8_OFFSETS: dict[int, tuple[int, int]] = {
+    64: (-1, 0),
+    128: (-1, 1),
+    1: (0, 1),
+    2: (1, 1),
+    4: (1, 0),
+    8: (1, -1),
+    16: (0, -1),
+    32: (-1, -1),
+}
+
+
+def compute_flow_dir_accum(
     elev: np.ndarray,
     transform,
     *,
     fill_depressions: bool = True,
-) -> np.ndarray:
-    """D8 flow accumulation via pysheds (fill pits → fill depressions → resolve flats → D8)."""
+) -> tuple[np.ndarray, np.ndarray]:
+    """D8 flow directions (DIRMAP codes) and accumulation in cells via pysheds.
+
+    Conditioning: fill pits → fill depressions → resolve flats → D8.
+    """
     nodata = np.float32(-9999.0)
     data = np.where(np.isnan(elev), nodata, elev).astype(np.float32, copy=False)
     vf = ViewFinder(affine=transform, shape=data.shape, nodata=nodata)
@@ -55,9 +74,19 @@ def compute_flow_accum(
     else:
         flooded = pit_filled
     inflated = grid.resolve_flats(flooded)
-    fdir = grid.flowdir(inflated)
-    acc = grid.accumulation(fdir)
-    return np.asarray(acc, dtype=np.float32)
+    fdir = grid.flowdir(inflated, dirmap=DIRMAP)
+    acc = grid.accumulation(fdir, dirmap=DIRMAP)
+    return np.asarray(fdir, dtype=np.int64), np.asarray(acc, dtype=np.float32)
+
+
+def compute_flow_accum(
+    elev: np.ndarray,
+    transform,
+    *,
+    fill_depressions: bool = True,
+) -> np.ndarray:
+    """D8 flow accumulation via pysheds (fill pits → fill depressions → resolve flats → D8)."""
+    return compute_flow_dir_accum(elev, transform, fill_depressions=fill_depressions)[1]
 
 
 def compute_hand(elev: np.ndarray, stream_mask: np.ndarray) -> np.ndarray:

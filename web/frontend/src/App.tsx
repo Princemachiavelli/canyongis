@@ -261,6 +261,10 @@ export function App() {
     () => specs.find((s) => s.key === "ravine-spine"),
     [specs],
   );
+  const baselineSpec = useMemo(
+    () => specs.find((s) => s.key === "geonet-baseline"),
+    [specs],
+  );
 
   useEffect(() => {
     if (!activeDemJob || !jobsQuery.data) return;
@@ -493,6 +497,17 @@ export function App() {
       extraParams.parent_kml_job_id = selectedKmlTrack.kmlJobId;
     }
     setInspectorTool({ spec: spineSpec, initialInputs, extraParams });
+  };
+
+  const openBaselineDialog = () => {
+    if (!baselineSpec) return;
+    const initialInputs: Record<string, string | undefined> = {};
+    if (activeDemJob) initialInputs.dem = activeDemJob.id;
+    const extraParams: Record<string, unknown> = {};
+    if (selectedKmlTrack?.kmlJobId) {
+      extraParams.parent_kml_job_id = selectedKmlTrack.kmlJobId;
+    }
+    setInspectorTool({ spec: baselineSpec, initialInputs, extraParams });
   };
 
   const runBuildDem = () => {
@@ -779,6 +794,12 @@ export function App() {
                     onClick={openSpineDialog}
                   >
                     Ravine Spine
+                  </button>
+                  <button
+                    disabled={!baselineSpec || runToolMutation.isPending}
+                    onClick={openBaselineDialog}
+                  >
+                    GeoNet Baseline
                   </button>
                 </div>
               )}

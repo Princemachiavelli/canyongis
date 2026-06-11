@@ -1,5 +1,9 @@
 from __future__ import annotations
 
+from pathlib import Path
+from types import SimpleNamespace
+
+import canyongis.web.analysis_jobs  # noqa: F401  (registers analysis job specs on import)
 from canyongis.web.dem_jobs import get_spec, normalize_result
 
 
@@ -80,6 +84,77 @@ def test_rvt_vat_registers_as_base_raster_layer() -> None:
     assert slope_layer.kind == "raster-overlay"
     assert slope_layer.role == "relief-visualization"
     assert any(v.key == "vat" for v in spec.visualizations)
+
+
+def test_geonet_baseline_spec_matches_ravine_spine_asset_types() -> None:
+    spec = get_spec("geonet-baseline")
+    assert spec is not None
+    assert spec.runner_kind == "context"
+    assert [inp.kind for inp in spec.inputs] == ["raster.dem"]
+
+    spine_spec = get_spec("ravine-spine")
+    assert spine_spec is not None
+    # Outputs must carry the same asset taxonomy as "Ravine spine from TPI"
+    # so the two methods group and compare identically in the UI.
+    assert {o.asset_type for o in spec.outputs} == {o.asset_type for o in spine_spec.outputs}
+    assert {o.role for o in spec.outputs} == {o.role for o in spine_spec.outputs}
+
+
+def test_geonet_baseline_runner_produces_spine_assets(tmp_path) -> None:
+    import numpy as np
+    from rasterio.crs import CRS
+    from rasterio.transform import from_origin
+
+    from canyongis.io import write_raster
+    from canyongis.web import analysis_jobs
+
+    # South-sloping valley with a 15 m V-incision along x=80 (see tests/test_baseline.py).
+    h, w = 220, 160
+    yy, xx = np.mgrid[:h, :w].astype(np.float32)
+    elev = 300.0 - 0.2 * yy + 0.3 * np.abs(xx - 80.0)
+    elev -= np.clip(15.0 - 2.5 * np.abs(xx - 80.0), 0.0, None)
+    dem_path = tmp_path / "dem.tif"
+    write_raster(
+        dem_path,
+        elev.astype(np.float32),
+        from_origin(500_000.0, 4_000_000.0, 1.0, 1.0),
+        CRS.from_epsg(32612),
+    )
+
+    dem_job = SimpleNamespace(
+        status="succeeded",
+        result={"dem_path": str(dem_path), "bounds_wgs84": None},
+    )
+    ctx = SimpleNamespace(
+        output_root=tmp_path / "outputs",
+        output_url=lambda p: f"/outputs/{Path(p).name}",
+        job_or_404=lambda job_id: dem_job,
+        now=lambda: "2026-06-09T00:00:00",
+    )
+    req = analysis_jobs.GeonetBaselineRequest(
+        dem_job_id="dem-1",
+        min_area_m2=2000.0,
+        pm_iters=30,
+        depth_radius_m=40.0,
+        confine_depth_m=4.0,
+        min_length_m=40.0,
+    )
+
+    result = analysis_jobs._run_geonet_baseline(
+        ctx=ctx, req=req, inputs={}, progress_cb=lambda _msg: None
+    )
+
+    assert result["n_centerlines"] >= 1
+    assert Path(result["centerlines_kml_path"]).exists()
+    assert result["centerlines_kml_url"]
+    assert result["bounds_wgs84"] is not None
+    assert any(layer["key"] == "centerlines_layer" for layer in result["layers"])
+
+    spec = get_spec("geonet-baseline")
+    assert spec is not None
+    normalized = normalize_result(spec, result)
+    outputs = {o["key"]: o for o in normalized["outputs"]}
+    assert outputs["centerlines"]["asset_type"] == "vector.kml.spine"
 
 
 def test_kml_import_output_uses_route_name_as_label() -> None:
