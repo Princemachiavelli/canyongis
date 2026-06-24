@@ -23,6 +23,7 @@ import psycopg
 import rasterio
 from fastapi import Body, Depends, FastAPI, File, Form, HTTPException, Request, Response, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 from psycopg.types.json import Jsonb
 from pydantic import BaseModel, Field, ValidationError
@@ -1234,6 +1235,76 @@ class ProjectRequest(BaseModel):
     name: str = Field(..., min_length=1)
 
 
+_GEOLIBRE_DEFAULT_BASEMAP = "https://tiles.openfreemap.org/styles/liberty"
+
+
+def _geolibre_project_export(
+    *,
+    project_id: str,
+    name: str,
+    base_url: str,
+    bbox: tuple[float, float, float, float] | None,
+) -> dict[str, Any]:
+    """Render a canyongis project as a GeoLibre ``.geolibre.json`` project.
+
+    The file carries no layers on purpose: it registers and activates the
+    CanyonGIS plugin (``plugins.manifestUrls`` / ``activePluginIds``) and seeds
+    it with the server URL and project id plus a one-shot ``autoLoad`` flag, so
+    the plugin hydrates layers from live job results when GeoLibre opens the
+    project. A bookmark that reflects the current state instead of a snapshot.
+    """
+    map_view: dict[str, Any] = {"center": [-111.0, 38.5], "zoom": 6, "bearing": 0, "pitch": 0}
+    if bbox is not None:
+        west, south, east, north = bbox
+        map_view["center"] = [(west + east) / 2, (south + north) / 2]
+        map_view["zoom"] = 11
+        map_view["bbox"] = [west, south, east, north]
+    return {
+        "version": "0.1.0",
+        "name": name,
+        "mapView": map_view,
+        "basemapStyleUrl": _GEOLIBRE_DEFAULT_BASEMAP,
+        "basemapVisible": True,
+        "basemapOpacity": 1,
+        "layers": [],
+        "styles": {},
+        "plugins": {
+            "manifestUrls": [f"{base_url}/plugins/canyongis/plugin.json"],
+            "activePluginIds": ["canyongis"],
+            "mapControlPositions": {},
+            "settings": {
+                "canyongis": {
+                    "serverUrl": base_url,
+                    "projectId": project_id,
+                    "autoLoad": True,
+                }
+            },
+        },
+        "metadata": {"generator": "canyongis", "canyongisProjectId": project_id},
+    }
+
+
+_DEFAULT_CORS_ORIGINS = [
+    # GeoLibre web build (Vite pins this port) and the GeoLibre desktop app.
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "tauri://localhost",
+    "http://tauri.localhost",
+]
+
+
+def _cors_origins() -> list[str]:
+    """Browser origins allowed to call the API with credentials.
+
+    Credentialed CORS requires explicit origins (browsers reject "*" together
+    with cookies), so the GeoLibre frontend origins are the default and
+    CANYONGIS_CORS_ORIGINS (comma-separated) extends or replaces them.
+    """
+    raw = os.environ.get("CANYONGIS_CORS_ORIGINS", "")
+    extra = [origin.strip() for origin in raw.split(",") if origin.strip()]
+    return extra if "*" in extra else [*_DEFAULT_CORS_ORIGINS, *extra]
+
+
 def create_app(
     *,
     output_root: str | Path = "runs/web",
@@ -1252,12 +1323,21 @@ def create_app(
     app.state.auth = ctx.auth
     app.add_middleware(
         CORSMiddleware,
-        allow_origins=["*"],
+        allow_origins=_cors_origins(),
         allow_credentials=True,
         allow_methods=["*"],
         allow_headers=["*"],
     )
     app.mount("/outputs", StaticFiles(directory=ctx.output_root), name="outputs")
+    geolibre_plugin_dist = Path(
+        os.environ.get("CANYONGIS_GEOLIBRE_PLUGIN_DIST", "web/geolibre-plugin/dist")
+    )
+    if geolibre_plugin_dist.exists():
+        app.mount(
+            "/plugins/canyongis",
+            StaticFiles(directory=geolibre_plugin_dist),
+            name="geolibre-plugin",
+        )
 
     @app.get("/api/health")
     def health() -> dict[str, str]:
@@ -1310,6 +1390,46 @@ def create_app(
             )
             projects = [{"id": row[0], "name": row[1], "role": row[2]} for row in cur.fetchall()]
         return {"projects": projects}
+
+    @app.get("/api/projects/{project_id}/export.geolibre.json")
+    def export_geolibre_project(
+        project_id: str, request: Request, user: User = CurrentUserDep
+    ) -> Response:
+        _require_project_member(ctx, project_id, user)
+        with ctx.store.conn.cursor() as cur:
+            cur.execute("SELECT name FROM canyongis_projects WHERE id = %s", (project_id,))
+            row = cur.fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="project not found")
+        name = str(row[0])
+        with ctx.lock:
+            ctx.store.reload()
+            job_bounds = [
+                _coerce_wgs84_bounds(job.result.get("bounds_wgs84"))
+                for job in ctx.store.jobs.values()
+                if job.project_id == project_id and job.status == "succeeded" and job.result
+            ]
+        valid = [b for b in job_bounds if b is not None]
+        bbox = (
+            (
+                min(b[0] for b in valid),
+                min(b[1] for b in valid),
+                max(b[2] for b in valid),
+                max(b[3] for b in valid),
+            )
+            if valid
+            else None
+        )
+        payload = _geolibre_project_export(
+            project_id=project_id,
+            name=name,
+            base_url=str(request.base_url).rstrip("/"),
+            bbox=bbox,
+        )
+        return JSONResponse(
+            payload,
+            headers={"Content-Disposition": f'inline; filename="{_safe_name(name)}.geolibre.json"'},
+        )
 
     @app.post("/api/projects")
     def create_project(req: ProjectRequest, user: User = CurrentUserDep) -> dict[str, Any]:

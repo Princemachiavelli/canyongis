@@ -310,8 +310,7 @@ def export_rvt_previews(
             dtype=np.float32,
         )
         t = np.clip(
-            (slope - VAT_FLAT_FULL_SLOPE_DEG)
-            / (VAT_FLAT_ZERO_SLOPE_DEG - VAT_FLAT_FULL_SLOPE_DEG),
+            (slope - VAT_FLAT_FULL_SLOPE_DEG) / (VAT_FLAT_ZERO_SLOPE_DEG - VAT_FLAT_FULL_SLOPE_DEG),
             0,
             1,
         )
@@ -358,9 +357,7 @@ def export_rvt_previews(
 
         panel = Image.fromarray(rgb_u8, mode="RGB")
         panel_path = out_dir / "panel_rvt_vat.webp"
-        bounds, tile_archive = _save_panel_previews(
-            panel, valid_mask, transform, crs, panel_path
-        )
+        bounds, tile_archive = _save_panel_previews(panel, valid_mask, transform, crs, panel_path)
         artifacts["vat"] = PreviewArtifacts(
             out_dir=str(out_dir),
             bounds_wgs84=bounds,

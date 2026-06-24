@@ -101,10 +101,17 @@
 
           canyongis-web-frontend = pkgs.callPackage ./web/frontend { };
 
+          canyongis-geolibre-plugin = pkgs.callPackage ./web/geolibre-plugin { };
+
+          geolibre-web = pkgs.callPackage ./nix/geolibre-web.nix {
+            canyongisPlugin = canyongis-geolibre-plugin;
+          };
+
           canyongis = python.pkgs.callPackage ./nix/package.nix {
             inherit pysheds;
             inherit rvt-py;
             webFrontend = canyongis-web-frontend;
+            geolibrePlugin = canyongis-geolibre-plugin;
             gdal = pkgs.gdal;
             pmtiles = pkgs.pmtiles;
             psycopg = python.pkgs.psycopg;
@@ -118,6 +125,8 @@
             default = canyongis;
             canyongis = canyongis;
             inherit canyongis-web-frontend;
+            inherit canyongis-geolibre-plugin;
+            inherit geolibre-web;
             inherit pysheds;
             inherit rvt-py;
             inherit rvt-qgis;
@@ -145,7 +154,7 @@
               postgresqlWithPostGIS
               python.pkgs.pytest
               python.pkgs.pytest-cov
-	      #python.pkgs.napari
+              #python.pkgs.napari
             ];
             shellHook = ''
               # Make the in-tree source importable without a `pip install -e .`

@@ -1,0 +1,8 @@
+{
+  "id": "canyongis",
+  "name": "CanyonGIS",
+  "version": "0.1.0",
+  "entry": "canyongis.js",
+  "style": "canyongis.css",
+  "description": "Canyoneering terrain analysis: AOI DEM mosaics, hillshade/ravine/curvature tools, KML imports, and ML canyon detection backed by a canyongis server."
+}

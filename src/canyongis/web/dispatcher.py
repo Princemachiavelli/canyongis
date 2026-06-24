@@ -9,7 +9,6 @@ from pydantic import ValidationError
 
 from .plugins import get_spec, normalize_result
 
-
 _RETRY_SYSTEM_PARAM_KEYS = {"_inputs", "dem_job_id", "job_key"}
 
 

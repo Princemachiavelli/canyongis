@@ -1,0 +1,230 @@
+.canyongis-ctrl {
+  /* GeoLibre's design tokens are shadcn-style HSL component triplets (used as
+     hsl(var(--background)) and flipped by the .dark class on <html>), so they
+     must be wrapped in hsl(); a bare var(--background) is invalid at
+     computed-value time and renders transparent. */
+  background: hsl(var(--background, 0 0% 100%));
+  color: hsl(var(--foreground, 222 47% 11%));
+  border-radius: 8px;
+  box-shadow: 0 1px 4px rgba(0, 0, 0, 0.3);
+  width: 320px;
+  max-height: 75vh;
+  overflow-y: auto;
+  font:
+    12px/1.4 system-ui,
+    sans-serif;
+}
+
+.canyongis-ctrl .cgHead {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  border-bottom: 1px solid rgba(128, 128, 128, 0.25);
+  position: sticky;
+  top: 0;
+  background: inherit;
+  z-index: 1;
+}
+
+.canyongis-ctrl .cgBody {
+  padding: 4px 10px 10px;
+}
+
+.canyongis-ctrl .cgBody.cgHidden {
+  display: none;
+}
+
+.canyongis-ctrl .cgSection {
+  margin-top: 6px;
+}
+
+.canyongis-ctrl .cgSectionHead {
+  cursor: pointer;
+  font-weight: 600;
+  padding: 2px 0;
+}
+
+.canyongis-ctrl .cgSectionBody {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  padding: 4px 0 2px;
+}
+
+.canyongis-ctrl .cgRow {
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.canyongis-ctrl .cgInput {
+  flex: 1;
+  min-width: 0;
+  padding: 4px 6px;
+  border: 1px solid rgba(128, 128, 128, 0.4);
+  border-radius: 4px;
+  background: inherit;
+  color: inherit;
+  font: inherit;
+}
+
+.canyongis-ctrl .cgNarrow {
+  flex: 0 0 70px;
+}
+
+.canyongis-ctrl .cgBtn {
+  padding: 4px 8px;
+  border: 1px solid rgba(128, 128, 128, 0.4);
+  border-radius: 4px;
+  background: rgba(128, 128, 128, 0.12);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.canyongis-ctrl .cgBtn:hover {
+  background: rgba(128, 128, 128, 0.25);
+}
+
+.canyongis-ctrl .cgBtn:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.canyongis-ctrl .cgPrimary {
+  background: #2563eb;
+  border-color: #2563eb;
+  color: #fff;
+}
+
+.canyongis-ctrl .cgPrimary:hover {
+  background: #1d4ed8;
+}
+
+.canyongis-ctrl .cgDanger {
+  color: #dc2626;
+}
+
+.canyongis-ctrl .cgCollapse {
+  width: 24px;
+  text-align: center;
+}
+
+.canyongis-ctrl .cgStatus,
+.canyongis-ctrl .cgMeta {
+  color: rgba(128, 128, 128, 0.95);
+  font-size: 11px;
+}
+
+.canyongis-ctrl .cgField {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.canyongis-ctrl .cgField > span {
+  font-size: 11px;
+  color: rgba(128, 128, 128, 0.95);
+}
+
+.canyongis-ctrl .cgField select,
+.canyongis-ctrl .cgField input[type="text"],
+.canyongis-ctrl .cgField input[type="number"] {
+  padding: 3px 6px;
+  border: 1px solid rgba(128, 128, 128, 0.4);
+  border-radius: 4px;
+  background: inherit;
+  color: inherit;
+  font: inherit;
+}
+
+.canyongis-ctrl .cgFieldCheck {
+  flex-direction: row;
+  align-items: center;
+  gap: 6px;
+}
+
+.canyongis-ctrl .cgToolForm {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.canyongis-ctrl .cgToolDesc {
+  margin: 0;
+  font-size: 11px;
+  color: rgba(128, 128, 128, 0.95);
+}
+
+.canyongis-ctrl .cgJob {
+  border: 1px solid rgba(128, 128, 128, 0.25);
+  border-radius: 6px;
+  padding: 5px 7px;
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.canyongis-ctrl .cgJobTitle {
+  display: flex;
+  gap: 6px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
+
+.canyongis-ctrl .cgJobName {
+  font-weight: 600;
+}
+
+.canyongis-ctrl .cgJobKind {
+  color: rgba(128, 128, 128, 0.95);
+  font-size: 11px;
+}
+
+.canyongis-ctrl .cgJobStatus {
+  margin-left: auto;
+  font-size: 11px;
+}
+
+.canyongis-ctrl .cgStatus-succeeded {
+  color: #16a34a;
+}
+
+.canyongis-ctrl .cgStatus-failed {
+  color: #dc2626;
+}
+
+.canyongis-ctrl .cgStatus-running {
+  color: #2563eb;
+}
+
+.canyongis-ctrl .cgJobProgress,
+.canyongis-ctrl .cgJobError {
+  font-size: 11px;
+  color: rgba(128, 128, 128, 0.95);
+  word-break: break-word;
+}
+
+.canyongis-ctrl .cgJobError {
+  color: #dc2626;
+}
+
+.canyongis-ctrl .cgJobActions .cgBtn {
+  padding: 2px 6px;
+  font-size: 11px;
+}
+
+.canyongis-ctrl .cgLog {
+  margin-top: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.canyongis-ctrl .cgLogLine {
+  font-size: 11px;
+  color: rgba(128, 128, 128, 0.95);
+  word-break: break-word;
+}

@@ -153,9 +153,7 @@ def test_retry_failed_tool_job_reuses_inputs_and_params(
     user = ctx.auth.local_user()
     assert user is not None
     project_id = ctx.store.ensure_personal_project(user)
-    dem = _insert_dem_job(
-        ctx, tmp_path, job_id="retry-dem", created_at="2026-01-01T00:00:00+00:00"
-    )
+    dem = _insert_dem_job(ctx, tmp_path, job_id="retry-dem", created_at="2026-01-01T00:00:00+00:00")
     failed = Job(
         id="failed-retry",
         kind=TEST_TOOL_KEY,

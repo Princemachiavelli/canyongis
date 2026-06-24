@@ -147,12 +147,18 @@ def build_auth_manager(pg: PostgresConfig, output_root: Path) -> AuthManager:
 
 
 def set_session_cookie(response: Response, token: str) -> None:
+    # "lax" covers same-site setups (the GeoLibre web app on another localhost
+    # port). A cross-site deployment needs CANYONGIS_COOKIE_SAMESITE=none,
+    # which browsers only accept over TLS, hence the forced secure flag.
+    samesite = os.environ.get("CANYONGIS_COOKIE_SAMESITE", "lax").lower()
+    if samesite not in {"lax", "strict", "none"}:
+        samesite = "lax"
     response.set_cookie(
         SESSION_COOKIE_NAME,
         token,
         httponly=True,
-        samesite="lax",
-        secure=False,  # local dev; flip to True behind TLS in production
+        samesite=samesite,
+        secure=samesite == "none",
         path="/",
     )
 

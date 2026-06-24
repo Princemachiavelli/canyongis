@@ -32,6 +32,7 @@
   tqdm,
   uvicorn,
   webFrontend ? null,
+  geolibrePlugin ? null,
   zarr,
 }:
 
@@ -97,6 +98,11 @@ buildPythonPackage {
     "--set-default"
     "CANYONGIS_FRONTEND_DIST"
     "${webFrontend}/share/canyongis-web"
+  ]
+  ++ lib.optionals (geolibrePlugin != null) [
+    "--set-default"
+    "CANYONGIS_GEOLIBRE_PLUGIN_DIST"
+    "${geolibrePlugin}/share/canyongis-geolibre-plugin"
   ];
 
   doCheck = false;
