@@ -24,6 +24,47 @@
         ./nix/treefmt.nix
       ];
 
+      flake = {
+        nixosModules.canyongis = import ./nix/nixos-module.nix;
+        nixosModules.default = inputs.self.nixosModules.canyongis;
+
+        nixosConfigurations.canyongis-server = inputs.nixpkgs.lib.nixosSystem {
+          system = "aarch64-linux";
+          # Hand the prebuilt canyongis + frontend derivations to the module.
+          specialArgs = {
+            canyongisPackages = inputs.self.packages.aarch64-linux;
+          };
+          modules = [
+            inputs.self.nixosModules.canyongis
+            (
+              { lib, modulesPath, ... }:
+              {
+                # TODO: replace with the target host's real hardware-configuration.nix
+                # (bootloader, filesystems, networking). This qemu-guest stub only
+                # lets the configuration evaluate.
+                imports = [ (modulesPath + "/profiles/qemu-guest.nix") ];
+                boot.loader.systemd-boot.enable = lib.mkDefault true;
+                fileSystems."/" = lib.mkDefault {
+                  device = "/dev/disk/by-label/nixos";
+                  fsType = "ext4";
+                };
+                networking.hostName = "canyongis-server";
+                system.stateVersion = "24.11";
+
+                services.canyongis = {
+                  enable = true;
+                  # TODO: set the real domain. React/Leaflet UI is served at
+                  # https://<domain>; the GeoLibre UI at https://geolibre.<domain>.
+                  domain = "canyongis.example.com";
+                  # TODO: set a real Let's Encrypt contact email.
+                  acme.email = "admin@example.com";
+                };
+              }
+            )
+          ];
+        };
+      };
+
       perSystem =
         { config, system, ... }:
         let

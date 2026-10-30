@@ -64,9 +64,18 @@
   padding: 4px 6px;
   border: 1px solid rgba(128, 128, 128, 0.4);
   border-radius: 4px;
-  background: inherit;
-  color: inherit;
+  /* Use the theme tokens explicitly (not `inherit`): inside the MapLibre
+     control subtree `inherit` can resolve to an unreadable bg/fg pairing, so
+     typed text ends up dark-on-dark. */
+  background: hsl(var(--background, 0 0% 100%));
+  color: hsl(var(--foreground, 222 47% 11%));
   font: inherit;
+}
+
+.canyongis-ctrl .cgInput::placeholder,
+.canyongis-ctrl .cgField input::placeholder {
+  color: hsl(var(--foreground, 222 47% 11%));
+  opacity: 0.5;
 }
 
 .canyongis-ctrl .cgNarrow {
@@ -135,9 +144,16 @@
   padding: 3px 6px;
   border: 1px solid rgba(128, 128, 128, 0.4);
   border-radius: 4px;
-  background: inherit;
-  color: inherit;
+  background: hsl(var(--background, 0 0% 100%));
+  color: hsl(var(--foreground, 222 47% 11%));
   font: inherit;
+}
+
+/* Native dropdown options render in their own popup, outside the panel's
+   inherited color, so pin them to the theme tokens too. */
+.canyongis-ctrl .cgField select option {
+  background: hsl(var(--background, 0 0% 100%));
+  color: hsl(var(--foreground, 222 47% 11%));
 }
 
 .canyongis-ctrl .cgFieldCheck {

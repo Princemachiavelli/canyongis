@@ -15,7 +15,24 @@ import type { GeoLibreAppAPI, MapControl, MapLike } from "./geolibre";
 const POLL_MS = 3000;
 const STORAGE_SERVER = "canyongis.serverUrl";
 const STORAGE_PROJECT = "canyongis.projectId";
-const DEFAULT_SERVER = "http://127.0.0.1:8000";
+
+/** The current HTTP(S) origin, or null when there isn't one (e.g. file://). */
+function httpOrigin(): string | null {
+  try {
+    const origin = typeof window !== "undefined" ? window.location.origin : "";
+    return origin.startsWith("http") ? origin : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Default canyongis server URL.
+ *
+ * The plugin is normally served by the canyongis web server itself, so the API
+ * lives at the same origin and no manual URL is needed. Fall back to the local
+ * dev port only when there is no usable HTTP origin.
+ */
+const DEFAULT_SERVER = httpOrigin() ?? "http://127.0.0.1:8765";
 
 export type PluginSettings = {
   serverUrl: string;
@@ -29,7 +46,12 @@ export function loadSettings(): PluginSettings {
   let serverUrl = DEFAULT_SERVER;
   let projectId: string | undefined;
   try {
-    serverUrl = localStorage.getItem(STORAGE_SERVER) ?? DEFAULT_SERVER;
+    // When served from a real origin the plugin talks to that same origin, so
+    // it is authoritative — ignore any stored URL (a stale one would otherwise
+    // block auto-connect). Only honor a stored URL when there's no usable
+    // origin (e.g. opened via file://). Explicit overrides still arrive via
+    // URL params / project state through applySettings().
+    if (httpOrigin() === null) serverUrl = localStorage.getItem(STORAGE_SERVER) || DEFAULT_SERVER;
     projectId = localStorage.getItem(STORAGE_PROJECT) ?? undefined;
   } catch {
     // localStorage unavailable (e.g. blocked); fall back to defaults
@@ -65,9 +87,9 @@ function button(label: string, onClick: () => void, className = ""): HTMLButtonE
   return b;
 }
 
-function section(title: string): { root: HTMLElement; body: HTMLElement } {
+function section(title: string, open = true): { root: HTMLElement; body: HTMLElement } {
   const root = el("details", "cgSection") as unknown as HTMLDetailsElement;
-  root.open = true;
+  root.open = open;
   const head = el("summary", "cgSectionHead", title);
   const body = el("div", "cgSectionBody");
   root.append(head, body);
@@ -372,8 +394,12 @@ export class CanyonGisControl implements MapControl {
     const body = el("div", "cgBody");
     root.append(head, body);
 
-    // Server / auth
-    const server = section("Server");
+    // Connection status and login stay visible; the server URL is an optional,
+    // collapsed override since the plugin defaults to the serving origin.
+    this.statusEl = el("div", "cgStatus", "Not connected");
+    this.authBody = el("div");
+
+    const server = section("Server (advanced)", false);
     const serverInput = el("input", "cgInput") as HTMLInputElement;
     serverInput.type = "text";
     serverInput.value = this.settings.serverUrl;
@@ -384,9 +410,7 @@ export class CanyonGisControl implements MapControl {
     }, "cgPrimary");
     const serverRow = el("div", "cgRow");
     serverRow.append(serverInput, connectBtn);
-    this.statusEl = el("div", "cgStatus", "Not connected");
-    this.authBody = el("div");
-    server.body.append(serverRow, this.statusEl, this.authBody);
+    server.body.append(serverRow);
 
     // AOI / DEM
     const aoi = section("AOI → DEM mosaic");
@@ -438,7 +462,16 @@ export class CanyonGisControl implements MapControl {
     // Log
     this.logEl = el("div", "cgLog");
 
-    body.append(server.root, aoi.root, imp.root, tools.root, jobsSec.root, this.logEl);
+    body.append(
+      this.statusEl,
+      this.authBody,
+      aoi.root,
+      imp.root,
+      tools.root,
+      jobsSec.root,
+      server.root,
+      this.logEl,
+    );
     return root;
   }
 
