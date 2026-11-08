@@ -47,6 +47,7 @@ dependencies = [
   "segmentation-models-pytorch",
   "albumentations",
   "scikit-image",
+  "scikit-learn",
   "tqdm",
 ]
 
@@ -57,11 +58,14 @@ dev = ["ruff", "pytest", "pytest-cov"]
 canyongis = "canyongis.__main__:cli"
 canyongis-validate = "canyongis.validate:cli"
 canyongis-baseline = "canyongis.baseline:baseline_cli"
+canyongis-reach-eval = "canyongis.reach_eval:reach_eval_cli"
+canyongis-drainage-diag = "canyongis.drainage_diag:drainage_diag_cli"
 canyongis-ml-train = "canyongis.ml.cli:train_cli"
 canyongis-ml-predict = "canyongis.ml.cli:predict_cli"
 canyongis-ml-export-features = "canyongis.ml.inspect:export_feature_pngs_cli"
 canyongis-ml-export-labels = "canyongis.ml.inspect:export_canyon_labels_cli"
 canyongis-ropewiki-sync = "canyongis.ingest:ingest_ropewiki_cli"
+canyongis-ropewiki-survey = "canyongis.ropewiki_survey:ropewiki_survey_cli"
 canyongis-mosaic-manifest = "canyongis.ml.manifest_mosaic:mosaic_manifest_cli"
 canyongis-geomorphons = "canyongis.geomorphons:geomorphons_cli"
 canyongis-geomorphon-previews = "canyongis.geomorphon_preview:geomorphon_previews_cli"

@@ -35,6 +35,9 @@ Defined in `pyproject.toml [project.scripts]`:
 | `canyongis` | `__main__:cli` | Dispatch (`train`/`predict`) or default predict + Folium render |
 | `canyongis-validate` | `validate:cli` | Validate KML descent tracks |
 | `canyongis-baseline` | `baseline:baseline_cli` | GeoNet-style analytical canyon detection (no model): Perona-Malik + curvature heads + D8 tracing + confinement scoring |
+| `canyongis-reach-eval` | `reach_eval:reach_eval_cli` | Drainage-reach ranker + evaluator: D8 reaches, per-reach features, track labels (± Ropewiki), leave-one-group-out logreg/GBT, area-matched metrics, external raster scoring, rappel-step checks. See `DETECTION_STRATEGY.md` |
+| `canyongis-drainage-diag` | `drainage_diag:drainage_diag_cli` | Track ↔ D8-network alignment and per-feature AUC per mosaic |
+| `canyongis-ropewiki-survey` | `ropewiki_survey:ropewiki_survey_cli` | List Ropewiki technical canyons in a bbox whose KMLs mark rappels (R1, rap 2, …); writes page URLs for `canyongis-ropewiki-sync` |
 | `canyongis-ropewiki-sync` | `ingest:ingest_ropewiki_cli` | Fetch Ropewiki KML + matching TNM 1m DEM tiles |
 | `canyongis-mosaic-manifest` | `ml.manifest_mosaic:mosaic_manifest_cli` | Build buffered DEM mosaics, update training manifest |
 | `canyongis-ml-train` | `ml.cli:train_cli` | Train U-Net with K-fold CV |

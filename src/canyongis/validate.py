@@ -39,9 +39,17 @@ DESCENT_TOKENS = ("descent", "rappel", "logjam", "canyon", "gorge", "creek")
 # matching tokens (e.g. "Zion Canyon Shuttle" — the shuttle road is neither).
 NON_ROUTE_TOKENS = ("shuttle", "road", "highway", "freeway", "parkway")
 
-# Names that identify a KML Point as a ground-truth rappel location.
+# Names of an actual rappel/anchor: "R1", "R2 30 ft", "1 R3 30'", "rap4", "rap #2",
+# "Rappel 3", "Final rappel", "5th rap". Ropewiki KMLs mostly use the "R<n>" form.
+ANCHOR_POINT_PATTERN = re.compile(
+    r"^\s*r\s*\d+\b|\br\d+\b|\brap(?:pel)?s?\s*#?\s*\d*\b|\b\d+(?:st|nd|rd|th)\s+rap",
+    re.IGNORECASE,
+)
+
+# Names that identify a KML Point as a ground-truth rappel location: anchors plus
+# drop-ins and pour-offs.
 RAPPEL_POINT_PATTERN = re.compile(
-    r"\brappel\b|\brap\b|\bdrop[\s-]*in\b|pour[-\s]?off", re.IGNORECASE
+    rf"{ANCHOR_POINT_PATTERN.pattern}|\bdrop[\s-]*in\b|pour[-\s]?off", re.IGNORECASE
 )
 
 
@@ -63,9 +71,16 @@ class KmlFeatures:
 
     def rappel_points(self) -> gpd.GeoDataFrame:
         """Subset of points whose name identifies them as a known rappel location."""
+        return self._points_matching(RAPPEL_POINT_PATTERN)
+
+    def anchor_points(self) -> gpd.GeoDataFrame:
+        """Points named as an actual rappel (R1, rap 2, Final rappel; no drop-ins)."""
+        return self._points_matching(ANCHOR_POINT_PATTERN)
+
+    def _points_matching(self, pattern: re.Pattern[str]) -> gpd.GeoDataFrame:
         if self.points.empty:
             return self.points
-        mask = self.points["name"].apply(lambda n: bool(RAPPEL_POINT_PATTERN.search(n or "")))
+        mask = self.points["name"].apply(lambda n: bool(pattern.search(n or "")))
         return self.points[mask].reset_index(drop=True)
 
 

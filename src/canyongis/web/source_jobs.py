@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 from ..aoi_mosaic import build_aoi_dem_mosaic
 from ..ingest import (
     ROPEWIKI_PAGE_URL,
+    USER_AGENT,
     _download_file,
     _find_kml_file_title,
     _get_kml_download_url,
@@ -263,9 +264,7 @@ def _caltopo_features_to_kml(data: dict[str, Any], *, document_name: str) -> byt
     return (
         '<?xml version="1.0" encoding="UTF-8"?>\n'
         '<kml xmlns="http://www.opengis.net/kml/2.2"><Document>\n'
-        f"<name>{document_label}</name>\n"
-        + body
-        + "\n</Document></kml>"
+        f"<name>{document_label}</name>\n" + body + "\n</Document></kml>"
     ).encode("utf-8")
 
 
@@ -291,7 +290,7 @@ def _network_link_target(content: bytes, base_url: str) -> str | None:
 
 
 def _fetch_url_bytes(url: str, timeout: float = 120.0) -> bytes:
-    req = urllib.request.Request(url, headers={"User-Agent": "canyongis/0.1"})
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return resp.read()
 
@@ -356,9 +355,7 @@ def _import_kml_from_url(
     progress_cb,
 ) -> tuple[Path, dict[str, Any], str]:
     """Fetch a remote KML, save under the job's output dir, return ``(path, source_dict, display_name)``."""
-    content, resolved_url = _fetch_kml_following_network_link(
-        fetch_url, progress_cb=progress_cb
-    )
+    content, resolved_url = _fetch_kml_following_network_link(fetch_url, progress_cb=progress_cb)
     if not content:
         raise ValueError(f"remote KML is empty: {fetch_url}")
     if not _looks_like_kml(content):
@@ -472,9 +469,7 @@ def _ropewiki_waypoint_result(
         f"Ropewiki page has no KML ({skip_reason}); generating waypoint {display_name} "
         f"at {lat:.5f},{lon:.5f}"
     )
-    _write_ropewiki_waypoint_kml(
-        kml_path, name=display_name, lat=lat, lon=lon, page_url=page_url
-    )
+    _write_ropewiki_waypoint_kml(kml_path, name=display_name, lat=lat, lon=lon, page_url=page_url)
     return build_kml_import_result(
         ctx,
         kml_path,
@@ -497,9 +492,7 @@ def _write_ropewiki_waypoint_kml(
     path: Path, *, name: str, lat: float, lon: float, page_url: str
 ) -> None:
     """Write a minimal KML containing one Placemark/Point with name and link."""
-    description = (
-        f'<![CDATA[<a href="{html.escape(page_url)}">{html.escape(page_url)}</a>]]>'
-    )
+    description = f'<![CDATA[<a href="{html.escape(page_url)}">{html.escape(page_url)}</a>]]>'
     safe_name = html.escape(name)
     lines = [
         '<?xml version="1.0" encoding="UTF-8"?>',
@@ -508,7 +501,7 @@ def _write_ropewiki_waypoint_kml(
         "<scale>1.0</scale></IconStyle></Style>",
         f"<Placemark><name>{safe_name}</name>"
         f"<description>{description}</description>"
-        '<styleUrl>#rwWaypoint</styleUrl>'
+        "<styleUrl>#rwWaypoint</styleUrl>"
         f"<Point><coordinates>{lon},{lat},0</coordinates></Point>"
         "</Placemark>",
         "</Document></kml>",

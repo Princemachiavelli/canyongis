@@ -10,6 +10,7 @@ import pytest
 from shapely.geometry import LineString, Point
 
 from canyongis.validate import (
+    ANCHOR_POINT_PATTERN,
     RAPPEL_POINT_PATTERN,
     _classify,
     _describe_heights,
@@ -140,6 +141,11 @@ def test_rappel_point_pattern_recognition():
     assert RAPPEL_POINT_PATTERN.search("Canyon Drop-in")
     assert RAPPEL_POINT_PATTERN.search("Pour-off 1")
     # Not rappel points:
+    for name in ("R1", "R2 30 ft", "1 R3 30'", "rap4", "Rap #2", "5th rap", "R4,5,6"):
+        assert RAPPEL_POINT_PATTERN.search(name), name
+        assert ANCHOR_POINT_PATTERN.search(name), name
+    for name in ("Drop in", "Pour-off 1", "Parking", "Rapid", "Trail junction 2", "Brown Dam"):
+        assert not ANCHOR_POINT_PATTERN.search(name), name
     assert not RAPPEL_POINT_PATTERN.search("Approach")
     assert not RAPPEL_POINT_PATTERN.search("Parking")
     assert not RAPPEL_POINT_PATTERN.search("Summit")

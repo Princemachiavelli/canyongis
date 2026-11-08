@@ -23,6 +23,8 @@ from .validate import parse_kml
 
 ROPEWIKI_API_URL = "https://ropewiki.com/api.php"
 ROPEWIKI_PAGE_URL = "https://ropewiki.com/{title}"
+# Ropewiki's Cloudflare rules challenge generic user agents (403) but allow this one.
+USER_AGENT = "RopeGeo/1.0"
 TNM_API_URL = "https://tnmaccess.nationalmap.gov/api/v1/products"
 TNM_1M_DATASET = "Digital Elevation Model (DEM) 1 meter"
 TNM_UNAVAILABLE_MESSAGE = (
@@ -53,7 +55,7 @@ class RopewikiPageRef:
 
 def _http_get_json(url: str, params: dict[str, Any], timeout: float = 60.0) -> dict[str, Any]:
     full_url = f"{url}?{urllib.parse.urlencode(params, doseq=True)}"
-    req = urllib.request.Request(full_url, headers={"User-Agent": "canyongis/0.1"})
+    req = urllib.request.Request(full_url, headers={"User-Agent": USER_AGENT})
     with urllib.request.urlopen(req, timeout=timeout) as resp:
         return json.load(resp)
 
@@ -89,7 +91,7 @@ def _download_file(url: str, path: Path, timeout: float = 300.0) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     part = path.with_name(path.name + ".part")
     part.unlink(missing_ok=True)
-    req = urllib.request.Request(url, headers={"User-Agent": "canyongis/0.1"})
+    req = urllib.request.Request(url, headers={"User-Agent": USER_AGENT})
     try:
         with urllib.request.urlopen(req, timeout=timeout) as resp, part.open("wb") as dst:
             shutil.copyfileobj(resp, dst)
@@ -321,6 +323,80 @@ def get_ropewiki_page_coords(ref: RopewikiPageRef) -> tuple[float, float] | None
         if lat is not None and lon is not None:
             return (lat, lon)
     return None
+
+
+ROPEWIKI_CANYON_PROPS: tuple[str, ...] = (
+    "Has latitude",
+    "Has longitude",
+    "Has KML file",
+    "Has technical rating",
+    "Has number of rappels",
+    "Has longest rappel",
+)
+
+_FT_TO_M = 0.3048
+
+
+def _smw_scalar(values: list[Any]) -> float | str | None:
+    """First SMW printout value as a float (quantities in ft → m) or string."""
+    for value in values:
+        if isinstance(value, dict):
+            raw = value.get("value", value.get("raw"))
+            if isinstance(raw, (int, float)):
+                scale = _FT_TO_M if str(value.get("unit", "")).lower() == "ft" else 1.0
+                return float(raw) * scale
+            value = raw
+        if isinstance(value, (int, float)):
+            return float(value)
+        if isinstance(value, str) and value.strip():
+            text = value.strip()
+            try:
+                return float(text)
+            except ValueError:
+                return text
+    return None
+
+
+def query_ropewiki_canyon_props(
+    *,
+    bounds_wgs84: tuple[float, float, float, float] | None = None,
+    titles: list[str] | None = None,
+    props: tuple[str, ...] = ROPEWIKI_CANYON_PROPS,
+    conditions: str = "",
+    max_results: int = 500,
+) -> dict[str, dict[str, float | str | None]]:
+    """SMW property values for canyon pages selected by bbox and/or explicit titles.
+
+    ``conditions`` adds SMW conditions to the bbox selector (e.g.
+    ``"[[Has technical rating::3||4]]"``). Bbox results are paged until exhausted.
+    Returns ``{page_title: {prop: value}}``. Quantities in feet (e.g. ``Has longest
+    rappel``) are converted to meters; missing properties map to ``None``.
+    """
+    selectors: list[str] = []
+    if bounds_wgs84 is not None:
+        west, south, east, north = (float(v) for v in bounds_wgs84)
+        selectors.append(
+            "[[Category:Canyons]]"
+            f"[[Has latitude::>{south}]][[Has latitude::<{north}]]"
+            f"[[Has longitude::>{west}]][[Has longitude::<{east}]]{conditions}"
+        )
+    for chunk in _chunked([t.replace("_", " ") for t in titles or []], 20):
+        selectors.append(" OR ".join(f"[[{t}]]" for t in chunk))
+
+    limit = max(1, min(int(max_results), 500))
+    out: dict[str, dict[str, float | str | None]] = {}
+    for selector in selectors:
+        offset = 0
+        while offset is not None:
+            query = "|".join(
+                [selector, *(f"?{p}" for p in props), f"limit={limit}", f"offset={offset}"]
+            )
+            data = _ropewiki_query(action="ask", query=query)
+            for title, info in _smw_results(data):
+                printouts = info.get("printouts") or {}
+                out[title] = {p: _smw_scalar(printouts.get(p) or []) for p in props}
+            offset = data.get("query-continue-offset")
+    return out
 
 
 def batch_resolve_page_kmls(page_titles: list[str]) -> dict[str, str | None]:

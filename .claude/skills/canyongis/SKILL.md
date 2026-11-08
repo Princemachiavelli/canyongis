@@ -112,6 +112,36 @@ The default `canyongis <dem> <outdir>` (no subcommand) runs the **classical** pi
 
 ---
 
+## 4b. Reach ranker / evaluator (primary detector; see `DETECTION_STRATEGY.md`)
+
+Ranks D8 drainage reaches (A ≥ 1 ha, ~50 m long) instead of segmenting pixels. Features
+are cached per mosaic/tile, so re-scoring after a label or model change takes seconds.
+
+```bash
+cd /data/canyongis   # manifest paths are relative to the manifest's directory
+canyongis-reach-eval training-manifest-grouped.json runs/reach-eval-NNN \
+  --ropewiki \                       # unmapped Ropewiki canyons → positive/ignore; non-technical → ignore
+  --max-pixels 60e6 --tile-px 4000 \ # tile big mosaics (catchment area from a 4x-decimated full read)
+  --raster unet=runs/predict-x/canyon_prob.tif   # score any probability raster ({stem} allowed)
+```
+
+- Outputs: `report.md`, `metrics.json`, `reaches/<stem>.gpkg` (layers `reaches`, `steps`),
+  `png/<stem>.png` (TP green / FP red / FN blue / ignore gray).
+- CV is leave-one-group-out (overlapping mosaics/tiles share a group).
+- Labels default to `--technical markers`: positives are the descent stretch spanning named
+  rappel points (R1, rap 2, … via `KmlFeatures.anchor_points()`) ± 200 m, and the rest of the
+  descent is ignored. `--unmarked ignore` drops tracks without usable markers; `--technical off`
+  uses whole descent lines.
+- AP depends on how rare positives are, so compare it with the base rate. AUC doesn't.
+- Always read the `*_am` (area-matched) columns: they score only reaches at least as large as
+  the 10th-percentile positive, so "it's the biggest drainage" can't win. Compare `ap_am`
+  with `base_rate_am`.
+- Feature cache key = `ReachConfig.signature()` (label settings excluded). Bump
+  `reaches.CACHE_VERSION` when feature code changes.
+- `canyongis-drainage-diag <manifest> out.json` checks track ↔ D8 alignment per mosaic.
+
+---
+
 ## 5. Inspection helpers
 
 ```bash

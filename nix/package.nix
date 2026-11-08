@@ -26,6 +26,7 @@
   rvt-py,
   scipy,
   scikit-image,
+  scikit-learn,
   segmentation_models_pytorch,
   shapely,
   torch,
@@ -72,6 +73,7 @@ buildPythonPackage {
     rvt-py
     scipy
     scikit-image
+    scikit-learn
     segmentation_models_pytorch
     shapely
     torch
