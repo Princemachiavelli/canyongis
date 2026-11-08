@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import html
 import re
+import urllib.parse
 from dataclasses import dataclass
 
 _HEADING = re.compile(r"^==+\s*(?P<title>[^=].*?)\s*==+\s*$", re.MULTILINE)
@@ -276,3 +277,109 @@ def wiki_to_text(wiki: str) -> str:
     text = re.sub(r"\n{3,}", "\n\n", text)
     text = re.sub(r"[ \t]{2,}", " ", text)
     return text.strip()
+
+
+_LINK_TOKEN = re.compile(
+    r"\[\[(?:(?P<target>[^\[\]|]*)\|)?(?P<wlabel>[^\[\]]*)\]\]"
+    r"|\[(?P<url>https?://\S+)(?:\s+(?P<elabel>[^\]]*))?\]"
+    r"|(?P<bare>https?://[^\s\[\]<>\"]*[^\s\[\]<>\".,;:)])"
+)
+_BOLD = re.compile(r"'''(.+?)'''")
+_ITALIC = re.compile(r"''(.+?)''")
+_HTML_HEADING = re.compile(r"^(={3,})\s*(?P<title>.*?)\s*\1\s*$")
+_BULLET = re.compile(r"^(?P<mark>[*#])\s*(?P<text>.*)$")
+ROPEWIKI_BASE = "https://ropewiki.com/"
+
+
+def _strip_for_html(wiki: str) -> str:
+    """Remove markup that has no HTML equivalent; keep links, bold, lists and text."""
+    text = _COMMENT.sub("", wiki)
+    text = _REF.sub("", text)
+    text = _FILE_LINK.sub("", text)
+    for _ in range(20):
+        new = _INNER_TEMPLATE.sub("", text)
+        if new == text:
+            break
+        text = new
+    text = _TAG.sub(lambda m: "<br>" if m.group(0).lower().startswith("<br") else "", text)
+    text = _TABLE_LINE.sub("", text)
+    return html.unescape(text).replace("\xa0", " ")
+
+
+def _inline_html(text: str) -> str:
+    """Escape text, turn wiki and external links into anchors, apply bold and italic."""
+    out: list[str] = []
+    pos = 0
+    for m in _LINK_TOKEN.finditer(text):
+        out.append(_escaped_span(text[pos : m.start()]))
+        if m.group("bare"):
+            href = label = m.group("bare")
+        elif m.group("url"):
+            href = m.group("url")
+            label = (m.group("elabel") or href).strip()
+        else:
+            target = (m.group("target") or m.group("wlabel")).strip()
+            label = m.group("wlabel").strip() or target
+            href = ROPEWIKI_BASE + urllib.parse.quote(target.replace(" ", "_"), safe="()_,:'/&")
+        out.append(f'<a href="{html.escape(href, quote=True)}">{_escaped_span(label)}</a>')
+        pos = m.end()
+    out.append(_escaped_span(text[pos:]))
+    joined = "".join(out)
+    joined = _BOLD.sub(r"<b>\1</b>", joined)
+    return _ITALIC.sub(r"<i>\1</i>", joined)
+
+
+def _escaped_span(text: str) -> str:
+    # <br> markers come from _strip_for_html; keep them, escape everything else.
+    parts = re.split(r"(<br>)", text)
+    return "".join(p if p == "<br>" else html.escape(p, quote=False) for p in parts)
+
+
+def wiki_to_html(wiki: str) -> str:
+    """HTML for a section, safe to show in a QField HTML widget.
+
+    Output contains only ``<p>``, ``<h4>``, ``<ul>``, ``<ol>``, ``<li>``, ``<a href>``,
+    ``<b>``, ``<i>``, ``<br>``. All text is escaped, and wiki links go to ropewiki.com.
+    """
+    blocks: list[str] = []
+    para: list[str] = []
+    listing: tuple[str, list[str]] | None = None
+
+    def flush_para() -> None:
+        if para:
+            blocks.append("<p>" + "<br>".join(_inline_html(p) for p in para) + "</p>")
+            para.clear()
+
+    def flush_list() -> None:
+        nonlocal listing
+        if listing:
+            tag, items = listing
+            blocks.append(f"<{tag}>" + "".join(f"<li>{_inline_html(i)}</li>" for i in items)
+                          + f"</{tag}>")
+            listing = None
+
+    for raw in _strip_for_html(wiki).splitlines():
+        line = raw.strip()
+        bullet = _BULLET.match(line)
+        heading = _HTML_HEADING.match(line)
+        if bullet:
+            flush_para()
+            tag = "ol" if bullet.group("mark") == "#" else "ul"
+            if listing and listing[0] != tag:
+                flush_list()
+            if listing is None:
+                listing = (tag, [])
+            listing[1].append(bullet.group("text"))
+        elif heading:
+            flush_para()
+            flush_list()
+            blocks.append(f"<h4>{_inline_html(heading.group('title'))}</h4>")
+        elif not line:
+            flush_para()
+            flush_list()
+        else:
+            flush_list()
+            para.append(line)
+    flush_para()
+    flush_list()
+    return "\n".join(blocks)

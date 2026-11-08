@@ -21,8 +21,8 @@ Add `--no-kml` to skip KML downloads (no routes, waypoints or rappel geometry).
 | `routes` | feature | LINESTRING | KML track | page KML |
 | `waypoints` | feature | POINT | KML point that is not a rappel | page KML |
 | `rappels` | feature | POINT (NULL if no KML anchor) | rappel | wiki rappel lines, KML anchors |
-| `sections` | attribute | - | page section | page prose, as wiki and cleaned text |
-| `beta_links` | attribute | - | external link | "Beta sites" section |
+| `beta` | attribute | - | page section | page prose, as wiki and cleaned text |
+| `links` | attribute | - | external link | "Beta sites" section |
 | `conditions` | attribute | - | condition report | `Conditions:<canyon>-<timestamp>` |
 | `condition_rappel_notes` | attribute | - | rappel note in a report | `R1:`, `R4 & R5:` lines in Comments |
 | `condition_photos` | attribute | - | photo in a report | `FileList` |
@@ -58,10 +58,15 @@ Each `Conditions:` page is one row in `conditions`, keyed by its page title.
 
 ## Cleaned text
 
-`sections.body_wiki` is the section as written. `sections.body_text` is plain text:
+`beta.body_wiki` is the section as written. `beta.body_text` is plain text:
 templates, comments, refs and file links are removed; `[[A|B]]` and `[url label]` keep
 the label; list markers become `- `; HTML entities are decoded. `rappels.notes` is also
 cleaned.
+
+`beta.body_html` is the section rendered as HTML for QField's HTML widget. It contains only
+`<p>`, `<h4>`, `<ul>`, `<ol>`, `<li>`, `<a href>`, `<b>`, `<i>` and `<br>`. All text is
+escaped. Wiki links point to `https://ropewiki.com/`, and bare URLs become links. Templates,
+comments, refs and file links are dropped.
 
 ## Units and conventions
 

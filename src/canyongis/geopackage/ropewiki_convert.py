@@ -39,6 +39,7 @@ from .wikitext import (
     rappels,
     split_sections,
     strip_template,
+    wiki_to_html,
     wiki_to_text,
 )
 
@@ -395,12 +396,15 @@ def _replace_canyon(conn: sqlite3.Connection, row: CanyonRow, source_url: str,
     canyon_id = cur.lastrowid
 
     conn.executemany(
-        "INSERT INTO sections (canyon_id, position, heading, body_wiki, body_text)"
-        " VALUES (?,?,?,?,?)",
-        [(canyon_id, i, h, b, wiki_to_text(b)) for i, (h, b) in enumerate(row.sections)],
+        "INSERT INTO beta (canyon_id, position, heading, body_wiki, body_text, body_html)"
+        " VALUES (?,?,?,?,?,?)",
+        [
+            (canyon_id, i, h, b, wiki_to_text(b), wiki_to_html(b))
+            for i, (h, b) in enumerate(row.sections)
+        ],
     )
     conn.executemany(
-        "INSERT OR IGNORE INTO beta_links (canyon_id, label, url, source_name)"
+        "INSERT OR IGNORE INTO links (canyon_id, label, url, source_name)"
         " VALUES (?,?,?,?)",
         [(canyon_id, label or None, url, urlparse(url).netloc) for url, label in row.links],
     )

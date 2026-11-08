@@ -7,7 +7,7 @@ tables and types are chosen to map cleanly onto PostGIS later:
   ``canyons`` (point), ``routes`` (line), ``waypoints`` (point), ``rappels`` (point).
 * Attribute tables (no geometry): ``conditions`` (one row per condition report, dated
   by ``trip_date``) with ``condition_rappel_notes`` and ``condition_photos`` children,
-  ``ratings``, ``sections`` (wiki and cleaned text), ``beta_links``, ``kml_files``.
+  ``ratings``, ``beta`` (wiki, plain and HTML text), ``links``, ``kml_files``.
 * ``schema_meta`` holds the schema version and generator.
 
 Natural keys (``canyons.ropewiki_title``) are unique, and every child row carries
@@ -47,8 +47,8 @@ FEATURE_TABLES: tuple[tuple[str, str, str, str], ...] = (
 ATTRIBUTE_TABLES: tuple[tuple[str, str], ...] = (
     ("conditions", "Condition reports, from Conditions: pages"),
     ("ratings", "Ratings, from Votes: pages"),
-    ("sections", "Prose sections of each canyon page"),
-    ("beta_links", "External beta and reference links"),
+    ("beta", "Prose sections of each canyon page: wiki, plain and HTML text"),
+    ("links", "External links, from the Beta sites section"),
     ("kml_files", "Source KML files and their checksums"),
 )
 
@@ -165,17 +165,18 @@ CREATE TABLE ratings (
     rating       INTEGER
 );
 
-CREATE TABLE sections (
+CREATE TABLE beta (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     canyon_id    INTEGER NOT NULL REFERENCES canyons(id) ON DELETE CASCADE,
     position     INTEGER NOT NULL,
     heading      TEXT NOT NULL,
     body_wiki    TEXT NOT NULL,
     body_text    TEXT NOT NULL,
+    body_html    TEXT NOT NULL,
     UNIQUE (canyon_id, position)
 );
 
-CREATE TABLE beta_links (
+CREATE TABLE links (
     id           INTEGER PRIMARY KEY AUTOINCREMENT,
     canyon_id    INTEGER NOT NULL REFERENCES canyons(id) ON DELETE CASCADE,
     label        TEXT,
@@ -208,8 +209,8 @@ CREATE INDEX idx_conditions_canyon_date ON conditions (canyon_id, trip_date);
 CREATE INDEX idx_condition_notes_report ON condition_rappel_notes (report_id);
 CREATE INDEX idx_condition_photos_report ON condition_photos (report_id);
 CREATE INDEX idx_ratings_canyon ON ratings (canyon_id);
-CREATE INDEX idx_sections_canyon ON sections (canyon_id);
-CREATE INDEX idx_beta_canyon ON beta_links (canyon_id);
+CREATE INDEX idx_beta_sections_canyon ON beta (canyon_id);
+CREATE INDEX idx_links_canyon ON links (canyon_id);
 CREATE INDEX idx_kml_canyon ON kml_files (canyon_id);
 """
 

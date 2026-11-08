@@ -30,6 +30,7 @@ from canyongis.geopackage.wikitext import (
     rappels,
     split_sections,
     strip_template,
+    wiki_to_html,
     wiki_to_text,
 )
 
@@ -91,7 +92,7 @@ def test_height_units() -> None:
     assert height_m("no number here") is None
 
 
-def test_beta_links_from_beta_section() -> None:
+def test_links_from_beta_sites_section() -> None:
     beta = dict(split_sections(LYTLE))["Beta sites"]
     urls = [url for url, _ in external_links(beta)]
     assert "http://brennen.caltech.edu/advents/midlyt.htm" in urls
@@ -186,12 +187,12 @@ def test_write_canyon_is_idempotent(tmp_path: Path) -> None:
 
     assert count("canyons") == 1
     assert count("rappels") == 5  # one per wiki rappel line; geometry stays NULL without KML
-    assert count("sections") == 8
+    assert count("beta") == 8
     assert count("conditions") == 1
     assert count("condition_rappel_notes") == 5
     assert count("condition_photos") == 2
     assert count("ratings") == 1
-    assert count("beta_links") > 0
+    assert count("links") > 0
 
     canyon = conn.execute(
         "SELECT technical_rating, number_of_rappels, longest_rappel_m, geom FROM canyons"
@@ -232,7 +233,7 @@ def test_foreign_keys_cascade_on_delete(tmp_path: Path) -> None:
     conn.commit()
     conn.execute("DELETE FROM canyons")
     conn.commit()
-    assert conn.execute("SELECT COUNT(*) FROM sections").fetchone()[0] == 0
+    assert conn.execute("SELECT COUNT(*) FROM beta").fetchone()[0] == 0
     assert conn.execute("SELECT COUNT(*) FROM condition_photos").fetchone()[0] == 0
     conn.close()
 
@@ -250,3 +251,24 @@ def test_missing_trip_date_falls_back_to_filing_date() -> None:
     cond = condition_record("Conditions:Demo-20200714021458", page)
     assert cond["trip_date"] == "2020-07-14"
     assert cond["trip_date_source"] == "filed_date"
+
+
+def test_wiki_to_html_links_lists_and_escaping() -> None:
+    html_out = wiki_to_html(
+        "Go to [[Lytle Creek]] or [[Brennen|the hikes]], see http://x.org/a.\n"
+        "* one ''it'' '''bold'''\n* two\n\n<script>a</script> a & b"
+    )
+    assert '<a href="https://ropewiki.com/Lytle_Creek">Lytle Creek</a>' in html_out
+    assert '<a href="https://ropewiki.com/Brennen">the hikes</a>' in html_out
+    assert '<a href="http://x.org/a">http://x.org/a</a>.' in html_out
+    assert "<ul><li>one <i>it</i> <b>bold</b></li><li>two</li></ul>" in html_out
+    assert "a &amp; b" in html_out
+    assert "<script" not in html_out
+
+
+def test_wiki_to_html_only_emits_allowed_tags() -> None:
+    import re
+
+    text = wiki_to_html(dict(split_sections(LYTLE))["Beta sites"] + "\n\n" + LYTLE[:400])
+    tags = set(re.findall(r"</?([a-z0-9]+)", text))
+    assert tags <= {"p", "a", "b", "i", "br", "ul", "ol", "li", "h4"}
