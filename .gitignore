@@ -41,3 +41,5 @@ tmp
 
 # PostgreSQL
 .pg/
+web/canyon-viewer/node_modules/
+!web/canyon-viewer/*.html

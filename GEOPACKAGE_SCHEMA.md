@@ -102,3 +102,28 @@ comments, refs and file links are dropped.
   page are stored without a matching rappel row.
 - Only Ropewiki data is covered. DEM-derived outputs (ravine spines, rappel candidates,
   detections) are not in v1.
+
+## Tile layers
+
+Raster tiles are EPSG:3857 tile tables (GeoPackage 1.4 tiles), one table per layer, so each
+can be switched or blended in the viewer.
+
+| Table | Zoom | Source | Format |
+|---|---|---|---|
+| `tiles_osm` | 13-18 | OSM map rendered to raster (MBTiles input) | PNG |
+| `tiles_imagery` | 14-18 | Aerial imagery GeoTIFF (e.g. NAIP) | JPEG where fully covered, PNG at edges |
+| `tiles_hillshade` | 14-17 | Hillshade from a 1 m DEM | PNG (grey with alpha) |
+
+Each layer covers the canyon geometry plus a 500 m buffer. `gpkg_contents.description` holds
+the attribution. `gpkg_tile_matrix_set` and `gpkg_tile_matrix` describe the zoom levels.
+
+Build (inside `nix develop`). Use `--dry-run` first, since it prints tile counts without writing:
+
+```sh
+canyongis-gpkg-tiles runs/canyons.gpkg --imagery naip.tif --dem dem_utm.tif \
+    --osm-mbtiles osm.mbtiles --dry-run
+canyongis-gpkg-tiles runs/canyons.gpkg --imagery naip.tif --dem dem_utm.tif \
+    --osm-mbtiles osm.mbtiles
+```
+
+The build stops if it would write more than 200,000 tiles, unless `--max-tiles` is given.

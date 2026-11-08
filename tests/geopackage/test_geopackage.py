@@ -272,3 +272,14 @@ def test_wiki_to_html_only_emits_allowed_tags() -> None:
     text = wiki_to_html(dict(split_sections(LYTLE))["Beta sites"] + "\n\n" + LYTLE[:400])
     tags = set(re.findall(r"</?([a-z0-9]+)", text))
     assert tags <= {"p", "a", "b", "i", "br", "ul", "ol", "li", "h4"}
+
+
+def test_kml_anchor_names_map_to_wiki_labels() -> None:
+    from canyongis.geopackage.ropewiki_convert import _anchor_key
+
+    assert _anchor_key("R1") == "R1"
+    assert _anchor_key("R2a") == "R2a"
+    assert _anchor_key("rap 3") == "R3"
+    assert _anchor_key("first rap") == "R1"
+    assert _anchor_key("4th rap") == "R4"
+    assert _anchor_key("Final rappel") is None

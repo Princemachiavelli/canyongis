@@ -33,6 +33,7 @@ from .wikitext import (
     find_template,
     first_int,
     first_number,
+    normalize_label,
     parse_coded,
     parse_comments,
     parse_file_list,
@@ -49,7 +50,12 @@ MI_TO_KM = 1.609344
 NS_CONDITIONS = 190
 NS_VOTES = 196
 _BATCH = 50
-_ANCHOR_NUMBER = re.compile(r"(?i)\b(?:r|rap(?:pel)?s?)\s*#?\s*(\d+)\b")
+_ANCHOR_NUMBER = re.compile(r"(?i)\b(?:r|rap(?:pel)?s?)\s*#?\s*(\d+)([a-z]?)\b")
+_ANCHOR_ORDINAL = re.compile(r"(?i)\b(\d+)(?:st|nd|rd|th)\s+rap|\b(\w+)\s+rap")
+_ORDINAL_WORDS = {
+    "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5,
+    "sixth": 6, "seventh": 7, "eighth": 8, "ninth": 9, "tenth": 10,
+}
 _SKIP_SECTIONS = {"beta sites", "trip reports and media"}
 _WAYPOINT_KINDS = (
     ("parking", "parking"),
@@ -283,8 +289,21 @@ def rating_record(source_title: str, page: dict[str, Any]) -> dict[str, Any] | N
 
 
 def _anchor_key(name: str) -> str | None:
+    """Rappel label for a KML point name, in the same form as wiki labels (R1, R2a).
+
+    Handles "R3", "R2a", "rap 3", "3rd rap" and "third rap". Returns None for names
+    without a number, such as "Final rappel".
+    """
     m = _ANCHOR_NUMBER.search(name)
-    return m.group(1) if m else None
+    if m:
+        return f"R{m.group(1)}{m.group(2).lower()}"
+    m = _ANCHOR_ORDINAL.search(name)
+    if m:
+        if m.group(1):
+            return f"R{m.group(1)}"
+        word = m.group(2).lower()
+        return f"R{_ORDINAL_WORDS[word]}" if word in _ORDINAL_WORDS else None
+    return None
 
 
 def _waypoint_kind(name: str) -> str:
@@ -496,8 +515,7 @@ def _insert_geometry(conn: sqlite3.Connection, canyon_id: int, row: CanyonRow,
     sequence = 0
     for r in row.rappels:
         sequence += 1
-        key = re.sub(r"\D", "", r.label)
-        anchor = anchors_by_key.get(key)
+        anchor = anchors_by_key.get(normalize_label(r.label))
         if anchor:
             used.add(anchor["name"])
         conn.execute(
@@ -513,7 +531,7 @@ def _insert_geometry(conn: sqlite3.Connection, canyon_id: int, row: CanyonRow,
         conn.execute(
             "INSERT INTO rappels (canyon_id, sequence, label, height_m, anchor_text, notes,"
             " kml_file_id, geom) VALUES (?,?,?,?,?,?,?,?)",
-            (canyon_id, sequence, a["name"], None, None, None, kml_id,
+            (canyon_id, sequence, a["key"] or a["name"], None, None, None, kml_id,
              point_blob(a["lon"], a["lat"])),
         )
 

@@ -1,0 +1,39 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Canyon GeoPackage Viewer</title>
+  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+  <header class="topbar">
+    <h1>Canyon viewer</h1>
+    <label class="button">
+      Open .gpkg
+      <input id="file" type="file">
+    </label>
+    <span id="status" class="status">Open a canyon GeoPackage to begin.</span>
+  </header>
+
+  <div id="drop" class="layout">
+    <aside class="sidebar">
+      <input id="search" type="search" placeholder="Filter canyons" disabled>
+      <ul id="canyons" class="canyon-list"></ul>
+    </aside>
+    <main class="map-pane">
+      <div id="map"></div>
+    </main>
+    <section class="detail">
+      <nav class="tabs" id="tabs"></nav>
+      <div id="panel" class="panel"><p class="muted">Select a canyon.</p></div>
+    </section>
+  </div>
+
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@ngageoint/geopackage@4.2.10/dist/geopackage.min.js"></script>
+  <script src="gpkg.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>

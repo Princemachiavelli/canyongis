@@ -270,6 +270,25 @@ CREATE TABLE gpkg_contents (
     max_y       DOUBLE,
     srs_id      INTEGER REFERENCES gpkg_spatial_ref_sys(srs_id)
 );
+CREATE TABLE gpkg_tile_matrix_set (
+    table_name TEXT NOT NULL PRIMARY KEY,
+    srs_id     INTEGER NOT NULL REFERENCES gpkg_spatial_ref_sys(srs_id),
+    min_x      DOUBLE NOT NULL,
+    min_y      DOUBLE NOT NULL,
+    max_x      DOUBLE NOT NULL,
+    max_y      DOUBLE NOT NULL
+);
+CREATE TABLE gpkg_tile_matrix (
+    table_name    TEXT NOT NULL,
+    zoom_level    INTEGER NOT NULL,
+    matrix_width  INTEGER NOT NULL,
+    matrix_height INTEGER NOT NULL,
+    tile_width    INTEGER NOT NULL,
+    tile_height   INTEGER NOT NULL,
+    pixel_x_size  DOUBLE NOT NULL,
+    pixel_y_size  DOUBLE NOT NULL,
+    CONSTRAINT pk_ttm PRIMARY KEY (table_name, zoom_level)
+);
 CREATE TABLE gpkg_geometry_columns (
     table_name         TEXT NOT NULL,
     column_name        TEXT NOT NULL,
