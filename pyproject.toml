@@ -58,6 +58,7 @@ dev = ["ruff", "pytest", "pytest-cov"]
 canyongis = "canyongis.__main__:cli"
 canyongis-validate = "canyongis.validate:cli"
 canyongis-baseline = "canyongis.baseline:baseline_cli"
+canyongis-ropewiki-gpkg = "canyongis.geopackage.ropewiki_convert:convert_cli"
 canyongis-reach-eval = "canyongis.reach_eval:reach_eval_cli"
 canyongis-drainage-diag = "canyongis.drainage_diag:drainage_diag_cli"
 canyongis-ml-train = "canyongis.ml.cli:train_cli"

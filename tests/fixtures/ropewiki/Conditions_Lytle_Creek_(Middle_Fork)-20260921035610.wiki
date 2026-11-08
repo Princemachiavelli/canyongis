@@ -1,0 +1,27 @@
+{{Condition
+|ReportedBy=SBeast
+|Location=Lytle Creek (Middle Fork)
+|Date=2026-09-20
+|Quality condition=2 - Ok
+|Water condition=1 - Very Low (class B = a2)
+|Wetsuit condition=2 - Thin wetsuit (3mm-4mm)
+|Difficulty condition=2 - Normal
+|Team time=5.5
+|Team size=3
+|Team min experience=Advanced
+|Team max experience=Intermediate
+|Comments=Road: The beginning of the dirt road has a pretty deep dip, but it wasn't bad after getting past it.
+
+Water levels are low compared to the spring, but still a fun run. Each of us wore a different combination of thermal insulation: one wore a 3mm wetsuit; another no wetsuit but had rain pants and a rain jacket; I was comfortable in 3mm and a light rain jacket (I run cold). The norm spots were breezy and chilly, R4 to R5. 
+
+R1: Bolt is slightly loose
+
+R2: Bowl is still over waist deep
+
+R3: Bowl is shallow, transition to R4 is straightforward
+
+R4 & R5: Webbing is good
+
+Lots of mosquitoes out on the hike in and out.
+|FileList=20260920 122828.jpg, 20260920 124421.jpg,
+}}
