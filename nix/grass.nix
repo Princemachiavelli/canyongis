@@ -132,6 +132,11 @@ stdenv.mkDerivation (finalAttrs: {
   # Otherwise a very confusing "Can't load GDAL library" error
   makeFlags = lib.optional stdenv.hostPlatform.isDarwin "GDAL_DYNAMIC=";
 
+  # GCC 16 defaults to -std=gnu++20, under which autoconf's C++11 conformance probe fails
+  # and falls back to CXX="g++ -std=gnu++11". That is too old for PDAL's headers, so
+  # configure's PDAL link test fails with "Unable to locate suitable (>=1.7.1) PDAL library".
+  env.CXXFLAGS = "-std=gnu++17";
+
   # Ensures that the python scripts run at build time are actually executable;
   # otherwise, patchShebangs ignores them.
   postConfigure = ''

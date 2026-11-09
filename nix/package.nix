@@ -1,11 +1,10 @@
 {
   lib,
   buildPythonPackage,
-  albumentations,
+  albumentationsx,
   alembic,
   bcrypt,
   fastapi,
-  fastmcp,
   gdal,
   grass,
   setuptools,
@@ -52,11 +51,10 @@ buildPythonPackage {
   build-system = [ setuptools ];
 
   dependencies = [
-    albumentations
+    albumentationsx
     alembic
     bcrypt
     fastapi
-    fastmcp
     folium
     geojson
     geopandas

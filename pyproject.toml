@@ -31,7 +31,6 @@ dependencies = [
   "pyogrio",
   "folium",
   "fastapi",
-  "fastmcp",
   "psycopg",
   "alembic",
   "bcrypt",
@@ -45,7 +44,7 @@ dependencies = [
   # ML stack — also provided by the Nix flake (torch with CUDA 12.x / MPS).
   "torch>=2.2",
   "segmentation-models-pytorch",
-  "albumentations",
+  "albumentationsx",
   "scikit-image",
   "scikit-learn",
   "tqdm",

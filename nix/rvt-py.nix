@@ -25,6 +25,13 @@ buildPythonPackage rec {
     hash = "sha256-3I8Ah1PB4tYu+H7BpfdlCP6kulpA3vxys0DkLLQTM84=";
   };
 
+  # matplotlib 3.9 deprecated and 3.11 removed matplotlib.cm.get_cmap.
+  postPatch = ''
+    substituteInPlace rvt/blend_func.py \
+      --replace-fail "from matplotlib.cm import get_cmap" "from matplotlib import colormaps" \
+      --replace-fail "cm = get_cmap(colormap)" "cm = colormaps[colormap]"
+  '';
+
   build-system = [ setuptools ];
 
   dependencies = [
