@@ -107,7 +107,7 @@ canyongis-validate --kml GROUND_TRUTH.kml --out-dir OUT  # post-hoc scoring
 
 - **PyTorch ≥ 2.2** with CUDA 12.x (Linux) or MPS (macOS) — provided by the Nix flake.
 - **segmentation-models-pytorch** — U-Net + pretrained encoders.
-- **albumentations** — multi-target augmentation synced across image + label + keypoint masks.
+- **albumentationsx** (imported as `albumentations`) — multi-target augmentation synced across image + label + keypoint masks.
 - **scikit-image** — skeletonization and peak detection.
 - **rasterio, geopandas, shapely, pyproj, pyogrio, folium** — geospatial I/O and rendering.
 - **pysheds** — D8 flow accumulation; provided via Nix, not pip.
