@@ -294,6 +294,10 @@ from the San Gabriels.
    cross sections). Fine once cached; numba would help if the network/feature code
    changes often.
 
+### Status of the items above (2026-11-09, §9)
+
+Item 1 has tooling but still needs your review. Item 2 is done; it sizes rappels better but doesn't help ranking. Item 4 is done, with a small gain. Item 5 is partly done: 13 of 24 canyons added. Items 3, 6 and 7 are still open.
+
 ## 8. Caveats / open items
 
 - **Unlabeled canyons:** now partly handled through Ropewiki (§6). Canyons that
@@ -304,3 +308,32 @@ from the San Gabriels.
 - All data is SoCal (San Gabriels / Lytle Creek). Thresholds tuned here may not
   transfer to Colorado Plateau slickrock, where routes cross bare rock and slots are
   narrower than 1 m DEM resolution.
+
+## 9. Iteration 2026-11-09: smoothing, profile steps, snapped labels, more data
+
+All runs are under `/data/canyongis/runs/reach-eval-006-*` and share `reach-eval-006-cache`, which was seeded from 001. The settings match §6: `--ropewiki --max-pixels 60e6 --tile-px 4000`, technical markers, and unmarked tracks kept whole. Logreg is leave-one-group-out over all 51 inputs (18 groups). The ladder scores feature and smoothing changes on the **same labels**, so AP is comparable across those rows. Label changes are checked by cross-training instead.
+
+| step | run | logreg AUC | AP | AP_am (base 0.094) | R@P50 |
+|---|---|---|---|---|---|
+| baseline (reproduces §6) | `006-base` | 0.905 | 0.349 | 0.394 | 0.262 |
+| + isotonic step features in the ranker | `006-profile` | 0.906 | 0.350 | 0.394 | 0.260 |
+| main-stem smoothing ±1, median (new default) | `006-default` | 0.904 | 0.351 | 0.397 | 0.272 |
+| + 13 new canyons, train-only | `006-newdata` | 0.905 | 0.355 | 0.398 | 0.280 |
+| gbt, same run | `006-newdata` | 0.898 | **0.372** | **0.403** | 0.227 |
+| final: + exclude Das Pfeife (label change: positives 175.31 → 175.24 km) | `006-final` | 0.905 | 0.354 | 0.398 | 0.270 |
+| gbt, same run (smoothed) | `006-final` | 0.898 | 0.376 | 0.408 | 0.237 |
+
+- **Smoothing:** ±1 reach helps a little, mostly R@P50 (+0.01–0.02). ±2, 3 and 5 are worse, and mean is no better than median. Smoothing only follows main-stem edges (`main_up[down[i]] == i`), so a side gully doesn't inherit the score of the canyon it joins.
+- **Isotonic profile steps** (`ProfileConfig`): elevation is the 3×3 corridor minimum along the D8 path, fit with a non-increasing least-squares profile per link. A step is a contiguous run steeper than 0.7 over 4 m with a total height of at least 3 m.
+  - **Ranking:** single-feature AUC is only 0.48–0.58, and adding them doesn't change the ranker. Steep wall gullies have drops too.
+  - **Rappels:** they're much better at sizing. Largest step vs Ropewiki's longest rappel gives ρ 0.56 (D8 drops: 0.32). Step count (≥ 8 m) vs Ropewiki rappel count gives ρ 0.68 (D8: 0.62).
+  - **Locating rappels:** no better. At matched density, about 3.7 candidates/km, they find 64% of named rappels within 25 m, vs 71% for D8 drops at excess ≥ 4 m.
+  - So they're opt-in ranker features (`--features`), but always reported as rappel candidates and written to the `iso_steps` layer.
+- **Snapped labels** (`--label-snap-m 40`, `006-snap40`): tracks are map-matched onto the network, staying on the current link where possible, with gaps filled along `down`. Positive length drops from 175 to 154 km, because parallel reaches within 20 m no longer count.
+  - Median per-track offset is 4.9 m (max 23.7 m). Lytle South Fork matches 100% at a 12.3 m offset, which the 20 m tolerance already handled.
+  - Cross-training shows it's neutral. Training on snapped labels scores AP 0.342 on the old labels (vs 0.350 when trained on them) and 0.347 on the snapped labels (vs 0.342). It stays opt-in.
+  - Its per-track stats are a useful audit. The worst match was Das Pfeife: 38% of points within 40 m. It's a very short canyon with no marked rappels, so it's now excluded (`--exclude-track`).
+- **More data:** the 13 new canyons from `marked_not_in_manifest.txt` live in `training-manifest-new24-grouped.json`. The others were dropped: 3 have no KML, 5 have no descent line, Rue de Fortuna hit a TNM query error, Laurel Springs had no covering DEM, and Antenna didn't appear in the sync log at all.
+  - With the new canyons as training-only data, scored on the same 18 groups, logreg gains a little and gbt gains more (AP 0.353 → 0.372).
+  - Held-out scores on the new mosaics themselves are high for Keyhole (NV, AUC 0.99) and Palm Wash (0.98). They're poor for Toypurina (0.48), and for Cadillac Crash and Titanium Chalupa (≈ 0.75). Toypurina's DEM is complete (100% valid under the track), so the cause is unexplained; check its outcome PNG.
+- **Review loop:** `review/fp_runs.{gpkg,csv}` lists negative main-stem runs above the threshold, sorted by length × mean score, with the nearest Ropewiki canyon. Mark them in an overrides file (`label` = positive/ignore/negative) and pass `--label-overrides`. Overriding false positives raises AP by construction, so report results both with and without.

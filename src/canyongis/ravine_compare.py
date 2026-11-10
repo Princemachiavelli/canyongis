@@ -313,7 +313,9 @@ def _overlay_kml_mask(
     opacity: float = 1.0,
 ) -> None:
     """Alpha-blend the descent track over the image as a filled line of given
-    width. opacity=1.0 paints fully; smaller values let the backdrop show through."""
+    width. opacity=1.0 paints fully; smaller values let the backdrop show through.
+    RGBA images also get their alpha raised along the line so it shows on transparent
+    score overlays."""
     if mask.shape[0] != image.height or mask.shape[1] != image.width:
         return
     iters = max(int(width_px) // 2, 0)
@@ -322,11 +324,13 @@ def _overlay_kml_mask(
     )
     if not line_mask.any():
         return
-    rgb = np.asarray(image).copy().astype(np.float32)
+    px = np.asarray(image).copy().astype(np.float32)
     color_arr = np.array(color, dtype=np.float32)
+    if image.mode == "RGBA":
+        color_arr = np.append(color_arr, 255.0)
     alpha = float(np.clip(opacity, 0.0, 1.0))
-    rgb[line_mask] = rgb[line_mask] * (1.0 - alpha) + color_arr * alpha
-    image.paste(Image.fromarray(np.clip(rgb, 0, 255).astype(np.uint8), mode="RGB"))
+    px[line_mask] = px[line_mask] * (1.0 - alpha) + color_arr * alpha
+    image.paste(Image.fromarray(np.clip(px, 0, 255).astype(np.uint8), mode=image.mode))
 
 
 def _font(size: int = 22) -> ImageFont.ImageFont:

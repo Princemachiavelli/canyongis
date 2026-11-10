@@ -118,15 +118,37 @@ Ranks D8 drainage reaches (A ≥ 1 ha, ~50 m long) instead of segmenting pixels.
 are cached per mosaic/tile, so re-scoring after a label or model change takes seconds.
 
 ```bash
-cd /data/canyongis   # manifest paths are relative to the manifest's directory
-canyongis-reach-eval training-manifest-grouped.json runs/reach-eval-NNN \
+canyongis-reach-eval /data/canyongis/training-manifest-grouped.json runs/reach-eval-NNN \
+  --root /data/canyongis \           # manifest paths are relative to it
   --ropewiki \                       # unmapped Ropewiki canyons → positive/ignore; non-technical → ignore
   --max-pixels 60e6 --tile-px 4000 \ # tile big mosaics (catchment area from a 4x-decimated full read)
+  --extra-train-manifest /data/canyongis/training-manifest-new24-grouped.json \  # train-only
+  --exclude-track "Das Pfeife Canyon" \  # short, no marked rappels: ignore, don't label
   --raster unet=runs/predict-x/canyon_prob.tif   # score any probability raster ({stem} allowed)
 ```
 
-- Outputs: `report.md`, `metrics.json`, `reaches/<stem>.gpkg` (layers `reaches`, `steps`),
-  `png/<stem>.png` (TP green / FP red / FN blue / ignore gray).
+Run it from the repo (not from `/data/canyongis`: the dev shell's hook creates a Postgres
+dir in the cwd) and pass `--root`.
+
+- Outputs: `report.md`, `metrics.json`, `reaches/<stem>.gpkg` (layers `reaches`, `steps`,
+  `iso_steps`), `png/<stem>.png` (TP green / FP red / FN blue / ignore gray), and
+  `review/fp_runs.{gpkg,csv}`: main-stem runs of negative reaches above the threshold,
+  longest × highest-scoring first, with the nearest Ropewiki canyon.
+- **Smoothing:** `--smooth-hops 1 --smooth median` (default) smooths learned scores along
+  the main stem only (never across a junction). Comma lists score several variants; the
+  first drives outputs and the threshold.
+- **Profile steps:** `--profile` (default) adds isotonic-profile step features (`iso_*`,
+  cached as `<stem>.<sig>.prof-<sig>.npz`) and scores them as rappel candidates. They size
+  and count rappels better than D8 drops but don't help ranking, so they're not ranker
+  features unless passed via `--features`. Tune with `--step-grade/--step-window-m/
+  --min-step-m/--corridor-px`.
+- **Labels:** `--label-snap-m 40` map-matches tracks onto the network instead of the 20 m
+  pixel tolerance (per-track offsets in the report; opt-in, ranking-neutral).
+  `--label-overrides FILE` applies reviewed labels (vector file, `label` =
+  positive/negative/ignore, optional `buffer_m`). Overriding reviewed FPs raises AP by
+  construction: report results with and without.
+- **More data:** `--extra-train-manifest` mosaics are trained on but never scored, so
+  results stay comparable on the same held-out terrain.
 - CV is leave-one-group-out (overlapping mosaics/tiles share a group).
 - Labels default to `--technical markers`: positives are the descent stretch spanning named
   rappel points (R1, rap 2, … via `KmlFeatures.anchor_points()`) ± 200 m, and the rest of the

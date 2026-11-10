@@ -110,6 +110,73 @@
             torch = python.pkgs.torch;
             segmentation_models_pytorch = python.pkgs.segmentation_models_pytorch;
           };
+
+          # Console scripts from pyproject.toml, run against the in-tree source (PYTHONPATH is set
+          # by the dev shell hook) so they are available without installing the package.
+          devScripts = pkgs.lib.mapAttrsToList (
+            name: entry:
+            let
+              parts = pkgs.lib.splitString ":" entry;
+            in
+            pkgs.writeShellScriptBin name ''
+              exec python -c 'import sys; from ${builtins.elemAt parts 0} import ${builtins.elemAt parts 1} as f; sys.argv[0] = "${name}"; sys.exit(f())' "$@"
+            ''
+          ) (builtins.fromTOML (builtins.readFile ./pyproject.toml)).project.scripts;
+
+          # Serve web/canyon-viewer over HTTPS with a Tailscale certificate (the Companion view
+          # needs HTTPS for GPS). The host name is this machine's current Tailscale name, so
+          # nothing needs editing when it changes. The tailscale CLI comes from the system
+          # (services.tailscale) so it matches the running daemon.
+          canyon-viewer-serve = pkgs.writeShellApplication {
+            name = "canyon-viewer-serve";
+            runtimeInputs = [
+              pkgs.jq
+              pkgs.python3
+            ];
+            text = ''
+              usage() {
+                echo "usage: canyon-viewer-serve [--port N] [--gpkg-dir DIR]" >&2
+                echo "  Serves the viewer at https://<tailscale-host>:N (default 8443) and every" >&2
+                echo "  *.gpkg in DIR (default: current directory) at /gpkg/<name>." >&2
+                exit 2
+              }
+              port=8443
+              gpkg_dir=$PWD
+              while [ $# -gt 0 ]; do
+                case "$1" in
+                  --port) [ $# -ge 2 ] || usage; port=$2; shift 2 ;;
+                  --gpkg-dir) [ $# -ge 2 ] || usage; gpkg_dir=$2; shift 2 ;;
+                  *) usage ;;
+                esac
+              done
+
+              if ! command -v tailscale >/dev/null; then
+                echo "tailscale is not on PATH (enable services.tailscale)" >&2
+                exit 1
+              fi
+              host=$(tailscale status --json | jq -r '.Self.DNSName | rtrimstr(".")')
+              if [ -z "$host" ] || [ "$host" = null ]; then
+                echo "Tailscale has no host name; is it running, with MagicDNS enabled?" >&2
+                exit 1
+              fi
+
+              certs=''${XDG_STATE_HOME:-$HOME/.local/state}/canyongis/tailscale-certs
+              mkdir -p "$certs"
+              # Renews the certificate when it is close to expiry. Needs HTTPS enabled for the
+              # tailnet, and either root or `sudo tailscale set --operator=$USER` once.
+              if ! tailscale cert --cert-file "$certs/$host.crt" --key-file "$certs/$host.key" "$host"; then
+                echo "tailscale cert failed for $host (see the message above)" >&2
+                exit 1
+              fi
+
+              viewer=''${VIEWER_DIR:-$PWD/web/canyon-viewer}
+              [ -f "$viewer/index.html" ] || viewer=${./web/canyon-viewer}
+              echo "Open https://$host:$port/?gpkg=gpkg/<file>.gpkg"
+              exec python3 ${./web/canyon-viewer/serve.py} \
+                --cert "$certs/$host.crt" --key "$certs/$host.key" \
+                --port "$port" --directory "$viewer" --gpkg-dir "$gpkg_dir"
+            '';
+          };
         in
         {
           legacyPackages = pkgs;
@@ -117,6 +184,7 @@
             default = canyongis;
             canyongis = canyongis;
             inherit canyongis-web-frontend;
+            inherit canyon-viewer-serve;
             inherit pysheds;
             inherit rvt-py;
             inherit rvt-qgis;
@@ -130,22 +198,30 @@
             program = "${canyongis}/bin/canyongis";
           };
 
+          apps.canyon-viewer-serve = {
+            type = "app";
+            program = "${canyon-viewer-serve}/bin/canyon-viewer-serve";
+          };
+
           devShells.default = pkgs.mkShell {
             inputsFrom = [
               canyongis
               config.treefmt.build.devShell
             ];
-            packages = with pkgs; [
-              grass
-              gdal
-              pmtiles
-              #qgis # very large and slow to build.
-              nodejs
-              postgresqlWithPostGIS
-              python.pkgs.pytest
-              python.pkgs.pytest-cov
-	      #python.pkgs.napari
-            ];
+            packages =
+              devScripts
+              ++ [ canyon-viewer-serve ]
+              ++ (with pkgs; [
+                grass
+                gdal
+                pmtiles
+                #qgis # very large and slow to build.
+                nodejs
+                postgresqlWithPostGIS
+                python.pkgs.pytest
+                python.pkgs.pytest-cov
+                #python.pkgs.napari
+              ]);
             shellHook = ''
               # Make the in-tree source importable without a `pip install -e .`
               # (the dev shell only provides deps, not the canyongis package itself).

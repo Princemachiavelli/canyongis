@@ -13,7 +13,6 @@ import math
 import sqlite3
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
-from typing import Optional
 
 WEB_MERCATOR_SRS_ID = 3857
 TILE_SIZE = 256
@@ -36,6 +35,7 @@ WEB_MERCATOR_WKT = (
 ZOOMS_MAP = range(13, 19)
 ZOOMS_IMAGERY = range(14, 19)
 ZOOMS_HILLSHADE = range(14, 18)
+ZOOMS_CONTOURS = range(14, 18)
 
 
 @dataclass(frozen=True)
@@ -79,7 +79,9 @@ def tiles_for_bbox(
                 yield TileIndex(zoom, x, y)
 
 
-def count_tiles(bbox_lonlat: tuple[float, float, float, float], zooms: Iterable[int]) -> dict[int, int]:
+def count_tiles(
+    bbox_lonlat: tuple[float, float, float, float], zooms: Iterable[int]
+) -> dict[int, int]:
     counts: dict[int, int] = {}
     for tile in tiles_for_bbox(bbox_lonlat, zooms):
         counts[tile.zoom] = counts.get(tile.zoom, 0) + 1
@@ -97,7 +99,9 @@ def buffer_bbox_lonlat(
     return west - dlon, max(south - dlat, -85.0), east + dlon, min(north + dlat, 85.0)
 
 
-def bbox_3857_of_lonlat(bbox_lonlat: tuple[float, float, float, float]) -> tuple[float, float, float, float]:
+def bbox_3857_of_lonlat(
+    bbox_lonlat: tuple[float, float, float, float],
+) -> tuple[float, float, float, float]:
     west, south, east, north = bbox_lonlat
 
     def merc(lon: float, lat: float) -> tuple[float, float]:
@@ -113,14 +117,20 @@ def bbox_3857_of_lonlat(bbox_lonlat: tuple[float, float, float, float]) -> tuple
 
 
 # A render callback returns encoded tile bytes, or None for "no data here".
-Render = Callable[[int, int, int], Optional[bytes]]
+Render = Callable[[int, int, int], bytes | None]
 
 
 def ensure_web_mercator_srs(conn: sqlite3.Connection) -> None:
     conn.execute(
         "INSERT OR IGNORE INTO gpkg_spatial_ref_sys VALUES (?, ?, ?, ?, ?, ?)",
-        ("WGS 84 / Pseudo-Mercator", WEB_MERCATOR_SRS_ID, "EPSG", WEB_MERCATOR_SRS_ID,
-         WEB_MERCATOR_WKT, "Web Mercator, EPSG:3857"),
+        (
+            "WGS 84 / Pseudo-Mercator",
+            WEB_MERCATOR_SRS_ID,
+            "EPSG",
+            WEB_MERCATOR_SRS_ID,
+            WEB_MERCATOR_WKT,
+            "Web Mercator, EPSG:3857",
+        ),
     )
 
 
@@ -169,8 +179,14 @@ def write_tile_table(
     conn.execute(
         "INSERT INTO gpkg_tile_matrix_set (table_name, srs_id, min_x, min_y, max_x, max_y)"
         " VALUES (?, ?, ?, ?, ?, ?)",
-        (table, WEB_MERCATOR_SRS_ID, -WORLD_HALF_SIZE, -WORLD_HALF_SIZE,
-         WORLD_HALF_SIZE, WORLD_HALF_SIZE),
+        (
+            table,
+            WEB_MERCATOR_SRS_ID,
+            -WORLD_HALF_SIZE,
+            -WORLD_HALF_SIZE,
+            WORLD_HALF_SIZE,
+            WORLD_HALF_SIZE,
+        ),
     )
     for zoom in zooms:
         pixel = 2 * WORLD_HALF_SIZE / (TILE_SIZE * (1 << zoom))

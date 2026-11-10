@@ -8,7 +8,10 @@
   const TABS = ["Overview", "Description", "Rappels", "Conditions", "Links", "Ratings"];
   const ALLOWED_TAGS = new Set(["P", "H4", "UL", "OL", "LI", "A", "B", "I", "BR"]);
 
-  const state = { db: null, canyons: [], selectedId: null, detail: null, tab: "Overview" };
+  const state = {
+    db: null, canyons: [], selectedId: null, detail: null, tab: "Overview",
+    view: "canyons", pendingMap: null, tileBounds: [], limitArea: null,
+  };
   const $ = (id) => document.getElementById(id);
 
   // ---- DOM helpers (text is always set with textContent) -------------------------
@@ -21,6 +24,7 @@
       else node.setAttribute(key, value);
     }
     for (const child of children || []) {
+      if (child === null || child === undefined || child === false) continue;
       node.append(child instanceof Node ? child : document.createTextNode(String(child)));
     }
     return node;
@@ -32,9 +36,11 @@
 
   // ---- formatting -----------------------------------------------------------------
 
+  const units = () => settings.get().units;
+
   function metres(value) {
     if (value === null || value === undefined) return "";
-    return `${Math.round(value)} m (${Math.round(value / 0.3048)} ft)`;
+    return companion.formatHeight(value, units());
   }
 
   function hours(value) {
@@ -44,7 +50,7 @@
 
   function kilometres(value) {
     if (value === null || value === undefined) return "";
-    return `${value.toFixed(1)} km (${(value / 1.609344).toFixed(1)} mi)`;
+    return companion.formatKilometres(value, units());
   }
 
   function coded(code, label, note) {
@@ -87,11 +93,12 @@
 
   // ---- map ------------------------------------------------------------------------
 
-  const map = L.map("map", { preferCanvas: true }).setView([34, -118], 7);
-  L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-    maxZoom: 18,
-    attribution: "&copy; OpenStreetMap contributors",
-  }).addTo(map);
+  // Past a layer's last stored zoom Leaflet stretches its tiles, so allow zooming further in.
+  // The Leaflet attribution bar is off; credits are listed in the Layers panel and Canyons tab.
+  const map = L.map("map", {
+    preferCanvas: true, maxZoom: 22, attributionControl: false, maxBoundsViscosity: 1,
+  })
+    .setView([34, -118], 7);
   const canyonLayer = L.layerGroup().addTo(map);
   const detailLayer = L.layerGroup().addTo(map);
 
@@ -108,7 +115,70 @@
       marker.addTo(canyonLayer);
       bounds.push([c.lat, c.lon]);
     }
-    if (bounds.length) map.fitBounds(bounds, { padding: [24, 24], maxZoom: 12 });
+    if (bounds.length) {
+      onMapVisible(() => map.fitBounds(bounds, { padding: [24, 24], maxZoom: 12 }));
+    }
+  }
+
+  // Leaflet measures a hidden map as 0x0, so map moves wait until the Map tab is showing.
+  function onMapVisible(action) {
+    state.pendingMap = action;
+    if (state.view === "map") runPendingMap();
+  }
+
+  // The map can only be moved within the area the file covers: its tile layers, or else its
+  // canyons plus a margin. It cannot be zoomed out past the level where that area fills the
+  // whole map view, so no blank space shows outside it.
+  const NO_TILES_MARGIN_DEG = 0.05;
+
+  function coveredArea() {
+    const boxes = state.tileBounds.slice();
+    if (!boxes.length) {
+      for (const c of state.canyons) {
+        if (c.lat !== null && c.lon !== null) boxes.push([c.lon, c.lat, c.lon, c.lat]);
+      }
+    }
+    if (!boxes.length) return null;
+    const margin = state.tileBounds.length ? 0 : NO_TILES_MARGIN_DEG;
+    return L.latLngBounds(
+      [Math.min(...boxes.map((b) => b[1])) - margin, Math.min(...boxes.map((b) => b[0])) - margin],
+      [Math.max(...boxes.map((b) => b[3])) + margin, Math.max(...boxes.map((b) => b[2])) + margin]);
+  }
+
+  function applyMapLimits() {
+    const area = state.limitArea;
+    if (!area) {
+      map.setMaxBounds(null);
+      map.setMinZoom(0);
+      return;
+    }
+    map.setMaxBounds(area);
+    const size = map.getSize();
+    if (size.x > 0 && size.y > 0) map.setMinZoom(map.getBoundsZoom(area, true));
+  }
+  map.on("resize", applyMapLimits);
+
+  function runPendingMap() {
+    map.invalidateSize();
+    const action = state.pendingMap;
+    state.pendingMap = null;
+    if (action) action();
+  }
+
+  // Zoom to the selected canyon's route, rappels and waypoints, or else its location.
+  function focusDetail(detail) {
+    const points = [];
+    for (const route of detail.routes) {
+      if (route.line) route.line.coordinates.forEach(([lon, lat]) => points.push([lat, lon]));
+    }
+    for (const item of [...detail.rappels, ...detail.waypoints]) {
+      if (item.point) points.push([item.point.coordinates[1], item.point.coordinates[0]]);
+    }
+    if (!points.length && detail.canyon.point) {
+      points.push([detail.canyon.point.coordinates[1], detail.canyon.point.coordinates[0]]);
+    }
+    if (!points.length) return;
+    onMapVisible(() => map.fitBounds(points, { padding: [32, 32], maxZoom: 16 }));
   }
 
   function drawDetail(detail) {
@@ -134,6 +204,205 @@
     }
   }
 
+  // ---- base layers and the layer panel ----------------------------------------------
+  // Rows are listed top-most first. The online OpenStreetMap layer is shown only while the
+  // GeoPackage has no tile layers of its own; each GeoPackage layer starts hidden except
+  // the bottom one, and the hillshade starts translucent so it can sit over imagery.
+
+  // A Leaflet grid layer whose tiles come from a tile table in the open GeoPackage.
+  const GpkgTileLayer = L.GridLayer.extend({
+    initialize(db, info, options) {
+      L.GridLayer.prototype.initialize.call(this, options);
+      this._db = db;
+      this._info = info;
+    },
+    createTile(coords, done) {
+      const tile = gpkg.getTile(this._db, this._info.table, coords.z, coords.x, coords.y);
+      if (!tile) {
+        const blank = document.createElement("div");
+        setTimeout(() => done(null, blank), 0);
+        return blank;
+      }
+      const img = document.createElement("img");
+      img.alt = "";
+      const url = URL.createObjectURL(new Blob([tile.data], { type: tile.type }));
+      img.onload = () => { URL.revokeObjectURL(url); done(null, img); };
+      img.onerror = (err) => { URL.revokeObjectURL(url); done(err, img); };
+      img.src = url;
+      return img;
+    },
+  });
+
+  const onlineOsm = {
+    id: "online-osm",
+    key: "online-osm",
+    name: "OpenStreetMap (online)",
+    note: "",
+    layer: L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
+      maxNativeZoom: 19, maxZoom: 22, zIndex: 1,
+    }),
+    credit: "© OpenStreetMap contributors",
+    opacity: 1,
+    visible: true,
+  };
+  // Base layers shown in the panel; GeoPackage tile layers replace all but the online one.
+  let tileEntries = [onlineOsm];
+  let prefs = {}; // per-layer on/off and opacity, kept while the same file stays open
+  onlineOsm.layer.addTo(map);
+
+  function removeGpkgLayers() {
+    for (const entry of tileEntries) if (entry !== onlineOsm) map.removeLayer(entry.layer);
+    tileEntries = [onlineOsm];
+  }
+
+  // The metre and foot contour overlays share one panel row: only the one matching the units
+  // setting is offered (or the only one the file has), and the row keeps its on/off and opacity
+  // when the units change.
+  const contourUnit = (info) => /^tiles_contours_(m|ft)$/.exec(info.table)?.[1] || null;
+
+  function chooseLayers(infos) {
+    const wanted = units() === "imperial" ? "ft" : "m";
+    const contours = infos.filter(contourUnit);
+    const keep = contours.find((i) => contourUnit(i) === wanted) || contours[0];
+    return infos.filter((info) => !contourUnit(info) || info === keep);
+  }
+
+  function setGpkgLayers(db) {
+    for (const e of tileEntries) prefs[e.key] = { visible: e.visible, opacity: e.opacity };
+    removeGpkgLayers();
+    let infos = [];
+    try {
+      infos = chooseLayers(gpkg.listTileLayers(db));
+    } catch (err) {
+      console.error(err);
+    }
+    let firstBase = true;
+    infos.forEach((info, i) => {
+      const key = contourUnit(info) ? "contours" : info.table;
+      const saved = prefs[key];
+      const opacity = saved ? saved.opacity : info.table === "tiles_hillshade" ? 0.6 : 1;
+      const isOverlay = key === "contours";
+      const layer = new GpkgTileLayer(db, info, {
+        minNativeZoom: info.minZoom,
+        maxNativeZoom: info.maxZoom,
+        maxZoom: 22,
+        bounds: L.latLngBounds([info.bounds[1], info.bounds[0]], [info.bounds[3], info.bounds[2]]),
+        opacity,
+        zIndex: 2 + i,
+      });
+      const entry = {
+        id: info.table,
+        key,
+        name: info.name,
+        note: `zoom ${info.minZoom}–${info.maxZoom}`,
+        credit: info.attribution,
+        layer,
+        opacity,
+        // Only the bottom base layer starts on; overlays start off.
+        visible: saved ? saved.visible : !isOverlay && firstBase,
+      };
+      if (!isOverlay) firstBase = false;
+      if (entry.visible) layer.addTo(map);
+      tileEntries.push(entry);
+    });
+    // The online map is a fallback for files that carry no tiles.
+    state.tileBounds = infos.map((info) => info.bounds);
+    onlineOsm.visible = infos.length === 0 && (prefs["online-osm"] ? prefs["online-osm"].visible : true);
+    if (onlineOsm.visible) onlineOsm.layer.addTo(map);
+    else map.removeLayer(onlineOsm.layer);
+    renderLayerPanel();
+    updateCredits();
+  }
+
+  const layerControl = L.control({ position: "topright" });
+  layerControl.onAdd = () => {
+    const box = el("div", { class: "layer-panel leaflet-bar" });
+    L.DomEvent.disableClickPropagation(box);
+    L.DomEvent.disableScrollPropagation(box);
+    layerControl.box = box;
+    return box;
+  };
+  layerControl.addTo(map);
+
+  // The panel starts collapsed on phones, where it would cover much of the map.
+  const LAYERS_OPEN_KEY = "canyon-viewer.layersOpen";
+  let layersOpen = !window.matchMedia("(max-width: 600px)").matches;
+  try {
+    const saved = localStorage.getItem(LAYERS_OPEN_KEY);
+    if (saved !== null) layersOpen = saved === "1";
+  } catch (err) { /* storage can be blocked; the default stands */ }
+  let panelCredits = null;
+
+  function setLayersOpen(open) {
+    layersOpen = open;
+    try { localStorage.setItem(LAYERS_OPEN_KEY, open ? "1" : "0"); } catch (err) { /* ignore */ }
+    renderLayerPanel();
+  }
+
+  // Credits of the layers currently on the map (panel) and of every layer (Canyons tab).
+  function updateCredits() {
+    const all = tileEntries.filter((e) => e.credit);
+    $("credits").replaceChildren(...(all.length
+      ? all.map((e) => el("li", {}, [el("b", {}, [e.name]), `: ${e.credit}`]))
+      : [el("li", { class: "muted" }, ["None."])]), el("li", {}, [el("b", {}, ["Map"]), ": Leaflet"]));
+    if (panelCredits) {
+      const shown = all.filter((e) => e.visible).map((e) => e.credit);
+      panelCredits.textContent = shown.length ? shown.join(" · ") : "";
+      panelCredits.hidden = !shown.length;
+    }
+  }
+
+  function renderLayerPanel() {
+    const box = layerControl.box;
+    if (!box) return;
+    const toggle = el("button", {
+      type: "button", class: "layer-toggle", "aria-expanded": String(layersOpen),
+    }, [el("span", {}, ["Layers"]), el("span", { class: "chevron", "aria-hidden": "true" },
+      [layersOpen ? "▴" : "▾"])]);
+    toggle.addEventListener("click", () => setLayersOpen(!layersOpen));
+    box.classList.toggle("collapsed", !layersOpen);
+    if (!layersOpen) {
+      panelCredits = null;
+      box.replaceChildren(toggle);
+      updateCredits();
+      return;
+    }
+    const rows = tileEntries.slice().reverse().map((entry) => {
+      const check = el("input", { type: "checkbox", id: `layer-${entry.id}` });
+      check.checked = entry.visible;
+      const slider = el("input", {
+        type: "range", min: "0", max: "100", step: "1",
+        "aria-label": `${entry.name} opacity`,
+      });
+      slider.value = String(Math.round(entry.opacity * 100));
+      slider.disabled = !entry.visible;
+      const percent = el("span", { class: "percent" }, [`${slider.value}%`]);
+      check.addEventListener("change", () => {
+        entry.visible = check.checked;
+        slider.disabled = !entry.visible;
+        if (entry.visible) entry.layer.addTo(map);
+        else map.removeLayer(entry.layer);
+        updateCredits();
+      });
+      slider.addEventListener("input", () => {
+        entry.opacity = Number(slider.value) / 100;
+        entry.layer.setOpacity(entry.opacity);
+        percent.textContent = `${slider.value}%`;
+      });
+      return el("div", { class: "layer-row" }, [
+        el("label", { class: "layer-name", for: check.id }, [
+          check, entry.name, entry.note ? el("span", { class: "muted" }, [` ${entry.note}`]) : null,
+        ]),
+        el("div", { class: "layer-opacity" }, [slider, percent]),
+      ]);
+    });
+    panelCredits = el("div", { class: "layer-credits" });
+    box.replaceChildren(toggle, ...rows, panelCredits);
+    updateCredits();
+  }
+
+  renderLayerPanel();
+
   // ---- sidebar --------------------------------------------------------------------
 
   function renderList() {
@@ -149,7 +418,7 @@
         class: c.id === state.selectedId ? "active" : null,
         "data-id": c.id,
       }, [el("div", {}, [c.title]), el("div", { class: "meta" }, [meta])]);
-      item.addEventListener("click", () => selectCanyon(c.id));
+      item.addEventListener("click", () => selectCanyon(c.id, "map"));
       list.append(item);
     }
   }
@@ -287,30 +556,60 @@
 
   // ---- actions --------------------------------------------------------------------
 
-  function selectCanyon(id) {
+  function showView(name) {
+    state.view = name;
+    for (const section of document.querySelectorAll(".view")) {
+      section.hidden = section.id !== `view-${name}`;
+    }
+    for (const button of $("bottom-bar").querySelectorAll("button")) {
+      const active = button.dataset.view === name;
+      button.classList.toggle("active", active);
+      if (active) button.setAttribute("aria-current", "page");
+      else button.removeAttribute("aria-current");
+    }
+    if (name === "map") runPendingMap();
+    companionView.onViewChange(name);
+  }
+
+  // `show` is the view to switch to once the canyon is loaded (the list passes "map").
+  function selectCanyon(id, show) {
     state.selectedId = id;
     try {
       state.detail = gpkg.loadCanyon(state.db, id);
     } catch (err) {
       console.error(err);
       state.detail = null;
+      companionView.setCanyon(null);
       setStatus(`Could not load canyon ${id}: ${err.message}`);
       $("panel").replaceChildren(el("p", { class: "muted" }, [`Could not load canyon: ${err.message}`]));
       return;
     }
+    companionView.setCanyon(state.detail);
     renderList();
     renderTabs();
     renderPanel();
-    if (state.detail) drawDetail(state.detail);
+    if (state.detail) {
+      drawDetail(state.detail);
+      if (show) focusDetail(state.detail);
+    }
+    if (show) showView(show);
   }
 
-  function loadDatabase(bytes, label) {
+  // Resolves true once the file is open (false after reporting an error in the status line).
+  // `remember` keeps a copy in IndexedDB so the page can reopen it offline.
+  function loadDatabase(bytes, label, remember = true) {
     return gpkg.openDatabase(GeoPackage, bytes).then((db) => {
       if (state.db) state.db.close();
       state.db = db;
+      removeGpkgLayers();
+      prefs = {};
+      setGpkgLayers(db);
       state.canyons = gpkg.listCanyons(db);
+      state.limitArea = coveredArea();
+      applyMapLimits();
       state.selectedId = null;
       state.detail = null;
+      companionView.setCanyon(null);
       $("search").disabled = false;
       setStatus(`${label}: ${state.canyons.length} canyons`);
       renderList();
@@ -318,9 +617,47 @@
       detailLayer.clearLayers();
       renderTabs();
       renderPanel();
+      if (remember) rememberFile(bytes, label);
+      return true;
     }).catch((err) => {
       setStatus(`Could not open ${label}: ${err.message}`);
+      return false;
     });
+  }
+
+  // ---- the saved copy of the last GeoPackage and offline support -------------------------
+
+  let fileCachePromise = null;
+  const getFileCache = () => {
+    fileCachePromise = fileCachePromise || filecache.openFileCache();
+    return fileCachePromise;
+  };
+
+  async function rememberFile(bytes, name) {
+    try {
+      await (await getFileCache()).save(name, bytes);
+      try { await navigator.storage?.persist?.(); } catch (err) { /* best effort */ }
+      settingsView.refreshOffline();
+    } catch (err) {
+      console.warn("Could not save the GeoPackage for offline use:", err);
+    }
+  }
+
+  // Open the saved copy; false when there is none.
+  async function openSaved(note) {
+    try {
+      const saved = await (await getFileCache()).load();
+      if (!saved) return false;
+      return await loadDatabase(saved.bytes, `${saved.name} (saved copy${note || ""})`, false);
+    } catch (err) {
+      console.warn("Could not open the saved GeoPackage:", err);
+      return false;
+    }
+  }
+
+  if ("serviceWorker" in navigator && window.isSecureContext) {
+    navigator.serviceWorker.register("sw.js").then(() => settingsView.refreshOffline())
+      .catch((err) => console.warn("Offline support unavailable:", err));
   }
 
   // A GeoPackage is a SQLite file, so check the header rather than the file name or type.
@@ -345,6 +682,19 @@
 
   // ---- wiring ---------------------------------------------------------------------
 
+  // Companion mode (GPS guidance down the selected canyon) lives in its own view.
+  const companionView = companionUI.create({ el, $, map, goTo: showView });
+  const settingsView = settingsUI.create({ $, settings, getFileCache });
+  let lastUnits = settings.get().units;
+  settings.onChange((now) => {
+    renderPanel();
+    companionView.refresh();
+    if (now.units !== lastUnits) {
+      lastUnits = now.units;
+      if (state.db) setGpkgLayers(state.db); // swaps the metre / foot contour overlay
+    }
+  });
+
   GeoPackage.setSqljsWasmLocateFile((name) => GEOPACKAGE_BASE + name);
 
   $("file").addEventListener("change", (event) => {
@@ -352,6 +702,10 @@
     if (file) openFile(file);
   });
   $("search").addEventListener("input", renderList);
+  $("bottom-bar").addEventListener("click", (event) => {
+    const button = event.target.closest("button[data-view]");
+    if (button) showView(button.dataset.view);
+  });
 
   const drop = $("drop");
   ["dragenter", "dragover"].forEach((type) =>
@@ -364,15 +718,23 @@
   });
 
   // Optional: ?gpkg=relative/or/absolute/url.gpkg loads a file that is served with the site.
+  // Without ?gpkg=, or if it cannot be fetched (offline), the saved copy opens instead.
   const url = new URLSearchParams(location.search).get("gpkg");
   if (url) {
     setStatus(`Loading ${url}…`);
     fetch(url)
       .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.arrayBuffer(); })
       .then((buf) => loadDatabase(new Uint8Array(buf), url))
-      .catch((err) => setStatus(`Could not load ${url}: ${err.message}`));
+      .catch(async (err) => {
+        if (!(await openSaved(`; could not load ${url}: ${err.message}`))) {
+          setStatus(`Could not load ${url}: ${err.message}`);
+        }
+      });
+  } else {
+    openSaved();
   }
 
   renderTabs();
   renderPanel();
+  showView("canyons");
 })();

@@ -2,38 +2,81 @@
 <html lang="en">
 <head>
   <meta charset="utf-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
   <title>Canyon GeoPackage Viewer</title>
   <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
-  <header class="topbar">
-    <h1>Canyon viewer</h1>
-    <label class="button">
-      Open .gpkg
-      <input id="file" type="file">
-    </label>
-    <span id="status" class="status">Open a canyon GeoPackage to begin.</span>
-  </header>
+  <div id="drop" class="views">
+    <section id="view-canyons" class="view scroll" aria-label="Canyons">
+      <div class="view-inner">
+        <div class="view-head">
+          <h1>Canyon viewer</h1>
+          <button type="button" id="open-settings" class="gear" aria-label="Settings" title="Settings">⚙</button>
+        </div>
+        <label class="button">
+          Open .gpkg
+          <input id="file" type="file">
+        </label>
+        <p id="status" class="status">Open a canyon GeoPackage to begin.</p>
+        <input id="search" type="search" placeholder="Filter canyons" disabled>
+        <ul id="canyons" class="canyon-list"></ul>
+        <h2 class="credits-title">Map credits</h2>
+        <ul id="credits" class="credits"></ul>
+      </div>
+    </section>
 
-  <div id="drop" class="layout">
-    <aside class="sidebar">
-      <input id="search" type="search" placeholder="Filter canyons" disabled>
-      <ul id="canyons" class="canyon-list"></ul>
-    </aside>
-    <main class="map-pane">
+    <section id="view-map" class="view" aria-label="Map" hidden>
       <div id="map"></div>
-    </main>
-    <section class="detail">
+    </section>
+
+    <section id="view-companion" class="view companion" aria-label="Companion" hidden>
+      <div id="companion-top" class="companion-top"></div>
+      <div id="companion-map-slot" class="companion-map" hidden></div>
+      <div id="companion-actions" class="companion-actions"></div>
+    </section>
+
+    <section id="view-detail" class="view detail" aria-label="Details" hidden>
       <nav class="tabs" id="tabs"></nav>
       <div id="panel" class="panel"><p class="muted">Select a canyon.</p></div>
     </section>
   </div>
 
+  <dialog id="settings" class="settings">
+    <h2>Settings</h2>
+    <fieldset>
+      <legend>Units</legend>
+      <label><input type="radio" name="units" value="metric"> Metric (m, km)</label>
+      <label><input type="radio" name="units" value="imperial"> Imperial (ft, mi)</label>
+    </fieldset>
+    <label class="check"><input type="checkbox" id="set-compass"> Compass heading on the map</label>
+    <p id="compass-note" class="muted"></p>
+    <h3>Offline</h3>
+    <p id="app-cache" class="muted"></p>
+    <p id="saved-file" class="muted"></p>
+    <div class="dialog-row">
+      <button type="button" id="remove-saved">Remove saved GeoPackage</button>
+      <button type="button" id="close-settings" class="primary">Close</button>
+    </div>
+  </dialog>
+
+  <nav class="bottom-bar" id="bottom-bar" aria-label="Views">
+    <button type="button" data-view="canyons">Canyons</button>
+    <button type="button" data-view="map">Map</button>
+    <button type="button" data-view="detail">Details</button>
+    <button type="button" data-view="companion">Companion</button>
+  </nav>
+
   <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@ngageoint/geopackage@4.2.10/dist/geopackage.min.js"></script>
   <script src="gpkg.js"></script>
+  <script src="settings.js"></script>
+  <script src="filecache.js"></script>
+  <script src="companion.js"></script>
+  <script src="companion-store.js"></script>
+  <script src="companion-ui.js"></script>
+  <script src="settings-ui.js"></script>
   <script src="app.js"></script>
 </body>
 </html>

@@ -354,8 +354,9 @@ def wiki_to_html(wiki: str) -> str:
         nonlocal listing
         if listing:
             tag, items = listing
-            blocks.append(f"<{tag}>" + "".join(f"<li>{_inline_html(i)}</li>" for i in items)
-                          + f"</{tag}>")
+            blocks.append(
+                f"<{tag}>" + "".join(f"<li>{_inline_html(i)}</li>" for i in items) + f"</{tag}>"
+            )
             listing = None
 
     for raw in _strip_for_html(wiki).splitlines():

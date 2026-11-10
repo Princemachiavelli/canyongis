@@ -4,6 +4,7 @@
   renderer has produced one). Pure SQLite.
 * ``raster_source``: reprojects a GeoTIFF (imagery, or hillshade) into Web Mercator tiles.
   Needs rasterio and Pillow, which come from the Nix environment.
+* ``topo_renderer``: the offline topo map and contour renderer (see ``topo``).
 * ``hillshade_geotiff``: hillshade GeoTIFF from a DEM, with a coverage band, using the
   canyongis hillshade function.
 """
@@ -30,8 +31,13 @@ def mbtiles_source(path: str | Path) -> Render:
     return render
 
 
-def raster_source(path: str | Path, *, bands: tuple[int, ...] = (1, 2, 3),
-                  alpha_band: int | None = None, jpeg_quality: int = 90) -> Render:
+def raster_source(
+    path: str | Path,
+    *,
+    bands: tuple[int, ...] = (1, 2, 3),
+    alpha_band: int | None = None,
+    jpeg_quality: int = 90,
+) -> Render:
     """Render Web Mercator tiles from a GeoTIFF.
 
     Colour tiles are JPEG where the tile is fully covered by the source and PNG (RGBA)
@@ -53,25 +59,34 @@ def raster_source(path: str | Path, *, bands: tuple[int, ...] = (1, 2, 3),
         planes = np.zeros((len(bands), TILE_SIZE, TILE_SIZE), dtype=np.uint8)
         for i, band in enumerate(bands):
             reproject(
-                source=rasterio.band(src, band), destination=planes[i],
-                src_transform=src.transform, src_crs=src.crs,
-                dst_transform=dst_transform, dst_crs="EPSG:3857",
+                source=rasterio.band(src, band),
+                destination=planes[i],
+                src_transform=src.transform,
+                src_crs=src.crs,
+                dst_transform=dst_transform,
+                dst_crs="EPSG:3857",
                 resampling=Resampling.bilinear,
             )
         if alpha_band is not None:
             alpha = np.zeros((TILE_SIZE, TILE_SIZE), dtype=np.uint8)
             reproject(
-                source=rasterio.band(src, alpha_band), destination=alpha,
-                src_transform=src.transform, src_crs=src.crs,
-                dst_transform=dst_transform, dst_crs="EPSG:3857",
+                source=rasterio.band(src, alpha_band),
+                destination=alpha,
+                src_transform=src.transform,
+                src_crs=src.crs,
+                dst_transform=dst_transform,
+                dst_crs="EPSG:3857",
                 resampling=Resampling.nearest,
             )
         else:
             alpha = np.zeros((TILE_SIZE, TILE_SIZE), dtype=np.uint8)
             reproject(
-                source=coverage, destination=alpha,
-                src_transform=src.transform, src_crs=src.crs,
-                dst_transform=dst_transform, dst_crs="EPSG:3857",
+                source=coverage,
+                destination=alpha,
+                src_transform=src.transform,
+                src_crs=src.crs,
+                dst_transform=dst_transform,
+                dst_crs="EPSG:3857",
                 resampling=Resampling.nearest,
             )
             alpha = np.where(alpha > 0, 255, 0).astype(np.uint8)
@@ -80,7 +95,8 @@ def raster_source(path: str | Path, *, bands: tuple[int, ...] = (1, 2, 3),
         out = io.BytesIO()
         if alpha_band is None and len(bands) == 3 and alpha.all():
             Image.fromarray(np.moveaxis(planes, 0, -1), "RGB").save(
-                out, "JPEG", quality=jpeg_quality)
+                out, "JPEG", quality=jpeg_quality
+            )
         elif len(bands) == 1:
             img = Image.fromarray(planes[0], "L")
             img.putalpha(Image.fromarray(alpha, "L"))
@@ -115,3 +131,23 @@ def hillshade_geotiff(dem_path: str | Path, out_path: str | Path) -> Path:
             dst.write(shade.astype(np.uint8), 1)
             dst.write(coverage, 2)
     return Path(out_path)
+
+
+def topo_renderer(bbox_lonlat, cache_dir, dem_path, hillshade_path, imagery_path=None):
+    """A ``topo.TopoRenderer`` for the bbox: OSM data (downloaded and cached), contours in metres
+    and feet from the DEM, relief from the hillshade and, with 4-band NAIP imagery, forest cover."""
+    from ..io import log
+    from . import topo
+
+    log("topo: fetching OSM data")
+    osm = topo.load_osm(topo.fetch_osm(bbox_lonlat, cache_dir))
+    log(f"topo: {len(osm.lines)} lines, {len(osm.areas)} areas, {len(osm.points)} points")
+    contours = {}
+    for unit in ("m", "ft"):
+        log(f"topo: contours ({unit})")
+        contours[unit] = topo.build_contours(dem_path, unit)
+    vegetation = None
+    if imagery_path is not None:
+        vegetation = topo.build_vegetation(imagery_path, cache_dir / "vegetation.tif")
+        log("topo: forest shading from NAIP" if vegetation else "topo: imagery has no NIR band")
+    return topo.TopoRenderer(osm, contours, hillshade=hillshade_path, vegetation=vegetation)

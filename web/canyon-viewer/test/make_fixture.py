@@ -6,8 +6,10 @@ Run from the repo root inside `nix develop` (needs canyongis imports):
 
 from __future__ import annotations
 
-import sqlite3
+import io
 from pathlib import Path
+
+from PIL import Image
 
 from canyongis.geopackage.geometry import linestring_blob, point_blob
 from canyongis.geopackage.ropewiki_convert import (
@@ -17,11 +19,23 @@ from canyongis.geopackage.ropewiki_convert import (
     rating_record,
 )
 from canyongis.geopackage.schema import create_geopackage, refresh_extents
+from canyongis.geopackage.tiles import write_tile_table
 from canyongis.geopackage.wikitext import find_template
 
 REPO = Path(__file__).resolve().parents[3]
 WIKI = REPO / "tests" / "fixtures" / "ropewiki"
 OUT = Path(__file__).resolve().parent / "fixtures" / "lytle.gpkg"
+
+
+BBOX = (-117.58, 34.245, -117.57, 34.255)
+
+
+def solid_tile(fmt: str, colour: tuple[int, ...]):
+    """A render callback returning one tiny solid-colour tile of the given format."""
+    out = io.BytesIO()
+    Image.new("RGBA" if fmt == "PNG" else "RGB", (4, 4), colour).save(out, fmt)
+    data = out.getvalue()
+    return lambda zoom, x, y: data
 
 
 def main() -> None:
@@ -40,22 +54,56 @@ def main() -> None:
         condition_record(cond_title, {"text": cond_text, "revid": 1, "timestamp": None}),
         condition_record(
             "Conditions:Lytle Creek (Middle Fork)-20140615182115",
-            {"text": "{{Condition\n|Date=2014/06/14\n|Quality condition=4 - Great\n"
-                     "|Comments=Flowing well.\n}}", "revid": 2, "timestamp": None},
+            {
+                "text": "{{Condition\n|Date=2014/06/14\n|Quality condition=4 - Great\n"
+                "|Comments=Flowing well.\n}}",
+                "revid": 2,
+                "timestamp": None,
+            },
         ),
     ]
-    row.ratings = [rating_record("Votes:Lytle Creek (Middle Fork)/Demo",
-                                 {"text": "{{Page rating\n|Rating=4\n|User=Demo\n}}"})]
+    row.ratings = [
+        rating_record(
+            "Votes:Lytle Creek (Middle Fork)/Demo",
+            {"text": "{{Page rating\n|Rating=4\n|User=Demo\n}}"},
+        )
+    ]
     _replace_canyon(conn, row, "https://ropewiki.com/Lytle_Creek_(Middle_Fork)", None)
     canyon_id = conn.execute("SELECT id FROM canyons").fetchone()[0]
     conn.execute(
         "INSERT INTO routes (canyon_id, kind, name, length_m, geom) VALUES (?,?,?,?,?)",
-        (canyon_id, "descent", "Descent", 900.0,
-         linestring_blob([(-117.5769, 34.2488), (-117.5763, 34.2490), (-117.5750, 34.2500)])),
+        (
+            canyon_id,
+            "descent",
+            "Descent",
+            900.0,
+            linestring_blob([(-117.5769, 34.2488), (-117.5763, 34.2490), (-117.5750, 34.2500)]),
+        ),
     )
-    conn.execute("UPDATE rappels SET geom = ? WHERE label = 'R1'", (point_blob(-117.5768, 34.2487),))
+    conn.execute(
+        "UPDATE rappels SET geom = ? WHERE label = 'R1'", (point_blob(-117.5768, 34.2487),)
+    )
     conn.commit()
     refresh_extents(conn)
+    write_tile_table(
+        conn,
+        "tiles_imagery",
+        identifier="Imagery",
+        description="Aerial imagery",
+        bbox_lonlat=BBOX,
+        zooms=[14, 15],
+        render=solid_tile("JPEG", (40, 120, 60)),
+        attribution="USDA NAIP, public domain",
+    )
+    write_tile_table(
+        conn,
+        "tiles_hillshade",
+        identifier="Hillshade",
+        description="Hillshade",
+        bbox_lonlat=BBOX,
+        zooms=[14, 15],
+        render=solid_tile("PNG", (128, 128, 128, 255)),
+    )
     conn.close()
     print(f"wrote {OUT}")
 

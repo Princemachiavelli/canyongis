@@ -115,7 +115,78 @@
     };
   }
 
-  const api = { decodeGeometry, openDatabase, listCanyons, loadCanyon };
+  // ---- raster tile layers (gpkg_contents data_type = 'tiles', EPSG:3857) --------------
+
+  const WORLD_HALF_SIZE = 20037508.342789244;
+  // Bottom-to-top draw order for the layers canyongis-gpkg-tiles writes; others follow by name.
+  const TILE_LAYER_ORDER = [
+    "tiles_osm", "tiles_imagery", "tiles_hillshade", "tiles_contours_m", "tiles_contours_ft",
+  ];
+
+  function mercatorToLonLat(x, y) {
+    const lon = (x / WORLD_HALF_SIZE) * 180;
+    const lat = (Math.atan(Math.sinh((y / WORLD_HALF_SIZE) * Math.PI)) * 180) / Math.PI;
+    return [lon, lat];
+  }
+
+  // The tile writer appends the attribution to the description: "Aerial imagery (USDA NAIP)".
+  function splitDescription(description) {
+    const match = /^(.*?)\s*\(([^()]*)\)\s*$/.exec(description || "");
+    return match ? { text: match[1], attribution: match[2] } : { text: description || "", attribution: "" };
+  }
+
+  // Tile layers in draw order (bottom first). Only Web Mercator tables are supported.
+  function listTileLayers(db) {
+    const rows = db.run(
+      `SELECT c.table_name, c.identifier, c.description, c.min_x, c.min_y, c.max_x, c.max_y,
+              (SELECT MIN(zoom_level) FROM gpkg_tile_matrix m WHERE m.table_name = c.table_name) AS min_zoom,
+              (SELECT MAX(zoom_level) FROM gpkg_tile_matrix m WHERE m.table_name = c.table_name) AS max_zoom
+         FROM gpkg_contents c
+        WHERE c.data_type = 'tiles' AND c.srs_id = 3857 AND c.table_name GLOB '[A-Za-z0-9_]*'`
+    ).filter((r) => r.min_zoom !== null && /^\w+$/.test(r.table_name));
+    const rank = (name) => {
+      const i = TILE_LAYER_ORDER.indexOf(name);
+      return i < 0 ? TILE_LAYER_ORDER.length : i;
+    };
+    rows.sort((a, b) => rank(a.table_name) - rank(b.table_name) || a.table_name.localeCompare(b.table_name));
+    return rows.map((r) => {
+      const [west, south] = mercatorToLonLat(r.min_x, r.min_y);
+      const [east, north] = mercatorToLonLat(r.max_x, r.max_y);
+      const { text, attribution } = splitDescription(r.description);
+      return {
+        table: r.table_name,
+        name: r.identifier || r.table_name,
+        description: text,
+        attribution,
+        minZoom: r.min_zoom,
+        maxZoom: r.max_zoom,
+        bounds: [west, south, east, north],
+      };
+    });
+  }
+
+  function sniffImageType(bytes) {
+    if (bytes[0] === 0x89 && bytes[1] === 0x50) return "image/png";
+    if (bytes[0] === 0xff && bytes[1] === 0xd8) return "image/jpeg";
+    if (bytes[0] === 0x52 && bytes[8] === 0x57) return "image/webp";
+    return "application/octet-stream";
+  }
+
+  // One tile by XYZ address (y = 0 at the north edge); `table` must come from listTileLayers.
+  // Returns {data, type} or null when the layer has no tile there.
+  function getTile(db, table, z, x, y) {
+    if (!/^\w+$/.test(table) || y < 0 || y >= 2 ** z || x < 0 || x >= 2 ** z) return null;
+    const [row] = db.run(
+      `SELECT tile_data FROM "${table}" WHERE zoom_level = ? AND tile_column = ? AND tile_row = ?`,
+      [z, x, 2 ** z - 1 - y]
+    );
+    if (!row || !row.tile_data) return null;
+    return { data: row.tile_data, type: sniffImageType(row.tile_data) };
+  }
+
+  const api = {
+    decodeGeometry, openDatabase, listCanyons, loadCanyon, listTileLayers, getTile,
+  };
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;
   } else {

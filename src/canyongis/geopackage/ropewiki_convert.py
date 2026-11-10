@@ -53,8 +53,16 @@ _BATCH = 50
 _ANCHOR_NUMBER = re.compile(r"(?i)\b(?:r|rap(?:pel)?s?)\s*#?\s*(\d+)([a-z]?)\b")
 _ANCHOR_ORDINAL = re.compile(r"(?i)\b(\d+)(?:st|nd|rd|th)\s+rap|\b(\w+)\s+rap")
 _ORDINAL_WORDS = {
-    "first": 1, "second": 2, "third": 3, "fourth": 4, "fifth": 5,
-    "sixth": 6, "seventh": 7, "eighth": 8, "ninth": 9, "tenth": 10,
+    "first": 1,
+    "second": 2,
+    "third": 3,
+    "fourth": 4,
+    "fifth": 5,
+    "sixth": 6,
+    "seventh": 7,
+    "eighth": 8,
+    "ninth": 9,
+    "tenth": 10,
 }
 _SKIP_SECTIONS = {"beta sites", "trip reports and media"}
 _WAYPOINT_KINDS = (
@@ -347,15 +355,27 @@ def parse_kml_geometry(path: Path) -> dict[str, Any]:
             )
     anchors = []
     for _, row in feats.anchor_points().iterrows():
-        anchors.append({"name": row["name"], "key": _anchor_key(row["name"]),
-                        "lon": row.geometry.x, "lat": row.geometry.y})
+        anchors.append(
+            {
+                "name": row["name"],
+                "key": _anchor_key(row["name"]),
+                "lon": row.geometry.x,
+                "lat": row.geometry.y,
+            }
+        )
     waypoints = []
     anchor_names = {a["name"] for a in anchors}
     for _, row in feats.points.iterrows():
         if row["name"] in anchor_names:
             continue
-        waypoints.append({"kind": _waypoint_kind(row["name"]), "name": row["name"],
-                          "lon": row.geometry.x, "lat": row.geometry.y})
+        waypoints.append(
+            {
+                "kind": _waypoint_kind(row["name"]),
+                "name": row["name"],
+                "lon": row.geometry.x,
+                "lat": row.geometry.y,
+            }
+        )
     return {"routes": routes, "anchors": anchors, "waypoints": waypoints}
 
 
@@ -371,8 +391,9 @@ def _polyline_length(geod: Any, coords: list[tuple[float, float]]) -> float:
 # -----------------------------------------------------------------------------
 
 
-def _replace_canyon(conn: sqlite3.Connection, row: CanyonRow, source_url: str,
-                    geo: dict[str, Any] | None) -> None:
+def _replace_canyon(
+    conn: sqlite3.Connection, row: CanyonRow, source_url: str, geo: dict[str, Any] | None
+) -> None:
     conn.execute("DELETE FROM canyons WHERE ropewiki_title = ?", (row.ropewiki_title,))
     tpl = row.template
     coords = _coords(tpl.get("Coordinates"))
@@ -423,8 +444,7 @@ def _replace_canyon(conn: sqlite3.Connection, row: CanyonRow, source_url: str,
         ],
     )
     conn.executemany(
-        "INSERT OR IGNORE INTO links (canyon_id, label, url, source_name)"
-        " VALUES (?,?,?,?)",
+        "INSERT OR IGNORE INTO links (canyon_id, label, url, source_name) VALUES (?,?,?,?)",
         [(canyon_id, label or None, url, urlparse(url).netloc) for url, label in row.links],
     )
     kml_ids = _insert_kmls(conn, canyon_id, row.kmls)
@@ -453,12 +473,32 @@ def _insert_condition(conn: sqlite3.Connection, canyon_id: int, c: dict[str, Any
             team_max_experience, general_notes, source_url, raw_template_json)
            VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
-            canyon_id, c["source_title"], c["trip_date"], c["trip_date_source"],
-            c["reported_by"], c["reported_at"],
-            c["revised_at"], c["revision_id"], c["location_text"], q_code, q_label, w_code,
-            w_label, w_note, s_code, s_label, s_note, d_code, d_label, d_note, c["team_size"],
-            c["team_time_h"], c["team_min_experience"], c["team_max_experience"],
-            c["general_notes"], ROPEWIKI_PAGE_URL.format(title=c["source_title"].replace(" ", "_")),
+            canyon_id,
+            c["source_title"],
+            c["trip_date"],
+            c["trip_date_source"],
+            c["reported_by"],
+            c["reported_at"],
+            c["revised_at"],
+            c["revision_id"],
+            c["location_text"],
+            q_code,
+            q_label,
+            w_code,
+            w_label,
+            w_note,
+            s_code,
+            s_label,
+            s_note,
+            d_code,
+            d_label,
+            d_note,
+            c["team_size"],
+            c["team_time_h"],
+            c["team_min_experience"],
+            c["team_max_experience"],
+            c["general_notes"],
+            ROPEWIKI_PAGE_URL.format(title=c["source_title"].replace(" ", "_")),
             c["raw_template_json"],
         ),
     )
@@ -478,8 +518,9 @@ def _scaled(value: str | None, factor: float) -> float | None:
     return round(number * factor, 2) if number is not None else None
 
 
-def _insert_kmls(conn: sqlite3.Connection, canyon_id: int,
-                 kmls: list[dict[str, Any]]) -> dict[str, int]:
+def _insert_kmls(
+    conn: sqlite3.Connection, canyon_id: int, kmls: list[dict[str, Any]]
+) -> dict[str, int]:
     ids: dict[str, int] = {}
     for k in kmls:
         cur = conn.execute(
@@ -491,8 +532,13 @@ def _insert_kmls(conn: sqlite3.Connection, canyon_id: int,
     return ids
 
 
-def _insert_geometry(conn: sqlite3.Connection, canyon_id: int, row: CanyonRow,
-                     geo: dict[str, Any] | None, kml_ids: dict[str, int]) -> None:
+def _insert_geometry(
+    conn: sqlite3.Connection,
+    canyon_id: int,
+    row: CanyonRow,
+    geo: dict[str, Any] | None,
+    kml_ids: dict[str, int],
+) -> None:
     if geo is None:
         geo = {"routes": [], "anchors": [], "waypoints": []}
     kml_id = next(iter(kml_ids.values()), None)
@@ -500,8 +546,7 @@ def _insert_geometry(conn: sqlite3.Connection, canyon_id: int, row: CanyonRow,
         conn.execute(
             "INSERT INTO routes (canyon_id, kind, name, kml_file_id, length_m, geom)"
             " VALUES (?,?,?,?,?,?)",
-            (canyon_id, r["kind"], r["name"], kml_id, r["length_m"],
-             linestring_blob(r["coords"])),
+            (canyon_id, r["kind"], r["name"], kml_id, r["length_m"], linestring_blob(r["coords"])),
         )
     for w in geo["waypoints"]:
         conn.execute(
@@ -521,8 +566,16 @@ def _insert_geometry(conn: sqlite3.Connection, canyon_id: int, row: CanyonRow,
         conn.execute(
             "INSERT INTO rappels (canyon_id, sequence, label, height_m, anchor_text, notes,"
             " kml_file_id, geom) VALUES (?,?,?,?,?,?,?,?)",
-            (canyon_id, sequence, r.label, r.height_m, None, wiki_to_text(r.text), kml_id,
-             point_blob(anchor["lon"], anchor["lat"]) if anchor else None),
+            (
+                canyon_id,
+                sequence,
+                r.label,
+                r.height_m,
+                None,
+                wiki_to_text(r.text),
+                kml_id,
+                point_blob(anchor["lon"], anchor["lat"]) if anchor else None,
+            ),
         )
     for a in geo["anchors"]:
         if a["name"] in used:
@@ -531,8 +584,16 @@ def _insert_geometry(conn: sqlite3.Connection, canyon_id: int, row: CanyonRow,
         conn.execute(
             "INSERT INTO rappels (canyon_id, sequence, label, height_m, anchor_text, notes,"
             " kml_file_id, geom) VALUES (?,?,?,?,?,?,?,?)",
-            (canyon_id, sequence, a["key"] or a["name"], None, None, None, kml_id,
-             point_blob(a["lon"], a["lat"])),
+            (
+                canyon_id,
+                sequence,
+                a["key"] or a["name"],
+                None,
+                None,
+                None,
+                kml_id,
+                point_blob(a["lon"], a["lat"]),
+            ),
         )
 
 
@@ -559,8 +620,9 @@ def _load_kmls(titles: list[str], cache_dir: Path) -> dict[str, dict[str, Any]]:
     return out
 
 
-def convert(gpkg_path: str | Path, titles: list[str], cache_dir: str | Path,
-            fetch_kml: bool = True) -> list[str]:
+def convert(
+    gpkg_path: str | Path, titles: list[str], cache_dir: str | Path, fetch_kml: bool = True
+) -> list[str]:
     """Write or update ``gpkg_path`` with the given Ropewiki page titles.
 
     Returns the titles that were stored. Pages that are missing or lack a
@@ -592,8 +654,10 @@ def convert(gpkg_path: str | Path, titles: list[str], cache_dir: str | Path,
         _replace_canyon(conn, row, ROPEWIKI_PAGE_URL.format(title=title.replace(" ", "_")), geo)
         conn.commit()
         stored.append(title)
-        log(f"stored {title}: {len(row.rappels)} rappels, {len(row.conditions)} conditions, "
-            f"{len(row.ratings)} ratings, {'KML' if geo else 'no KML'}")
+        log(
+            f"stored {title}: {len(row.rappels)} rappels, {len(row.conditions)} conditions, "
+            f"{len(row.ratings)} ratings, {'KML' if geo else 'no KML'}"
+        )
     refresh_extents(conn)
     conn.close()
     return stored

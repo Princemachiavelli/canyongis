@@ -8,8 +8,13 @@ inside the mosaic, optionally refine labels with Ropewiki metadata, then score:
 - leave-one-mosaic-out (LOMO) learned rankers (logistic regression and
   histogram gradient boosting); the first model is "the ranker" for outputs,
 - any external probability raster (e.g. U-Net ``canyon_prob.tif``) via ``--raster``,
-- profile-step rappel candidates against KML rappel points and Ropewiki
-  ``Has number of rappels`` / ``Has longest rappel``.
+- learned scores smoothed along the main stem (``--smooth-hops``),
+- profile-step rappel candidates (D8 drops and isotonic-profile steps) against KML
+  rappel points and Ropewiki ``Has number of rappels`` / ``Has longest rappel``.
+
+``--extra-train-manifest`` mosaics are trained on but never scored, so a larger training
+set can be compared on the same held-out terrain. ``--label-overrides`` applies reviewed
+labels; ``review/fp_runs.*`` lists the top-scoring negative runs to review.
 
 Metrics are length-weighted over reaches with label 0/1 (ignore = -1 excluded):
 ROC AUC, average precision, recall at precision 0.5, precision at recall 0.8.
@@ -48,12 +53,15 @@ from .io import log
 from .reaches import (
     CoarseArea,
     MosaicReaches,
+    ProfileConfig,
     ReachConfig,
     TileSpec,
     compute_coarse_area,
     label_reaches,
     load_or_build_reaches,
+    main_stem_down,
     plan_tiles,
+    smooth_scores,
 )
 from .validate import parse_kml
 
@@ -81,6 +89,22 @@ DEFAULT_RANKER_FEATURES: tuple[str, ...] = (
     "ctx_max_drop",
     "ctx_max_step_excess",
     "ctx_drops_per_km",
+)
+
+# Isotonic-profile step features (reaches.ProfileConfig). Not in the default ranker set:
+# they size and count rappels well but don't separate canyons from steep gullies
+# (single-feature AUC 0.48-0.58, no ranker gain; DETECTION_STRATEGY.md §9). Opt in with
+# --features.
+PROFILE_RANKER_FEATURES: tuple[str, ...] = (
+    "iso_max_step",
+    "iso_steps_per_km",
+    "iso_steep_frac",
+    "iso_max_step_rel",
+    "iso_steps_per_km_rel",
+    "iso_steep_frac_rel",
+    "ctx_iso_max_step",
+    "ctx_iso_steps_per_km",
+    "ctx_iso_steep_frac",
 )
 
 
@@ -191,6 +215,7 @@ class MosaicInput:
     tile: TileSpec | None = None
     core_bounds: tuple[float, float, float, float] | None = None  # tile core; None = bounds
     group: str = ""
+    train_only: bool = False  # from --extra-train-manifest: trained on, never scored
 
     @property
     def name(self) -> str:
@@ -427,10 +452,28 @@ def build_inputs(
     unmarked: str = "whole",
     technical_margin_m: float = 200.0,
     sections: dict[Path, TechnicalSection] | None = None,
+    extra_train_manifest: Path | None = None,
+    exclude_tracks: tuple[str, ...] = (),
 ) -> tuple[list[MosaicInput], list[dict[str, Any]]]:
     """Resolve mosaics (tiling ones larger than ``max_pixels`` when ``tile_px`` > 0)
-    and their label sources. Returns (inputs, label-source notes)."""
-    entries = json.loads(manifest_path.read_text())
+    and their label sources. Returns (inputs, label-source notes).
+
+    Entries of ``extra_train_manifest`` (paths relative to its own directory) become
+    ``train_only`` inputs; their tracks label every mosaic they touch, like the rest.
+    Tracks whose Ropewiki title is in ``exclude_tracks`` are ignored, never positive."""
+    excluded = {t.casefold() for t in exclude_tracks}
+    entries = [{**e, "_train_only": False} for e in json.loads(manifest_path.read_text())]
+    if extra_train_manifest is not None:
+        extra_root = extra_train_manifest.parent
+        for e in json.loads(extra_train_manifest.read_text()):
+            kmls = e.get("kml_paths", [e.get("kml_path")])
+            entries.append(
+                {
+                    "dem_path": str(extra_root / e["dem_path"]),
+                    "kml_paths": [str(extra_root / k) for k in kmls if k],
+                    "_train_only": True,
+                }
+            )
     all_kmls = sorted(
         {root / k for e in entries for k in e.get("kml_paths", [e.get("kml_path")]) if k}
     )
@@ -480,7 +523,14 @@ def build_inputs(
         if crs_key not in kml_bounds:
             kml_bounds[crs_key] = {k: _kml_bounds(k, crs) for k in all_kmls}
         for tile, b, core_b in parts:
-            mi = MosaicInput(dem_path=dem, bounds=b, crs=crs, tile=tile, core_bounds=core_b)
+            mi = MosaicInput(
+                dem_path=dem,
+                bounds=b,
+                crs=crs,
+                tile=tile,
+                core_bounds=core_b,
+                train_only=e["_train_only"],
+            )
             # Every manifest track touching this extent labels it, not just its own entry.
             for k, kb in kml_bounds[crs_key].items():
                 if kb and kb[0] < b[2] and kb[2] > b[0] and kb[1] < b[3] and kb[3] > b[1]:
@@ -494,6 +544,12 @@ def build_inputs(
                 )
                 notes += _apply_ropewiki(
                     mi, props, labeled_titles, cache_dir, nontechnical, min_rappels
+                )
+            for k in [k for k in mi.positive_kmls if kml_title(k).casefold() in excluded]:
+                mi.positive_kmls.remove(k)
+                mi.ignore_kmls.append(k)
+                notes.append(
+                    {"mosaic": mi.name, "title": kml_title(k), "action": "excluded→ignore"}
                 )
             if technical != "off":
                 _apply_technical_sections(mi, unmarked, sections, technical_margin_m)
@@ -540,18 +596,36 @@ def sample_raster_on_reaches(
 # ---------------------------------------------------------------------------
 
 
+def _step_candidates(mr: MosaicReaches, kind: str):
+    """(rows, cols, size, reach) of rappel candidates: ``d8`` = raw-profile drops sized
+    by excess over the local grade; ``iso`` = isotonic-profile steps sized by height."""
+    if kind == "d8":
+        return mr.drop_r, mr.drop_c, mr.drop_excess_m, mr.drop_reach
+    if kind == "iso":
+        return mr.step_r, mr.step_c, mr.step_h, mr.step_reach
+    raise ValueError(f"unknown candidate kind {kind!r}")
+
+
+RAPPEL_THRESHOLDS = {"d8": (0.0, 2.0, 4.0, 8.0), "iso": (3.0, 5.0, 8.0, 12.0)}
+
+
 def evaluate_rappels(
     mosaics: list[tuple[MosaicInput, MosaicReaches]],
-    excess_thresholds: tuple[float, ...] = (0.0, 2.0, 4.0, 8.0),
+    excess_thresholds: tuple[float, ...] | None = None,
     match_m: float = 25.0,
     track_tol_m: float = 20.0,
+    kind: str = "d8",
 ) -> dict[str, Any]:
     """Profile-step candidates on positive reaches vs KML rappel points and Ropewiki
-    per-canyon rappel counts / longest rappel.
+    per-canyon rappel counts / longest rappel. Thresholds apply to the candidate size
+    (``excess`` for d8 drops, ``height`` for iso steps).
 
     Each KML is scored once, on the input whose core holds most of its track (tiles
-    and overlapping mosaics would otherwise count it several times).
+    and overlapping mosaics would otherwise count it several times). Train-only inputs
+    are skipped.
     """
+    thresholds = excess_thresholds or RAPPEL_THRESHOLDS[kind]
+    size_name = "excess" if kind == "d8" else "height"
     from pyproj import Transformer
     from shapely import distance as shp_distance
     from shapely import points as shp_points
@@ -560,6 +634,8 @@ def evaluate_rappels(
     tracks: dict[tuple[Path, str], Any] = {}
     best: dict[Path, tuple[float, int]] = {}
     for idx, (mi, mr) in enumerate(mosaics):
+        if mi.train_only:
+            continue
         core = box(*(mi.core_bounds or mi.bounds))
         for k in mi.positive_kmls:
             key = (k, mr.crs_wkt)
@@ -576,17 +652,18 @@ def evaluate_rappels(
     for k, (_, idx) in sorted(best.items()):
         mi, mr = mosaics[idx]
         track = tracks[(k, mr.crs_wkt)]
-        xs = mr.affine.c + (mr.drop_c + 0.5) * mr.affine.a
-        ys = mr.affine.f + (mr.drop_r + 0.5) * mr.affine.e
+        cr, cc, size, creach = _step_candidates(mr, kind)
+        xs = mr.affine.c + (cc + 0.5) * mr.affine.a
+        ys = mr.affine.f + (cr + 0.5) * mr.affine.e
         cand = shp_points(np.column_stack([xs, ys])) if len(xs) else np.zeros(0, dtype=object)
-        on_pos = mr.label[mr.drop_reach] == 1
+        on_pos = mr.label[creach] == 1
         tf = Transformer.from_crs("EPSG:4326", mr.crs_wkt, always_xy=True)
         for g in parse_kml(k).anchor_points().geometry:
             pt = shp_points(*tf.transform(g.x, g.y))
             row = {"mosaic": mr.stem, "kml": kml_title(k)}
-            for t in excess_thresholds:
-                sel = on_pos & (mr.drop_excess_m >= t)
-                row[f"nearest_m@excess{t:g}"] = (
+            for t in thresholds:
+                sel = on_pos & (size >= t)
+                row[f"nearest_m@{size_name}{t:g}"] = (
                     float(shp_distance(cand[sel], pt).min()) if sel.any() else math.inf
                 )
             point_rows.append(row)
@@ -601,10 +678,12 @@ def evaluate_rappels(
             "track_km": float(track.length / 1000.0),
             "ropewiki_rappels": props.get("Has number of rappels"),
             "ropewiki_longest_m": props.get("Has longest rappel"),
-            "max_drop_m": float(mr.drop_m[near_track].max()) if near_track.any() else 0.0,
+            "max_drop_m": float(
+                (mr.drop_m if kind == "d8" else size)[near_track].max() if near_track.any() else 0.0
+            ),
         }
-        for t in excess_thresholds:
-            row[f"n_steps@excess{t:g}"] = int((near_track & (mr.drop_excess_m >= t)).sum())
+        for t in thresholds:
+            row[f"n_steps@{size_name}{t:g}"] = int((near_track & (size >= t)).sum())
         canyon_rows.append(row)
 
     def spearman(pairs: list[tuple[Any, Any]]) -> float:
@@ -616,21 +695,22 @@ def evaluate_rappels(
 
     km = sum(r["track_km"] for r in canyon_rows)
     summary: dict[str, Any] = {
+        "candidates": kind,
         "n_canyons": len(canyon_rows),
         "n_kml_rappel_points": len(point_rows),
         "spearman_longest_vs_max_drop": spearman(
             [(r["ropewiki_longest_m"], r["max_drop_m"]) for r in canyon_rows]
         ),
     }
-    for t in excess_thresholds:
-        d = np.array([r[f"nearest_m@excess{t:g}"] for r in point_rows])
-        summary[f"excess>={t:g}m"] = {
+    for t in thresholds:
+        d = np.array([r[f"nearest_m@{size_name}{t:g}"] for r in point_rows])
+        summary[f"{size_name}>={t:g}m"] = {
             f"kml_point_recall@{match_m:g}m": float((d <= match_m).mean()) if len(d) else math.nan,
             "steps_per_track_km": (
-                sum(r[f"n_steps@excess{t:g}"] for r in canyon_rows) / km if km else math.nan
+                sum(r[f"n_steps@{size_name}{t:g}"] for r in canyon_rows) / km if km else math.nan
             ),
             "spearman_vs_ropewiki_rappels": spearman(
-                [(r["ropewiki_rappels"], r[f"n_steps@excess{t:g}"]) for r in canyon_rows]
+                [(r["ropewiki_rappels"], r[f"n_steps@{size_name}{t:g}"]) for r in canyon_rows]
             ),
         }
     return {"summary": summary, "points": point_rows, "canyons": canyon_rows}
@@ -710,19 +790,131 @@ def _coarse_area_cached(dem_path: Path, cfg: ReachConfig, cache_dir: Path) -> Co
 
 
 def area_matched_labels(
-    mosaics: list[MosaicReaches], quantile: float = 0.1
+    mosaics: list[MosaicReaches],
+    quantile: float = 0.1,
+    labels: list[np.ndarray] | None = None,
 ) -> tuple[list[np.ndarray], float]:
     """Labels restricted to reaches at least as large as the ``quantile`` (length-
     weighted) of positive-reach ``log_area``. Removes the "it's the big drainage"
-    shortcut: within this subset, area alone can no longer separate the classes."""
+    shortcut: within this subset, area alone can no longer separate the classes.
+    ``labels`` defaults to each mosaic's own ``label``."""
+    labels = labels if labels is not None else [mr.label for mr in mosaics]
     la = np.concatenate([mr.features["log_area"] for mr in mosaics])
-    lab = np.concatenate([mr.label for mr in mosaics])
+    lab = np.concatenate(labels)
     w = np.concatenate([mr.length_m for mr in mosaics])
     pos = lab == 1
     order = np.argsort(la[pos])
     cw = np.cumsum(w[pos][order])
     thr = float(la[pos][order][np.searchsorted(cw, quantile * cw[-1])]) if pos.any() else -np.inf
-    return [np.where(mr.features["log_area"] >= thr, mr.label, -1) for mr in mosaics], thr
+    return [
+        np.where(mr.features["log_area"] >= thr, y, -1)
+        for mr, y in zip(mosaics, labels, strict=True)
+    ], thr
+
+
+OVERRIDE_LABELS = {"positive": 1, "negative": 0, "ignore": -1}
+
+
+def read_label_overrides(path: Path) -> gpd.GeoDataFrame:
+    """Reviewed label overrides: any vector file with a ``label`` column (positive /
+    negative / ignore) and an optional ``buffer_m`` (default 25) around each geometry."""
+    gdf = gpd.read_file(path)
+    if "label" not in gdf.columns:
+        raise ValueError(f"{path}: overrides need a 'label' column")
+    bad = sorted(set(gdf["label"]) - set(OVERRIDE_LABELS))
+    if bad:
+        raise ValueError(f"{path}: unknown override labels {bad}")
+    if "buffer_m" not in gdf.columns:
+        gdf["buffer_m"] = 25.0
+    return gdf
+
+
+def apply_label_overrides(mr: MosaicReaches, overrides: gpd.GeoDataFrame) -> int:
+    """Set labels of core reaches inside override geometries (positive/negative: ≥ half
+    the reach inside; ignore: any part). Applied after all other label rules; returns
+    the number of reaches changed."""
+    from shapely import contains_xy
+
+    if overrides.empty:
+        return 0
+    ov = overrides.to_crs(mr.crs_wkt)
+    tr = mr.affine
+    xs = tr.c + (mr.pix_c + 0.5) * tr.a
+    ys = tr.f + (mr.pix_r + 0.5) * tr.e
+    sizes = np.maximum(np.diff(mr.reach_ptr), 1)
+    changed = 0
+    for geom, lab, buf in zip(ov.geometry, ov["label"], ov["buffer_m"], strict=True):
+        if geom is None or geom.is_empty:
+            continue
+        inside = contains_xy(geom.buffer(float(buf)), xs, ys)
+        if not inside.any():
+            continue
+        frac = np.add.reduceat(inside.astype(np.float64), mr.reach_ptr[:-1]) / sizes
+        value = OVERRIDE_LABELS[lab]
+        hit = (frac > 0 if value == -1 else frac >= 0.5) & mr.core
+        changed += int((mr.label[hit] != value).sum())
+        mr.label[hit] = value
+    return changed
+
+
+def false_positive_runs(
+    mi: MosaicInput, mr: MosaicReaches, gdf: gpd.GeoDataFrame, score: np.ndarray, threshold: float
+) -> list[dict[str, Any]]:
+    """Main-stem runs of negative reaches scoring ≥ ``threshold``, for label review:
+    each may be a real but unmapped canyon (→ override to positive/ignore) or a true
+    ranker error. Includes the nearest Ropewiki canyon from the cached properties."""
+    from pyproj import Transformer
+    from shapely.ops import unary_union
+
+    sel = (mr.label == 0) & (score >= threshold)
+    if not sel.any():
+        return []
+    parent = np.arange(mr.n)
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    dn = main_stem_down(mr.down.astype(np.int64), mr.main_up.astype(np.int64))
+    for i in np.flatnonzero(sel & (dn >= 0)):
+        if sel[dn[i]]:
+            parent[find(i)] = find(int(dn[i]))
+    runs: dict[int, list[int]] = {}
+    for i in np.flatnonzero(sel).tolist():
+        runs.setdefault(find(i), []).append(i)
+    tf = Transformer.from_crs("EPSG:4326", mr.crs_wkt, always_xy=True)
+    known = [
+        (t, *tf.transform(p["Has longitude"], p["Has latitude"]))
+        for t, p in mi.ropewiki.items()
+        if p.get("Has latitude") is not None and p.get("Has longitude") is not None
+    ]
+    to_wgs = Transformer.from_crs(mr.crs_wkt, "EPSG:4326", always_xy=True)
+    out = []
+    for ids in runs.values():
+        geom = unary_union(list(gdf.geometry.iloc[ids]))
+        c = geom.centroid
+        near = min(known, key=lambda k: math.hypot(k[1] - c.x, k[2] - c.y), default=None)
+        lon, lat = to_wgs.transform(c.x, c.y)
+        out.append(
+            {
+                "mosaic": mr.stem,
+                "length_m": float(mr.length_m[ids].sum()),
+                "mean_score": float(score[ids].mean()),
+                "max_score": float(score[ids].max()),
+                "max_log_area": float(mr.features["log_area"][ids].max()),
+                "lat": lat,
+                "lon": lon,
+                "nearest_ropewiki": near[0] if near else "",
+                "nearest_ropewiki_m": math.hypot(near[1] - c.x, near[2] - c.y)
+                if near
+                else math.nan,
+                "geometry": geom,
+                "crs": mr.crs_wkt,
+            }
+        )
+    return out
 
 
 def run_reach_eval(
@@ -747,7 +939,18 @@ def run_reach_eval(
     models: tuple[str, ...] = ("logreg", "gbt"),
     features: list[str] | None = None,
     write_png: bool = True,
+    profile: ProfileConfig | None = None,
+    smooth_hops: tuple[int, ...] = (),
+    smooth_modes: tuple[str, ...] = ("median",),
+    label_overrides: Path | None = None,
+    extra_train_manifest: Path | None = None,
+    exclude_tracks: tuple[str, ...] = (),
 ) -> dict[str, Any]:
+    """Build/label/score every input; see the module docstring. With ``smooth_hops``,
+    the first smoothing variant of the first model drives outputs and the threshold.
+
+    Python defaults are the bare pipeline (no smoothing, no profile steps); the CLI
+    defaults to ``--smooth-hops 1 --smooth median --profile``."""
     cfg = cfg or ReachConfig()
     root = root or manifest_path.parent
     cache_dir = cache_dir or (out_dir / "cache")
@@ -769,11 +972,15 @@ def run_reach_eval(
         unmarked=unmarked,
         technical_margin_m=technical_margin_m,
         sections=sections,
+        extra_train_manifest=extra_train_manifest,
+        exclude_tracks=exclude_tracks,
     )
     if not inputs:
         raise SystemExit("reach-eval: no mosaics to evaluate")
     mosaics: list[tuple[MosaicInput, MosaicReaches]] = []
     coarse: dict[Path, CoarseArea] = {}
+    overrides = read_label_overrides(label_overrides) if label_overrides else None
+    n_overridden = 0
     for mi in inputs:
         log(f"reach-eval: {mi.name} (group {mi.group})")
         ca = None
@@ -782,7 +989,7 @@ def run_reach_eval(
                 coarse[mi.dem_path] = _coarse_area_cached(mi.dem_path, cfg, cache_dir)
             ca = coarse[mi.dem_path]
         mr = load_or_build_reaches(
-            mi.dem_path, cfg, cache_dir / "reaches", tile=mi.tile, coarse_area=ca
+            mi.dem_path, cfg, cache_dir / "reaches", tile=mi.tile, coarse_area=ca, profile=profile
         )
         mr.group = mi.group
         label_reaches(
@@ -792,12 +999,18 @@ def run_reach_eval(
             ignore_kmls=mi.ignore_kmls,
             ignore_points_xy=mi.ignore_points_xy,
         )
+        if overrides is not None:
+            n_overridden += apply_label_overrides(mr, overrides)
         mosaics.append((mi, mr))
     mrs = [mr for _, mr in mosaics]
 
     names = list(features or [f for f in DEFAULT_RANKER_FEATURES if f in mrs[0].features])
     X = [np.column_stack([mr.features[f] for f in names]).astype(np.float64) for mr in mrs]
     Y = [mr.label for mr in mrs]
+    # Scored labels: train-only inputs (--extra-train-manifest) never count in metrics.
+    Y_eval = [
+        np.full_like(y, -1) if mi.train_only else y for (mi, _), y in zip(mosaics, Y, strict=True)
+    ]
     W = [mr.length_m.astype(np.float64) for mr in mrs]
     groups = sorted({mr.group for mr in mrs})
     W_train = _canyon_balanced_weights(mrs) if balance_canyons else W
@@ -829,6 +1042,19 @@ def run_reach_eval(
         no_area = [i for i, n in enumerate(names) if n != "log_area"]
         methods[f"{models[0]}_logo_no_log_area"] = logo_scores(models[0], no_area)
     ranker = methods[f"{models[0]}_logo"]
+    smooth_names = []
+    for hops in smooth_hops:
+        for how in smooth_modes:
+            for kind in models:
+                name = f"{kind}_logo_smooth{hops}_{how}"
+                methods[name] = [
+                    smooth_scores(sc, mr.length_m, mr.down, mr.main_up, hops, how)
+                    for sc, mr in zip(methods[f"{kind}_logo"], mrs, strict=True)
+                ]
+                if kind == models[0]:
+                    smooth_names.append(name)
+    if smooth_names:
+        ranker = methods[smooth_names[0]]
     full_logreg = _fit("logreg", *train_on(list(range(len(mrs))), all_cols))
     for name, template in (rasters or {}).items():
         methods[f"raster:{name}"] = []
@@ -838,27 +1064,31 @@ def run_reach_eval(
                 sample_raster_on_reaches(path, mr) if path.exists() else np.full(mr.n, np.nan)
             )
 
-    Y_am, area_thr = area_matched_labels(mrs)
+    Y_am, area_thr = area_matched_labels(mrs, labels=Y_eval)
     all_w = np.concatenate(W)
 
     def pooled(scores: list[np.ndarray], labels: list[np.ndarray]) -> dict[str, float]:
         return rank_metrics(np.concatenate(scores), np.concatenate(labels), all_w)
 
-    def with_matched(scores: list[np.ndarray], labels=Y) -> dict[str, float]:
+    def with_matched(scores: list[np.ndarray], labels=Y_eval) -> dict[str, float]:
         m = pooled(scores, labels)
         am = pooled(scores, [np.where(ya >= 0, y, -1) for y, ya in zip(labels, Y_am, strict=True)])
         return {**m, "auc_am": am["auc"], "ap_am": am["ap"], "base_rate_am": _base_rate(am)}
 
     method_rows = []
     for name, scores in methods.items():
-        covered = [i for i, sc in enumerate(scores) if np.isfinite(sc).any()]
+        covered = [
+            i
+            for i, sc in enumerate(scores)
+            if np.isfinite(sc).any() and not mosaics[i][0].train_only
+        ]
         row = {"method": name, "mosaics": len(covered), **with_matched(scores)}
-        per = [rank_metrics(scores[i], Y[i], W[i])["ap"] for i in covered]
+        per = [rank_metrics(scores[i], Y_eval[i], W[i])["ap"] for i in covered]
         row["median_mosaic_ap"] = float(np.nanmedian(per)) if per else math.nan
         method_rows.append(row)
         if name.startswith("raster:") and covered:
             # Same reaches as the raster scored (partial coverage leaves NaNs).
-            same = [np.where(np.isfinite(sc), y, -1) for sc, y in zip(scores, Y, strict=True)]
+            same = [np.where(np.isfinite(sc), y, -1) for sc, y in zip(scores, Y_eval, strict=True)]
             sub = with_matched(ranker, same)
             method_rows.append({"method": f"  {models[0]} on the same reaches", **sub})
 
@@ -876,6 +1106,7 @@ def run_reach_eval(
             {
                 "mosaic": mr.stem,
                 "group": mr.group,
+                "train_only": mi.train_only,
                 "reaches": mr.n,
                 "pos_kmls": len(mi.positive_kmls),
                 "ignore_kmls": len(mi.ignore_kmls),
@@ -887,11 +1118,15 @@ def run_reach_eval(
         )
 
     rappels = evaluate_rappels(mosaics)
+    rappels_iso = evaluate_rappels(mosaics, kind="iso") if profile else None
 
     # Per-mosaic outputs at the pooled F1-optimal ranker threshold.
-    threshold = best_f1_threshold(np.concatenate(ranker), np.concatenate(Y), all_w)
-    for i, mr in enumerate(mrs):
+    threshold = best_f1_threshold(np.concatenate(ranker), np.concatenate(Y_eval), all_w)
+    fp_rows: list[dict[str, Any]] = []
+    for i, (mi, mr) in enumerate(mosaics):
         cols = {"ranker_score": ranker[i].astype(np.float32)}
+        if smooth_names:
+            cols["ranker_score_raw"] = methods[f"{models[0]}_logo"][i].astype(np.float32)
         for name, scores in methods.items():
             if name.startswith("raster:"):
                 cols[name.removeprefix("raster:")] = scores[i].astype(np.float32)
@@ -903,8 +1138,20 @@ def run_reach_eval(
         gdf.to_file(gpkg, layer="reaches", driver="GPKG")
         if len(mr.drop_r):
             mr.drops_gdf().to_file(gpkg, layer="steps", driver="GPKG")
+        if len(mr.step_r):
+            mr.iso_steps_gdf().to_file(gpkg, layer="iso_steps", driver="GPKG")
         if write_png:
             render_outcome_png(mr, ranker[i], threshold, out_dir / "png" / f"{mr.stem}.png")
+        if not mi.train_only:
+            fp_rows += false_positive_runs(mi, mr, gdf, ranker[i], threshold)
+    _write_fp_review(fp_rows, out_dir / "review")
+
+    snap_stats: dict[str, dict[str, Any]] = {}
+    for mr in mrs:
+        for st in mr.snap_stats:
+            best = snap_stats.get(st["track"])
+            if st["points"] and (best is None or st["matched_frac"] > best["matched_frac"]):
+                snap_stats[st["track"]] = {**st, "track": kml_title(st["track"])}
 
     result = {
         "config": asdict(cfg),
@@ -924,6 +1171,16 @@ def run_reach_eval(
         ],
         "models": list(models),
         "features": names,
+        "profile": asdict(profile) if profile else None,
+        "smoothing": {
+            "hops": list(smooth_hops),
+            "modes": list(smooth_modes),
+            "ranker": (smooth_names[0] if smooth_names else f"{models[0]}_logo"),
+        },
+        "label_overrides": {"path": str(label_overrides or ""), "reaches_changed": n_overridden},
+        "train_only": sorted({mi.name for mi, _ in mosaics if mi.train_only}),
+        "snap_stats": sorted(snap_stats.values(), key=lambda r: r["track"]),
+        "fp_runs": len(fp_rows),
         "groups": groups,
         "area_matched_log_area_min": area_thr,
         "threshold_f1": threshold,
@@ -932,6 +1189,7 @@ def run_reach_eval(
         "mosaics": mosaic_rows,
         "coefficients_full_fit": logreg_coefficients(full_logreg, names),
         "rappels": rappels,
+        "rappels_iso": rappels_iso,
         "label_notes": notes,
     }
     (out_dir / "metrics.json").write_text(json.dumps(result, indent=1, default=float))
@@ -939,6 +1197,26 @@ def run_reach_eval(
     log(f"reach-eval: wrote {out_dir / 'report.md'}")
     print(_report_md(result, brief=True))
     return result
+
+
+def _write_fp_review(rows: list[dict[str, Any]], out_dir: Path) -> None:
+    """``fp_runs.gpkg`` (WGS84 lines) + ``fp_runs.csv``, longest and highest-scoring first."""
+    out_dir.mkdir(parents=True, exist_ok=True)
+    gpkg, csv = out_dir / "fp_runs.gpkg", out_dir / "fp_runs.csv"
+    gpkg.unlink(missing_ok=True)
+    if not rows:
+        csv.write_text("")
+        return
+    frames = []
+    for crs in sorted({r["crs"] for r in rows}):
+        sub = [{k: v for k, v in r.items() if k != "crs"} for r in rows if r["crs"] == crs]
+        frames.append(gpd.GeoDataFrame(sub, geometry="geometry", crs=crs).to_crs("EPSG:4326"))
+    gdf = gpd.pd.concat(frames, ignore_index=True)
+    gdf["priority"] = gdf["length_m"] * gdf["mean_score"]
+    gdf = gdf.sort_values("priority", ascending=False).reset_index(drop=True)
+    gdf.insert(0, "run", gdf.index)
+    gdf.to_file(gpkg, layer="fp_runs", driver="GPKG")
+    gdf.drop(columns="geometry").to_csv(csv, index=False, float_format="%.4f")
 
 
 def _canyon_balanced_weights(mrs: list[MosaicReaches]) -> list[np.ndarray]:
@@ -982,6 +1260,29 @@ def _technical_summary(r: dict[str, Any]) -> str:
     )
 
 
+def _labels_summary(r: dict[str, Any]) -> str:
+    snap = r["config"].get("label_snap_m", 0)
+    lines = [
+        f"- matching: {'map-matched to the network, ' + f'{snap:g} m' if snap else 'pixel distance'}"
+        f" (tol {r['config']['label_tol_m']:g} m)",
+        f"- overrides: {r['label_overrides']['path'] or '(none)'}, "
+        f"{r['label_overrides']['reaches_changed']} reaches changed",
+        f"- train-only inputs (not scored): {len(r['train_only'])}",
+        f"- ranker for outputs/threshold: `{r['smoothing']['ranker']}`; "
+        f"{r['fp_runs']} negative runs above threshold in `review/fp_runs.*`",
+    ]
+    st = r.get("snap_stats") or []
+    if st:
+        off = np.array([s["median_offset_m"] for s in st], dtype=float)
+        mf = np.array([s["matched_frac"] for s in st], dtype=float)
+        lines.append(
+            f"- snapped tracks: {len(st)}; matched point fraction median {np.median(mf):.2f} "
+            f"(min {mf.min():.2f}); median snap offset median {np.nanmedian(off):.1f} m "
+            f"(max {np.nanmax(off):.1f} m)"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def _report_md(r: dict[str, Any], brief: bool = False) -> str:
     metric_cols = ["auc", "ap", "r_at_p50", "p_at_r80"]
     am_cols = ["auc_am", "ap_am", "base_rate_am"]
@@ -1017,9 +1318,16 @@ def _report_md(r: dict[str, Any], brief: bool = False) -> str:
         _table(r["single_features"][: 15 if brief else None], ["feature", *metric_cols, *am_cols]),
         "\n## Technical sections\n",
         _technical_summary(r),
-        "\n## Rappel candidates (profile steps on positive reaches)\n",
+        "\n## Labels\n",
+        _labels_summary(r),
+        "\n## Rappel candidates (D8 profile drops on positive reaches)\n",
         "```\n" + json.dumps(r["rappels"]["summary"], indent=1) + "\n```",
     ]
+    if r.get("rappels_iso"):
+        parts += [
+            "\n## Rappel candidates (isotonic-profile steps on positive reaches)\n",
+            "```\n" + json.dumps(r["rappels_iso"]["summary"], indent=1) + "\n```",
+        ]
     if not brief:
         coefs = sorted(r["coefficients_full_fit"].items(), key=lambda kv: -abs(kv[1]))
         parts += [
@@ -1112,6 +1420,51 @@ def reach_eval_cli(argv: list[str] | None = None) -> None:
         help=f"Comma-separated models from {MODELS}; the first drives GPKG/PNG outputs.",
     )
     p.add_argument("--features", help="Comma-separated ranker features (default: built-in set).")
+    p.add_argument(
+        "--extra-train-manifest",
+        type=Path,
+        help="Manifest of extra mosaics used for training only (never scored).",
+    )
+    p.add_argument(
+        "--exclude-track",
+        action="append",
+        default=[],
+        metavar="TITLE",
+        help="Ropewiki title of a track to ignore instead of labeling positive "
+        "(e.g. 'Das Pfeife Canyon'). Repeatable.",
+    )
+    p.add_argument(
+        "--label-overrides",
+        type=Path,
+        help="Vector file of reviewed labels: 'label' column (positive/negative/ignore), "
+        "optional 'buffer_m'. Applied after all other label rules.",
+    )
+    p.add_argument(
+        "--label-snap-m",
+        type=float,
+        default=d.label_snap_m,
+        help="Map-match positive tracks onto the network within this distance "
+        "(0 = label by pixel distance to the track).",
+    )
+    p.add_argument(
+        "--smooth-hops",
+        default="1",
+        help="Comma-separated main-stem smoothing widths (reaches each way) to score; the "
+        "first (with the first --smooth mode) drives outputs. Empty = no smoothing.",
+    )
+    p.add_argument("--smooth", default="median", help="Comma-separated: median, mean.")
+    p.add_argument(
+        "--profile",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Compute isotonic-profile step features (cached separately; opt into the ranker "
+        "with --features) and score the steps as rappel candidates.",
+    )
+    pd_ = ProfileConfig()
+    p.add_argument("--step-grade", type=float, default=pd_.step_grade)
+    p.add_argument("--step-window-m", type=float, default=pd_.step_window_m)
+    p.add_argument("--min-step-m", type=float, default=pd_.min_step_m)
+    p.add_argument("--corridor-px", type=int, default=pd_.corridor_px)
     p.add_argument("--no-png", action="store_true")
     p.add_argument("--min-area-m2", type=float, default=d.min_area_m2)
     p.add_argument("--reach-length-m", type=float, default=d.reach_length_m)
@@ -1138,6 +1491,17 @@ def reach_eval_cli(argv: list[str] | None = None) -> None:
         drop_window_m=a.drop_window_m,
         min_drop_m=a.min_drop_m,
         context_hops=a.context_hops,
+        label_snap_m=a.label_snap_m,
+    )
+    profile = (
+        ProfileConfig(
+            corridor_px=a.corridor_px,
+            step_window_m=a.step_window_m,
+            step_grade=a.step_grade,
+            min_step_m=a.min_step_m,
+        )
+        if a.profile
+        else None
     )
     run_reach_eval(
         a.manifest,
@@ -1160,6 +1524,12 @@ def reach_eval_cli(argv: list[str] | None = None) -> None:
         models=tuple(a.models.split(",")),
         features=a.features.split(",") if a.features else None,
         write_png=not a.no_png,
+        profile=profile,
+        smooth_hops=tuple(int(h) for h in a.smooth_hops.split(",") if h),
+        smooth_modes=tuple(m for m in a.smooth.split(",") if m),
+        label_overrides=a.label_overrides,
+        extra_train_manifest=a.extra_train_manifest,
+        exclude_tracks=tuple(a.exclude_track),
     )
 
 

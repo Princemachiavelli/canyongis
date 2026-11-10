@@ -9,8 +9,11 @@ reduces to *ranking network reaches*. This module:
 2. Computes cheap per-reach features: catchment, multi-scale confinement (-TPI),
    cross-section wall heights and valley widths, gradient, and profile steps.
 3. Smooths a subset along the main stem (canyons are continuous) as ``ctx_*``.
-4. Labels reaches from descent tracks: 1 = on a route, 0 = negative, -1 = ignore
-   (partial overlap, route-end neighbors, near known-but-unmapped canyons).
+4. Optionally adds thalweg-step features from an isotonic (non-increasing) elevation
+   profile (:class:`ProfileConfig`), cached separately from the base network.
+5. Labels reaches from descent tracks: 1 = on a route, 0 = negative, -1 = ignore
+   (partial overlap, route-end neighbors, near known-but-unmapped canyons). Tracks are
+   either matched to reaches by pixel distance or map-matched onto the network.
 
 ``canyongis.reach_eval`` ranks and scores the cached result.
 """
@@ -18,7 +21,9 @@ reduces to *ranking network reaches*. This module:
 from __future__ import annotations
 
 import hashlib
+import itertools
 import json
+import warnings
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 
@@ -30,6 +35,8 @@ from rasterio.crs import CRS
 from rasterio.transform import xy as rio_xy
 from rasterio.windows import Window
 from scipy import ndimage as ndi
+from scipy.optimize import isotonic_regression
+from scipy.spatial import cKDTree
 from shapely.geometry import LineString, Point
 
 from .hydrology import D8_OFFSETS, compute_flow_dir_accum
@@ -39,7 +46,17 @@ from .terrain import compute_tpi, fill_nans
 from .validate import parse_kml
 
 CACHE_VERSION = 2
-LABEL_FIELDS = frozenset({"label_tol_m", "label_min_frac", "ignore_radius_m"})
+PROFILE_VERSION = 1
+LABEL_FIELDS = frozenset(
+    {
+        "label_tol_m",
+        "label_min_frac",
+        "ignore_radius_m",
+        "label_snap_m",
+        "label_snap_step_m",
+        "label_snap_gap_hops",
+    }
+)
 
 # Features smoothed along the main stem into ``ctx_<name>``.
 CONTEXT_FEATURES: tuple[str, ...] = (
@@ -84,12 +101,42 @@ class ReachConfig:
     label_tol_m: float = 20.0
     label_min_frac: float = 0.5
     ignore_radius_m: float = 300.0
+    # Map-match positive tracks onto the network (0 = pixel-distance labels instead):
+    # track points every ``label_snap_step_m`` snap to reaches within ``label_snap_m``,
+    # and gaps between matched reaches up to ``label_snap_gap_hops`` apart are filled.
+    label_snap_m: float = 0.0
+    label_snap_step_m: float = 5.0
+    label_snap_gap_hops: int = 10
 
     def signature(self) -> str:
         """Hash of the fields that affect the cached network/features (not labels)."""
         fields = {k: v for k, v in asdict(self).items() if k not in LABEL_FIELDS}
         payload = json.dumps({"v": CACHE_VERSION, **fields}, sort_keys=True)
         return hashlib.sha1(payload.encode()).hexdigest()[:12]
+
+
+@dataclass(frozen=True)
+class ProfileConfig:
+    """Thalweg steps on an isotonic (non-increasing) fit of each link's elevation profile.
+
+    The raw D8 profile is noisy: the path wanders onto banks, and vegetation, bridges
+    and pools add bumps and pits. Elevation is first the minimum over a small window
+    (``corridor_px``) around each D8 pixel, then a least-squares non-increasing fit, so
+    neither bumps nor pits create fake drops. A *step* is a contiguous run where the
+    fitted drop over ``step_window_m`` is at least ``step_grade`` per meter; its height is
+    the fitted drop from the run's top to its bottom.
+    """
+
+    corridor_px: int = 1
+    step_window_m: float = 4.0
+    step_grade: float = 0.7
+    min_step_m: float = 3.0
+    extend_m: float = 50.0  # profile continues this far past each link's outlet
+    context_hops: int = 3
+
+    def signature(self) -> str:
+        payload = json.dumps({"v": PROFILE_VERSION, **asdict(self)}, sort_keys=True)
+        return hashlib.sha1(payload.encode()).hexdigest()[:8]
 
 
 @dataclass(frozen=True)
@@ -192,6 +239,13 @@ class MosaicReaches:
     # Set by label_reaches (not cached): index into canyon_keys of each positive's track.
     canyon: np.ndarray = field(default_factory=lambda: np.zeros(0, np.int32))
     canyon_keys: list[str] = field(default_factory=list)
+    # Per-track map-matching diagnostics (label_snap_m > 0).
+    snap_stats: list[dict] = field(default_factory=list)
+    # Isotonic-profile steps (set by add_profile_features; cached separately).
+    step_r: np.ndarray = field(default_factory=lambda: np.zeros(0, np.int32))
+    step_c: np.ndarray = field(default_factory=lambda: np.zeros(0, np.int32))
+    step_h: np.ndarray = field(default_factory=lambda: np.zeros(0, np.float32))
+    step_reach: np.ndarray = field(default_factory=lambda: np.zeros(0, np.int32))
 
     @property
     def n(self) -> int:
@@ -299,6 +353,19 @@ class MosaicReaches:
                 "drop_m": self.drop_m,
                 "excess_m": self.drop_excess_m,
                 "label": self.label[self.drop_reach],
+            },
+            geometry=geoms,
+            crs=CRS.from_wkt(self.crs_wkt),
+        )
+
+    def iso_steps_gdf(self) -> gpd.GeoDataFrame:
+        xs, ys = rio_xy(self.affine, self.step_r, self.step_c)
+        geoms = [Point(x, y) for x, y in zip(np.atleast_1d(xs), np.atleast_1d(ys), strict=True)]
+        return gpd.GeoDataFrame(
+            {
+                "reach": self.step_reach,
+                "height_m": self.step_h,
+                "label": self.label[self.step_reach],
             },
             geometry=geoms,
             crs=CRS.from_wkt(self.crs_wkt),
@@ -492,6 +559,103 @@ def _reach_route_frac(dist_m: np.ndarray | None, mr: MosaicReaches, tol_m: float
     return (sums / np.maximum(np.diff(mr.reach_ptr), 1)).astype(np.float32)
 
 
+def _adjacent(a: int, b: int, down: np.ndarray) -> bool:
+    return a == b or down[a] == b or down[b] == a
+
+
+def _downstream_path(a: int, b: int, down: np.ndarray, max_hops: int) -> list[int] | None:
+    """Reaches strictly between ``a`` and ``b`` when ``b`` is ≤ ``max_hops`` downstream."""
+    path: list[int] = []
+    j = int(down[a])
+    for _ in range(max_hops):
+        if j < 0:
+            return None
+        if j == b:
+            return path
+        path.append(j)
+        j = int(down[j])
+    return None
+
+
+def snap_tracks_to_reaches(
+    tracks: list[Track], mr: MosaicReaches, cfg: ReachConfig
+) -> tuple[np.ndarray, np.ndarray, list[dict]]:
+    """Map-match tracks onto the reach network.
+
+    Track points every ``label_snap_step_m`` snap to the nearest reach pixel within
+    ``label_snap_m``, preferring the previous point's reach or a network neighbor of it
+    when that is within 10 m of the nearest (so a track doesn't hop onto a tributary
+    mouth or a parallel wash channel). Consecutive matched reaches that aren't adjacent
+    are joined along the downstream path if it is ≤ ``label_snap_gap_hops`` long.
+
+    Returns (route_frac per reach, index of the track covering most of each reach or -1,
+    per-track stats: matched point fraction and median snap offset).
+    """
+    step, slack_m = cfg.label_snap_step_m, 10.0
+    tr = mr.affine
+    xs = tr.c + (mr.pix_c + 0.5) * tr.a
+    ys = tr.f + (mr.pix_r + 0.5) * tr.e
+    tree = cKDTree(np.column_stack([xs, ys]))
+    pix_reach = mr.per_pixel_reach()
+    down = mr.down.astype(np.int64)
+    cover = np.zeros((len(tracks), mr.n), dtype=np.float64)
+    stats: list[dict] = []
+    for t, track in enumerate(tracks):
+        lines = track_lines(track)
+        offsets: list[float] = []
+        n_pts = 0
+        if not lines.empty:
+            geoms = lines.to_crs(mr.crs_wkt).explode(index_parts=False).geometry
+            for line in geoms:
+                if line.is_empty or line.length == 0:
+                    continue
+                d = np.arange(0.0, line.length + 1e-9, step)
+                pts = np.array([line.interpolate(float(v)).coords[0][:2] for v in d])
+                n_pts += len(pts)
+                dist, idx = tree.query(pts, k=16, distance_upper_bound=cfg.label_snap_m)
+                prev = -1
+                seq: list[int] = []
+                for dd, ii in zip(dist, idx, strict=True):
+                    ok = np.isfinite(dd)
+                    if not ok.any():
+                        continue
+                    cand_r, cand_d = pix_reach[ii[ok]], dd[ok]
+                    k = 0
+                    if prev >= 0:
+                        near = [
+                            j
+                            for j in range(len(cand_r))
+                            if cand_d[j] <= cand_d[0] + slack_m
+                            and _adjacent(prev, int(cand_r[j]), down)
+                        ]
+                        if near:
+                            k = near[0]
+                    prev = int(cand_r[k])
+                    seq.append(prev)
+                    offsets.append(float(cand_d[k]))
+                    cover[t, prev] += step
+                for a, b in itertools.pairwise(seq):
+                    if _adjacent(a, b, down):
+                        continue
+                    gap = _downstream_path(a, b, down, cfg.label_snap_gap_hops)
+                    if gap is None:
+                        gap = _downstream_path(b, a, down, cfg.label_snap_gap_hops)
+                    for j in gap or []:
+                        cover[t, j] = max(cover[t, j], float(mr.length_m[j]))
+        stats.append(
+            {
+                "track": track_key(track),
+                "points": n_pts,
+                "matched_frac": len(offsets) / n_pts if n_pts else 0.0,
+                "median_offset_m": float(np.median(offsets)) if offsets else float("nan"),
+            }
+        )
+    total = cover.sum(axis=0)
+    frac = np.minimum(total / np.maximum(mr.length_m, 1e-6), 1.0).astype(np.float32)
+    owner = np.where(total > 0, cover.argmax(axis=0), -1) if len(tracks) else np.full(mr.n, -1)
+    return frac, owner.astype(np.int32), stats
+
+
 def label_reaches(
     mr: MosaicReaches,
     positive_kmls: list[Track],
@@ -502,7 +666,8 @@ def label_reaches(
 ) -> None:
     """Assign ``label``/``route_frac`` in place.
 
-    - positive: ≥ ``label_min_frac`` of the reach within ``label_tol_m`` of a track
+    - positive: ≥ ``label_min_frac`` of the reach within ``label_tol_m`` of a track, or
+      (``label_snap_m`` > 0) covered by the track map-matched onto the network
     - ignore: partial overlap; main-stem neighbors of a positive run (route ends are
       fuzzy and canyons often continue past the mapped descent); reaches overlapping
       ``ignore_kmls`` (e.g. non-technical routes); reaches within
@@ -511,11 +676,14 @@ def label_reaches(
     """
     tr = mr.affine
     crs = CRS.from_wkt(mr.crs_wkt)
-    dist = _track_distance_m(positive_kmls, tr, crs, mr.shape, mr.pixel_size)
-    frac = _reach_route_frac(dist, mr, cfg.label_tol_m)
-    # Which track each reach is nearest to (at its midpoint), for per-canyon weighting.
-    mid = mr.reach_ptr[:-1] + np.diff(mr.reach_ptr) // 2
-    canyon = dist[1][mr.pix_r[mid], mr.pix_c[mid]] if dist is not None else np.full(mr.n, -1)
+    if cfg.label_snap_m > 0:
+        frac, canyon, mr.snap_stats = snap_tracks_to_reaches(positive_kmls, mr, cfg)
+    else:
+        dist = _track_distance_m(positive_kmls, tr, crs, mr.shape, mr.pixel_size)
+        frac = _reach_route_frac(dist, mr, cfg.label_tol_m)
+        # Which track each reach is nearest to (at its midpoint), for per-canyon weighting.
+        mid = mr.reach_ptr[:-1] + np.diff(mr.reach_ptr) // 2
+        canyon = dist[1][mr.pix_r[mid], mr.pix_c[mid]] if dist is not None else np.full(mr.n, -1)
     label = np.zeros(mr.n, dtype=np.int8)
     label[frac > 0] = -1
     pos = frac >= cfg.label_min_frac
@@ -564,6 +732,189 @@ def _ctx_mean(values: np.ndarray, weight: np.ndarray, down: np.ndarray, up: np.n
             acc[ok] += values[idx[ok]] * weight[idx[ok]]
             wsum[ok] += weight[idx[ok]]
     return acc / np.maximum(wsum, 1e-6)
+
+
+def main_stem_down(down: np.ndarray, main_up: np.ndarray) -> np.ndarray:
+    """``down`` where the edge continues the receiver's main stem, else -1: a tributary
+    joining a larger channel has no main-stem successor."""
+    i = np.arange(len(down))
+    d = np.maximum(down, 0)
+    return np.where((down >= 0) & (main_up[d] == i), down, -1)
+
+
+def main_stem_window(down: np.ndarray, main_up: np.ndarray, hops: int) -> np.ndarray:
+    """(n, 2·hops + 1) reach ids: each reach plus ``hops`` main-stem reaches up and
+    down (-1 where the stem ends). Never crosses a junction into another channel."""
+    dn = main_stem_down(down, main_up)
+    n = len(down)
+    cols = [np.arange(n)]
+    for nb in (dn, main_up):
+        idx = np.arange(n)
+        for _ in range(hops):
+            idx = np.where(idx >= 0, nb[np.maximum(idx, 0)], -1)
+            cols.append(idx)
+    return np.column_stack(cols)
+
+
+def smooth_scores(
+    score: np.ndarray,
+    length_m: np.ndarray,
+    down: np.ndarray,
+    main_up: np.ndarray,
+    hops: int,
+    how: str = "median",
+) -> np.ndarray:
+    """Smooth per-reach scores along the main stem (``median`` or length-weighted
+    ``mean`` over ±``hops`` reaches), so canyon runs come out contiguous."""
+    if hops <= 0:
+        return score.astype(np.float64).copy()
+    win = main_stem_window(down, main_up, hops)
+    ok = win >= 0
+    vals = np.where(ok, score[np.maximum(win, 0)], np.nan).astype(np.float64)
+    if how == "median":
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN rows stay NaN
+            return np.nanmedian(vals, axis=1)
+    if how != "mean":
+        raise ValueError(f"unknown smoothing {how!r}")
+    w = np.where(ok & np.isfinite(vals), length_m[np.maximum(win, 0)], 0.0)
+    return np.nansum(vals * w, axis=1) / np.maximum(w.sum(axis=1), 1e-9)
+
+
+# ---------------------------------------------------------------------------
+# Isotonic-profile steps
+# ---------------------------------------------------------------------------
+
+
+def _reach_links(down: np.ndarray) -> list[np.ndarray]:
+    """Reach chains between junctions: each starts at a head or junction reach (≠ 1
+    donor) and follows ``down`` while the next reach has exactly one donor."""
+    n = len(down)
+    donors = np.bincount(down[down >= 0], minlength=n).tolist()
+    dl = down.tolist()
+    links = []
+    for s in np.flatnonzero(np.asarray(donors) != 1).tolist():
+        path = [s]
+        j = dl[s]
+        while j >= 0 and donors[j] == 1:
+            path.append(j)
+            j = dl[j]
+        links.append(np.asarray(path, dtype=np.int64))
+    return links
+
+
+def isotonic_steps(
+    z: np.ndarray, dist: np.ndarray, n_own: int, pcfg: ProfileConfig
+) -> tuple[np.ndarray, list[tuple[int, float]]]:
+    """Steep flags for the first ``n_own`` profile points and steps starting there as
+    (index of the step top, height in m), from a non-increasing fit of ``z``."""
+    zi = isotonic_regression(z, increasing=False).x
+    j = _forward_index(dist, pcfg.step_window_m)
+    run = np.maximum(dist[j] - dist, 1e-6)
+    steep = (zi - zi[j]) / run >= pcfg.step_grade
+    steep[j == np.arange(len(z))] = False
+    edges = np.diff(np.concatenate([[0], steep.astype(np.int8), [0]]))
+    starts, ends = np.flatnonzero(edges == 1), np.flatnonzero(edges == -1) - 1
+    steps = []
+    for a, b in zip(starts.tolist(), ends.tolist(), strict=True):
+        h = float(zi[a] - zi[j[b]])
+        if a < n_own and h >= pcfg.min_step_m:
+            steps.append((a, h))
+    return steep[:n_own], steps
+
+
+def _read_reaches_elev(mr: MosaicReaches) -> np.ndarray:
+    """The DEM window that ``mr``'s pixel grid indexes into."""
+    with rasterio.open(mr.dem_path) as src:
+        col_off, row_off = ~src.transform * (mr.affine.c, mr.affine.f)
+        win = Window(round(col_off), round(row_off), mr.shape[1], mr.shape[0])
+        return src.read(1, window=win, masked=True).filled(np.nan).astype(np.float32)
+
+
+def profile_features(
+    mr: MosaicReaches, pcfg: ProfileConfig, elev: np.ndarray | None = None
+) -> tuple[dict[str, np.ndarray], dict[str, np.ndarray]]:
+    """Per-reach ``iso_*`` step features and the step points themselves."""
+    z_src = fill_nans(_read_reaches_elev(mr) if elev is None else elev)
+    if pcfg.corridor_px > 0:
+        z_src = ndi.minimum_filter(z_src, size=2 * pcfg.corridor_px + 1)
+    px = mr.pixel_size
+    n = mr.n
+    down = mr.down.astype(np.int64)
+    ptr = mr.reach_ptr
+    steep_len = np.zeros(n, dtype=np.float64)
+    max_step = np.zeros(n, dtype=np.float32)
+    n_steps = np.zeros(n, dtype=np.float32)
+    rows: list[tuple[int, float]] = []  # (global pixel index, height)
+    pix_reach = mr.per_pixel_reach()
+    for link in _reach_links(down):
+        own = np.concatenate([np.arange(ptr[i], ptr[i + 1]) for i in link])
+        ext: list[np.ndarray] = []
+        ext_len, j = 0, int(down[link[-1]])
+        while j >= 0 and ext_len * px < pcfg.extend_m:
+            seg = np.arange(ptr[j], ptr[j + 1])
+            ext.append(seg)
+            ext_len += len(seg)
+            j = int(down[j])
+        idx = np.concatenate([own, *ext])
+        r, c = mr.pix_r[idx], mr.pix_c[idx]
+        step = _step_lengths(r, c, px)
+        dist = np.concatenate([[0.0], np.cumsum(step)[:-1]])
+        steep, steps = isotonic_steps(z_src[r, c].astype(np.float64), dist, len(own), pcfg)
+        np.add.at(steep_len, pix_reach[own], step[: len(own)] * steep)
+        for a, h in steps:
+            g = int(own[a])
+            rid = pix_reach[g]
+            n_steps[rid] += 1
+            max_step[rid] = max(max_step[rid], h)
+            rows.append((g, h))
+    length = np.maximum(mr.length_m.astype(np.float64), 1e-6)
+    feats = {
+        "iso_max_step": max_step,
+        "iso_steps_per_km": (n_steps / length * 1000.0).astype(np.float32),
+        "iso_steep_frac": (steep_len / length).astype(np.float32),
+    }
+    # Steps relative to the surrounding main stem: a canyon's drops stand out from a
+    # uniformly steep wall gully.
+    win = main_stem_window(down, mr.main_up.astype(np.int64), pcfg.context_hops)[:, 1:]
+    ok = win >= 0
+    for name in list(feats):
+        v = feats[name].astype(np.float64)
+        nb = np.where(ok, v[np.maximum(win, 0)], np.nan)
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", RuntimeWarning)  # all-NaN rows: isolated reach
+            nb_med = np.nanmedian(nb, axis=1)
+        feats[f"{name}_rel"] = (v - np.where(np.isfinite(nb_med), nb_med, v)).astype(np.float32)
+        w = np.where(ok, length[np.maximum(win, 0)], 0.0)
+        ctx = (v * length + np.nansum(nb * w, axis=1)) / (length + w.sum(axis=1))
+        feats[f"ctx_{name}"] = ctx.astype(np.float32)
+    gi = np.asarray([g for g, _ in rows], dtype=np.int64)
+    steps_out = {
+        "step_r": mr.pix_r[gi].astype(np.int32),
+        "step_c": mr.pix_c[gi].astype(np.int32),
+        "step_h": np.asarray([h for _, h in rows], dtype=np.float32),
+        "step_reach": pix_reach[gi].astype(np.int32),
+    }
+    return feats, steps_out
+
+
+def add_profile_features(mr: MosaicReaches, pcfg: ProfileConfig, cache_path: Path) -> None:
+    """Attach ``iso_*`` features and steps to ``mr``, cached at ``cache_path``."""
+    if cache_path.exists():
+        with np.load(cache_path, allow_pickle=False) as z:
+            arrays = {k: z[k] for k in z.files}
+    else:
+        feats, steps = profile_features(mr, pcfg)
+        arrays = {**{f"feat__{k}": v for k, v in feats.items()}, **steps}
+        cache_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = cache_path.with_name(cache_path.name + ".part.npz")
+        np.savez_compressed(tmp, **arrays)
+        tmp.replace(cache_path)
+    for k, v in arrays.items():
+        if k.startswith("feat__"):
+            mr.features[k.removeprefix("feat__")] = v
+        else:
+            setattr(mr, k, v)
 
 
 def _read_dem_window(path: Path, window: Window):
@@ -788,13 +1139,20 @@ def load_or_build_reaches(
     *,
     tile: TileSpec | None = None,
     coarse_area: CoarseArea | None = None,
+    profile: ProfileConfig | None = None,
 ) -> MosaicReaches:
-    """Cached :func:`build_reaches` keyed by DEM stem (+ tile) + config signature."""
+    """Cached :func:`build_reaches` keyed by DEM stem (+ tile) + config signature, plus
+    (when ``profile`` is given) separately cached isotonic-profile features."""
     dem_path = Path(dem_path)
     stem = dem_path.stem + (tile.suffix if tile else "")
     path = Path(cache_dir) / f"{stem}.{cfg.signature()}.npz"
     if path.exists():
-        return MosaicReaches.load(path)
-    mr = build_reaches(dem_path, cfg, tile=tile, coarse_area=coarse_area)
-    mr.save(path)
+        mr = MosaicReaches.load(path)
+        mr.dem_path = str(dem_path)  # cached path may be relative to another cwd
+    else:
+        mr = build_reaches(dem_path, cfg, tile=tile, coarse_area=coarse_area)
+        mr.save(path)
+    if profile is not None:
+        prof_path = Path(cache_dir) / f"{stem}.{cfg.signature()}.prof-{profile.signature()}.npz"
+        add_profile_features(mr, profile, prof_path)
     return mr

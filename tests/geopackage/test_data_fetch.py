@@ -3,8 +3,9 @@ from __future__ import annotations
 from canyongis.geopackage.data_fetch import latest_per_quad, quad_key, total_bytes
 
 
-def test_quad_key_drops_the_date() -> None:
-    assert quad_key("ca_m_3411752_nw_11_060_20220530") == "ca_m_3411752_nw_11_060"
+def test_quad_key_drops_resolution_and_dates() -> None:
+    assert quad_key("ca_m_3411752_nw_11_060_20180822_20190208") == "ca_m_3411752_nw_11"
+    assert quad_key("ca_m_3411752_nw_11_.6_20160614_20161004") == "ca_m_3411752_nw_11"
 
 
 def test_latest_per_quad_keeps_newest_scene() -> None:

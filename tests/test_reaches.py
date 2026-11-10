@@ -234,3 +234,74 @@ def test_technical_section_survives_self_crossing_track(tmp_path):
     sec = technical_section(kml, ropewiki_rappels=2.0, margin_m=10.0)
     # R1 → R2 along the track: 30 + 14.1 + 20 + 18.0 + 65 = 147.2 m, plus 2 x 10 m.
     assert sec.section_km == pytest.approx(0.167, abs=0.003)
+
+
+def test_smooth_scores_stays_on_main_stem():
+    from canyongis.reaches import smooth_scores
+
+    # Trunk 0 → 1 → 2 → 3; tributary 4 joins at 2 (2's main stem continues up to 1).
+    down = np.array([1, 2, 3, -1, 2])
+    main_up = np.array([-1, 0, 1, 2, -1])
+    length = np.ones(5)
+    score = np.array([0.9, 0.9, 0.9, 0.9, 0.1])
+    sm = smooth_scores(score, length, down, main_up, hops=2, how="median")
+    # The gully keeps its own score instead of inheriting the canyon's ...
+    assert sm[4] == pytest.approx(0.1)
+    # ... and the canyon isn't dragged down by the gully.
+    np.testing.assert_allclose(sm[:4], 0.9)
+    mean = smooth_scores(np.array([1.0, 0.0, 1.0, 1.0, 0.0]), length, down, main_up, 1, "mean")
+    assert mean[1] == pytest.approx(2.0 / 3.0)
+
+
+def test_isotonic_steps_ignore_pits_and_find_drops():
+    from canyongis.reaches import ProfileConfig, isotonic_steps
+
+    dist = np.arange(200, dtype=np.float64)
+    z = 100.0 - 0.05 * dist
+    z[60:63] -= 2.5  # a pool / DEM pit: not a step
+    z[120:] -= 6.0  # a 6 m vertical drop
+    pcfg = ProfileConfig(step_window_m=3.0, step_grade=0.7, min_step_m=3.0)
+    steep, steps = isotonic_steps(z, dist, len(z), pcfg)
+    assert len(steps) == 1
+    top, height = steps[0]
+    assert 115 <= top <= 120
+    assert height == pytest.approx(6.0, abs=0.6)
+    assert not steep[55:70].any()
+
+
+def test_snapped_labels_fill_gaps_and_tolerate_offsets(built):
+    tmp_path, mr = built
+    tf = Transformer.from_crs(EPSG, 4326, always_xy=True)
+    # Track 12 m east of the channel (beyond label_tol_m = 8), swinging 45 m out
+    # (beyond the snap distance) between rows 80 and 140.
+    xy = [(CHANNEL_COL + 12, 20), (CHANNEL_COL + 12, 75), (CHANNEL_COL + 45, 85)]
+    xy += [(CHANNEL_COL + 45, 135), (CHANNEL_COL + 12, 145), (CHANNEL_COL + 12, 200)]
+    coords = " ".join(
+        "{},{},0".format(*tf.transform(X0 + col + 0.5, Y0 - r - 0.5)) for col, r in xy
+    )
+    kml = tmp_path / "offset.kml"
+    kml.write_text(
+        '<?xml version="1.0" encoding="UTF-8"?>\n'
+        '<kml xmlns="http://www.opengis.net/kml/2.2"><Document>'
+        f"<Placemark><name>Descent</name><LineString><coordinates>{coords}"
+        "</coordinates></LineString></Placemark></Document></kml>"
+    )
+    on_channel = np.array(
+        [abs(np.median(mr.reach_pixels(i)[1]) - CHANNEL_COL) <= 2 for i in range(mr.n)]
+    )
+    mid_rows = np.array([np.median(mr.reach_pixels(i)[0]) for i in range(mr.n)])
+    gap = on_channel & (mid_rows > 95) & (mid_rows < 125)
+    assert gap.any()
+
+    label_reaches(mr, [kml], CFG)
+    pixel_pos = mr.label == 1
+    snap = ReachConfig(**{**CFG.__dict__, "label_snap_m": 20.0})
+    label_reaches(mr, [kml], snap)
+    snap_pos = mr.label == 1
+    assert snap_pos.sum() > pixel_pos.sum()
+    assert (snap_pos[gap]).all()  # filled along the network, not matched by distance
+    assert not (snap_pos & ~on_channel).any()
+    (st,) = mr.snap_stats
+    assert 0.5 < st["matched_frac"] < 1.0
+    assert st["median_offset_m"] == pytest.approx(12.0, abs=2.0)
+    assert snap.signature() == CFG.signature()

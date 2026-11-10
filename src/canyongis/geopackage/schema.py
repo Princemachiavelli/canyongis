@@ -235,15 +235,26 @@ def create_geopackage(path: str | Path) -> sqlite3.Connection:
     _register_tables(conn)
     conn.executemany(
         "INSERT INTO schema_meta (key, value) VALUES (?, ?)",
-        [("schema_version", SCHEMA_VERSION), ("generator", GENERATOR),
-         ("created_at", _now_iso())],
+        [("schema_version", SCHEMA_VERSION), ("generator", GENERATOR), ("created_at", _now_iso())],
     )
     conn.commit()
     return conn
 
 
 def open_geopackage(path: str | Path) -> sqlite3.Connection:
+    """Open an existing canyon GeoPackage; never creates a file or accepts an empty one."""
+    path = Path(path)
+    if not path.exists():
+        raise FileNotFoundError(f"{path} does not exist")
     conn = sqlite3.connect(path)
+    has_canyons = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'canyons'"
+    ).fetchone()
+    if not has_canyons:
+        conn.close()
+        raise ValueError(
+            f"{path} is not a canyon GeoPackage (no 'canyons' table; empty or incomplete file?)"
+        )
     conn.execute("PRAGMA foreign_keys = ON")
     return conn
 

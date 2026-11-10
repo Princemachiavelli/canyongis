@@ -48,6 +48,33 @@ test("sections, links and ratings load", () => {
   assert.equal(detail.ratings[0].rater, "Demo");
 });
 
+test("tile layers are listed bottom first with zoom range, bounds and attribution", () => {
+  const layers = gpkg.listTileLayers(db);
+  assert.deepEqual(layers.map((l) => l.table), ["tiles_imagery", "tiles_hillshade"]);
+  const [imagery, hillshade] = layers;
+  assert.equal(imagery.name, "Imagery");
+  assert.equal(imagery.description, "Aerial imagery");
+  assert.equal(imagery.attribution, "USDA NAIP, public domain");
+  assert.equal(hillshade.attribution, "");
+  assert.deepEqual([imagery.minZoom, imagery.maxZoom], [14, 15]);
+  const [west, south, east, north] = imagery.bounds;
+  assert.ok(west < -117.57 && east > -117.58 && south < 34.255 && north > 34.245);
+});
+
+test("tiles are read by XYZ address with the image type detected", () => {
+  // Zoom 15 tile holding the canyon location, computed the same way the writer does.
+  const n = 2 ** 15;
+  const x = Math.floor(((-117.5755 + 180) / 360) * n);
+  const latRad = (34.25 * Math.PI) / 180;
+  const y = Math.floor(((1 - Math.asinh(Math.tan(latRad)) / Math.PI) / 2) * n);
+  const imagery = gpkg.getTile(db, "tiles_imagery", 15, x, y);
+  assert.equal(imagery.type, "image/jpeg");
+  assert.equal(gpkg.getTile(db, "tiles_hillshade", 15, x, y).type, "image/png");
+  assert.equal(gpkg.getTile(db, "tiles_imagery", 15, x + 500, y), null);
+  assert.equal(gpkg.getTile(db, "tiles_imagery", 13, x >> 2, y >> 2), null);
+  assert.equal(gpkg.getTile(db, "tiles_imagery; DROP TABLE canyons", 15, x, y), null);
+});
+
 test("unknown canyon id returns null", () => {
   assert.equal(gpkg.loadCanyon(db, 999), null);
 });

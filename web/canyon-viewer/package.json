@@ -2,7 +2,7 @@
   "name": "canyon-viewer",
   "private": true,
   "scripts": {
-    "test": "node --test test/gpkg.test.mjs"
+    "test": "node --test test/gpkg.test.mjs test/companion.test.mjs test/settings.test.mjs"
   },
   "devDependencies": {
     "@ngageoint/geopackage": "4.2.10"
