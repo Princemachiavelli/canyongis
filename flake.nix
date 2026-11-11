@@ -131,24 +131,40 @@
             name = "canyon-viewer-serve";
             runtimeInputs = [
               pkgs.jq
-              pkgs.python3
+              # canyongis is importable so the server can run the canyon build API.
+              (python.withPackages (_: [ canyongis ]))
             ];
             text = ''
               usage() {
-                echo "usage: canyon-viewer-serve [--port N] [--gpkg-dir DIR]" >&2
+                echo "usage: canyon-viewer-serve [--port N] [--gpkg-dir DIR] [--build-dir DIR]" >&2
+                echo "                           [--no-build-api] [--no-tiles]" >&2
                 echo "  Serves the viewer at https://<tailscale-host>:N (default 8443) and every" >&2
                 echo "  *.gpkg in DIR (default: current directory) at /gpkg/<name>." >&2
+                echo "  Also serves the canyon search/build API (needs PostgreSQL with PostGIS," >&2
+                echo "  CANYONGIS_PG_* as for the web app); --build-dir holds its files (default" >&2
+                echo "  ~/.local/state/canyongis/gpkg-builds). --no-tiles skips the offline map" >&2
+                echo "  (no multi-GB downloads)." >&2
                 exit 2
               }
               port=8443
               gpkg_dir=$PWD
+              build_dir=''${XDG_STATE_HOME:-$HOME/.local/state}/canyongis/gpkg-builds
+              build_api=1
+              extra=()
               while [ $# -gt 0 ]; do
                 case "$1" in
                   --port) [ $# -ge 2 ] || usage; port=$2; shift 2 ;;
                   --gpkg-dir) [ $# -ge 2 ] || usage; gpkg_dir=$2; shift 2 ;;
+                  --build-dir) [ $# -ge 2 ] || usage; build_dir=$2; shift 2 ;;
+                  --no-build-api) build_api=0; shift ;;
+                  --no-tiles) extra+=(--no-tiles); shift ;;
                   *) usage ;;
                 esac
               done
+              if [ "$build_api" = 1 ]; then
+                mkdir -p "$build_dir"
+                extra+=(--build-dir "$build_dir")
+              fi
 
               if ! command -v tailscale >/dev/null; then
                 echo "tailscale is not on PATH (enable services.tailscale)" >&2
@@ -174,7 +190,7 @@
               echo "Open https://$host:$port/?gpkg=gpkg/<file>.gpkg"
               exec python3 ${./web/canyon-viewer/serve.py} \
                 --cert "$certs/$host.crt" --key "$certs/$host.key" \
-                --port "$port" --directory "$viewer" --gpkg-dir "$gpkg_dir"
+                --port "$port" --directory "$viewer" --gpkg-dir "$gpkg_dir" "''${extra[@]}"
             '';
           };
         in
@@ -273,7 +289,8 @@
 
               dontBuild = true;
               doCheck = true;
-              postgresqlTestUserOptions = "LOGIN CREATEDB";
+              # SUPERUSER: the canyon schema migration runs CREATE EXTENSION postgis.
+              postgresqlTestUserOptions = "LOGIN CREATEDB SUPERUSER";
 
               checkPhase = ''
                 runHook preCheck

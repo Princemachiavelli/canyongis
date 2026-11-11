@@ -1,11 +1,12 @@
-// Run storage in IndexedDB (runs, events, fixes): field data that must survive a reload, so
-// not localStorage. Canyons are keyed by their Ropewiki title and rappels by sequence number,
-// because the GeoPackage's row ids change whenever a canyon is rebuilt.
+// Field data in IndexedDB (runs, events, fixes, and the latest weather forecast per canyon):
+// it must survive a reload, so not localStorage. Canyons are keyed by their Ropewiki title and
+// rappels by sequence number, because the GeoPackage's row ids change whenever a canyon is
+// rebuilt.
 (function (root) {
   "use strict";
 
   const DB_NAME = "canyongis-companion";
-  const VERSION = 1;
+  const VERSION = 3;
 
   const wrap = (request) => new Promise((resolve, reject) => {
     request.onsuccess = () => resolve(request.result);
@@ -15,17 +16,31 @@
   function openDb(idb) {
     return new Promise((resolve, reject) => {
       const request = idb.open(DB_NAME, VERSION);
-      request.onupgradeneeded = () => {
+      request.onupgradeneeded = (event) => {
         const db = request.result;
-        const runs = db.createObjectStore("runs", { keyPath: "id" });
-        runs.createIndex("canyonId", "canyonId");
-        const events = db.createObjectStore("events", { keyPath: "id", autoIncrement: true });
-        events.createIndex("runId", "runId");
-        events.createIndex("canyonId", "canyonId");
-        const fixes = db.createObjectStore("fixes", { keyPath: "id", autoIncrement: true });
-        fixes.createIndex("runId", "runId");
+        if (event.oldVersion < 1) {
+          const runs = db.createObjectStore("runs", { keyPath: "id" });
+          runs.createIndex("canyonId", "canyonId");
+          const events = db.createObjectStore("events", { keyPath: "id", autoIncrement: true });
+          events.createIndex("runId", "runId");
+          events.createIndex("canyonId", "canyonId");
+          const fixes = db.createObjectStore("fixes", { keyPath: "id", autoIncrement: true });
+          fixes.createIndex("runId", "runId");
+        }
+        if (event.oldVersion < 3) {
+          // Applied updates of downloaded canyons (see gpkg-update.js): {id, title, section, ...}.
+          db.createObjectStore("patches", { keyPath: "id" });
+        }
+        if (event.oldVersion < 2) {
+          // One forecast per canyon: {canyonId: title, ...forecast record}.
+          db.createObjectStore("forecasts", { keyPath: "canyonId" });
+        }
       };
-      request.onsuccess = () => resolve(request.result);
+      request.onsuccess = () => {
+        // Let a newer version of the page (another tab or a reload) upgrade the database.
+        request.result.onversionchange = () => request.result.close();
+        resolve(request.result);
+      };
       request.onerror = () => reject(request.error);
     });
   }
@@ -112,6 +127,40 @@
       async recordedPositions(canyonId) {
         const events = await inTx(["events"], "readonly", (s) => byIndex(s.events, "canyonId", canyonId));
         return lib.recordedFromMarks(events);
+      },
+
+      // Everything recorded on this device, for writing into a GeoPackage.
+      async allRecords() {
+        return inTx(["runs", "events", "fixes", "forecasts"], "readonly", async (s) => {
+          const [runs, events, fixes, forecasts] = await Promise.all(
+            ["runs", "events", "fixes", "forecasts"].map((name) => wrap(s[name].getAll())));
+          return {
+            runs, events, fixes,
+            forecasts: Object.fromEntries(forecasts.map(({ canyonId, ...record }) => [canyonId, record])),
+          };
+        });
+      },
+
+      async savePatches(patches) {
+        await inTx(["patches"], "readwrite", (s) => { for (const p of patches) s.patches.put(p); });
+      },
+      async allPatches() {
+        return inTx(["patches"], "readonly", (s) => wrap(s.patches.getAll()));
+      },
+      async deletePatches(ids) {
+        await inTx(["patches"], "readwrite", (s) => { for (const id of ids) s.patches.delete(id); });
+      },
+
+      // The forecast fetched on this device for a canyon, or null.
+      async getForecast(canyonId) {
+        const row = await inTx(["forecasts"], "readonly", (s) => wrap(s.forecasts.get(canyonId)));
+        if (!row) return null;
+        const { canyonId: _id, ...record } = row;
+        return record;
+      },
+
+      async saveForecast(canyonId, record) {
+        await inTx(["forecasts"], "readwrite", (s) => { s.forecasts.put({ ...record, canyonId }); });
       },
 
       async exportRun(runId) {

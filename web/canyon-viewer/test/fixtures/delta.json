@@ -1,0 +1,696 @@
+{
+ "before": {
+  "data_fetched_at": "2026-11-09T05:34:37+00:00",
+  "map": null,
+  "schema_version": "5",
+  "sections": {
+   "beta": {
+    "digest": "27301619730ec2d67d18370aafd9815efe41db4b078b989c61e7662a503aed79",
+    "label": "Description",
+    "updated_at": "2026-11-10T06:17:23Z"
+   },
+   "canyon": {
+    "digest": "3034dc67d4efe19b70c96362f5de7e5b0b29ccf38085e339c7c585f0a907d6d4",
+    "label": "Canyon details",
+    "updated_at": "2026-11-10T06:17:23Z"
+   },
+   "conditions": {
+    "digest": "ae2da344cb4321931bdf17f637da71dbed2b03d887fb1b9cea8f62af98599068",
+    "label": "Condition reports",
+    "updated_at": "2026-11-10T06:17:23Z"
+   },
+   "geometry": {
+    "digest": "1cfa82041ed20981abf5ce691359ab83d730dc21a00b1bc5051ebfbc66d20239",
+    "label": "Tracks and rappels",
+    "updated_at": "2026-11-10T06:17:23Z"
+   },
+   "links": {
+    "digest": "8dff1c60b302987eccc914fa9fec025787a801c2b38dfab5b0e4654903ac5579",
+    "label": "Links",
+    "updated_at": "2026-11-10T06:17:23Z"
+   },
+   "ratings": {
+    "digest": "56d7ed43df154083c92d618dfd2f6fb72c025a05730b43082189c7730a9f61a0",
+    "label": "Ratings",
+    "updated_at": "2026-11-10T06:17:23Z"
+   }
+  },
+  "title": "Lytle Creek (Middle Fork)"
+ },
+ "delta": {
+  "schema_version": "5",
+  "sections": {
+   "beta": {
+    "digest": "27301619730ec2d67d18370aafd9815efe41db4b078b989c61e7662a503aed79",
+    "tables": [
+     {
+      "columns": [
+       "id",
+       "canyon_id",
+       "position",
+       "heading",
+       "body_wiki",
+       "body_text",
+       "body_html"
+      ],
+      "fks": {
+       "canyon_id": "canyons"
+      },
+      "geometry": null,
+      "mode": "replace",
+      "name": "beta",
+      "rows": [
+       [
+        1,
+        1,
+        0,
+        "Introduction",
+        "This is one of the most beautiful canyons in the area. The bolted rappels down the watercourse allow you to enjoy the rappels into hanging granite bowls with extensive views of the surrounding mountains and the drainage of the Middle Fork of Lytle Creek.\nIt is possible to do this canyon mostly dry (see [http://www.brennen.caltech.edu/advents/midlyt.htm Chris Brennen's Hike J1]) but I will describe the more recently bolted version which raps down the watercourse.\nThe approach hike is heavily used, and there are campsites in multiple places along the creek side below the approach path.",
+        "This is one of the most beautiful canyons in the area. The bolted rappels down the watercourse allow you to enjoy the rappels into hanging granite bowls with extensive views of the surrounding mountains and the drainage of the Middle Fork of Lytle Creek.\nIt is possible to do this canyon mostly dry (see Chris Brennen's Hike J1) but I will describe the more recently bolted version which raps down the watercourse.\nThe approach hike is heavily used, and there are campsites in multiple places along the creek side below the approach path.",
+        "<p>This is one of the most beautiful canyons in the area. The bolted rappels down the watercourse allow you to enjoy the rappels into hanging granite bowls with extensive views of the surrounding mountains and the drainage of the Middle Fork of Lytle Creek.<br>It is possible to do this canyon mostly dry (see <a href=\"http://www.brennen.caltech.edu/advents/midlyt.htm\">Chris Brennen's Hike J1</a>) but I will describe the more recently bolted version which raps down the watercourse.<br>The approach hike is heavily used, and there are campsites in multiple places along the creek side below the approach path.</p>"
+       ],
+       [
+        2,
+        1,
+        1,
+        "Approach",
+        "From Los Angeles take the I-210 east or the I-10 or I-60 east to the I-15 north, then drive north on the I-15 to Sierra Avenue. Turn north onto Lytle Creek Road and follow signs for the Lytle Creek Recreation area. You will pass the Ranger Station on the right, and the South Fork Road to Bonita Ranch on your left. Just as you enter the village of Scotland, at 34.242335N, 117.497921W, turn left onto Middle Fork Road. It is easy to miss, so keep a sharp lookout. Drive along this road for a short while and it turns to a dirt road. Follow it to its end at the trailhead. This road can get washed out and accessible only to 4 wheel drive vehicles in the winter, but it is generally fine for regular cars as long as you drive it very carefully.\nThe trailhead starts at 34.253698N, 117.540169W. There are a few branches to the left which take you to the creek bed, but stick right on the main trail. The trail is heavily used and easy to follow up until it crosses the main drainage of the Middle Fork. About 2.2 miles up the trail you finally cross the main drainage to the south side. The trail is a little harder to follow here. Up on the south bank between the stream and the hill there are camp sites. Cross through the camping area headed toward the hillside and you will find a faint trail headed west (right) and up along the base of the hill. Follow this and it will soon turn left and start switch backing up the steep hillside. There is a lower drop in point to the canyon near the top of this climb. I will only describe the upper drop in. Once you have reached the top of the switchbacks the trail continues up and along the drainage which you will soon be descending. Continue up the path and across a couple of scree slopes and you will reenter the trees. The slope on your left will start to ease up and around 34.2488N, 117.5763W you should be able to drop in down the dirt slope on your left. Once at the bottom head down stream. You will quickly arrive at the first rappel. You will come to a large boulder, stop and suit up for the rest of the canyon here.",
+        "From Los Angeles take the I-210 east or the I-10 or I-60 east to the I-15 north, then drive north on the I-15 to Sierra Avenue. Turn north onto Lytle Creek Road and follow signs for the Lytle Creek Recreation area. You will pass the Ranger Station on the right, and the South Fork Road to Bonita Ranch on your left. Just as you enter the village of Scotland, at 34.242335N, 117.497921W, turn left onto Middle Fork Road. It is easy to miss, so keep a sharp lookout. Drive along this road for a short while and it turns to a dirt road. Follow it to its end at the trailhead. This road can get washed out and accessible only to 4 wheel drive vehicles in the winter, but it is generally fine for regular cars as long as you drive it very carefully.\nThe trailhead starts at 34.253698N, 117.540169W. There are a few branches to the left which take you to the creek bed, but stick right on the main trail. The trail is heavily used and easy to follow up until it crosses the main drainage of the Middle Fork. About 2.2 miles up the trail you finally cross the main drainage to the south side. The trail is a little harder to follow here. Up on the south bank between the stream and the hill there are camp sites. Cross through the camping area headed toward the hillside and you will find a faint trail headed west (right) and up along the base of the hill. Follow this and it will soon turn left and start switch backing up the steep hillside. There is a lower drop in point to the canyon near the top of this climb. I will only describe the upper drop in. Once you have reached the top of the switchbacks the trail continues up and along the drainage which you will soon be descending. Continue up the path and across a couple of scree slopes and you will reenter the trees. The slope on your left will start to ease up and around 34.2488N, 117.5763W you should be able to drop in down the dirt slope on your left. Once at the bottom head down stream. You will quickly arrive at the first rappel. You will come to a large boulder, stop and suit up for the rest of the canyon here.",
+        "<p>From Los Angeles take the I-210 east or the I-10 or I-60 east to the I-15 north, then drive north on the I-15 to Sierra Avenue. Turn north onto Lytle Creek Road and follow signs for the Lytle Creek Recreation area. You will pass the Ranger Station on the right, and the South Fork Road to Bonita Ranch on your left. Just as you enter the village of Scotland, at 34.242335N, 117.497921W, turn left onto Middle Fork Road. It is easy to miss, so keep a sharp lookout. Drive along this road for a short while and it turns to a dirt road. Follow it to its end at the trailhead. This road can get washed out and accessible only to 4 wheel drive vehicles in the winter, but it is generally fine for regular cars as long as you drive it very carefully.<br>The trailhead starts at 34.253698N, 117.540169W. There are a few branches to the left which take you to the creek bed, but stick right on the main trail. The trail is heavily used and easy to follow up until it crosses the main drainage of the Middle Fork. About 2.2 miles up the trail you finally cross the main drainage to the south side. The trail is a little harder to follow here. Up on the south bank between the stream and the hill there are camp sites. Cross through the camping area headed toward the hillside and you will find a faint trail headed west (right) and up along the base of the hill. Follow this and it will soon turn left and start switch backing up the steep hillside. There is a lower drop in point to the canyon near the top of this climb. I will only describe the upper drop in. Once you have reached the top of the switchbacks the trail continues up and along the drainage which you will soon be descending. Continue up the path and across a couple of scree slopes and you will reenter the trees. The slope on your left will start to ease up and around 34.2488N, 117.5763W you should be able to drop in down the dirt slope on your left. Once at the bottom head down stream. You will quickly arrive at the first rappel. You will come to a large boulder, stop and suit up for the rest of the canyon here.</p>"
+       ],
+       [
+        3,
+        1,
+        2,
+        "Descent",
+        "After suiting up head around the left of the boulder and down; you will come to the top of the first waterfall. \n\n'''R1''': ~35ft from two bolts LDC. There is a slung stone out of flow RDC.\n\n'''R2''': ~80ft from: a. two bolts LDC descending into a hanging granite bowl from which you can continue to rappel or climb down the rest of the way or b. a slung tree root (ldc). If using the tree root, be mindful of abrasive edges. Depending on the season, this bowl can be a swim or it can be ankle deep.\n\nContinue down canyon. You will be hiking for a short while now. Maybe 1/4 of a mile further downstream, you will arrive at the main falls. This is a sequence of three back-to-back rappels.\n\n'''R3''': 85ft Option 1: Slightly exposed RDC off bolts and chains in the water course. A [https://www.youtube.com/watch?v=N3Fz9tuLpd4&themeRefresh=1 retrievable traverse line] from a tree to the anchor could be useful for accessing it safely. Option 2: LDC off a tree or C. avoiding water RDC off tree (this route will bypass R4 and is about 140ft. This is the first of three consecutive falls and descends into a hanging bowl. The bowl can again be a complete swim, or a knee deep walk.\n\nIt is advisable to set an extra 15' of rope on R3 and stay on rappel to reach the R4 bolted anchor. It may also be a good idea to treat this transition as a [https://dyeclan.com/outdoors101/canyoneering101/?page=rebelay rebelay] or to tie a stopper knot in the end of the rope to protect this transition (the R3 to R4 transition has been the source of a fall - see incident report from May 2019).\n\n'''R4''': 75ft from two bolts RDC. Access to this anchor require exposed maneuvers in the watercourse and should be protected given algae and flow conditions (see above).\n\n'''R5''': 95ft from a. bolts RDC into the main flow (there is a bolt to clip into) b. a tree RDC to avoid the flow.",
+        "After suiting up head around the left of the boulder and down; you will come to the top of the first waterfall.\n\nR1: ~35ft from two bolts LDC. There is a slung stone out of flow RDC.\n\nR2: ~80ft from: a. two bolts LDC descending into a hanging granite bowl from which you can continue to rappel or climb down the rest of the way or b. a slung tree root (ldc). If using the tree root, be mindful of abrasive edges. Depending on the season, this bowl can be a swim or it can be ankle deep.\n\nContinue down canyon. You will be hiking for a short while now. Maybe 1/4 of a mile further downstream, you will arrive at the main falls. This is a sequence of three back-to-back rappels.\n\nR3: 85ft Option 1: Slightly exposed RDC off bolts and chains in the water course. A retrievable traverse line from a tree to the anchor could be useful for accessing it safely. Option 2: LDC off a tree or C. avoiding water RDC off tree (this route will bypass R4 and is about 140ft. This is the first of three consecutive falls and descends into a hanging bowl. The bowl can again be a complete swim, or a knee deep walk.\n\nIt is advisable to set an extra 15' of rope on R3 and stay on rappel to reach the R4 bolted anchor. It may also be a good idea to treat this transition as a rebelay or to tie a stopper knot in the end of the rope to protect this transition (the R3 to R4 transition has been the source of a fall - see incident report from May 2019).\n\nR4: 75ft from two bolts RDC. Access to this anchor require exposed maneuvers in the watercourse and should be protected given algae and flow conditions (see above).\n\nR5: 95ft from a. bolts RDC into the main flow (there is a bolt to clip into) b. a tree RDC to avoid the flow.",
+        "<p>After suiting up head around the left of the boulder and down; you will come to the top of the first waterfall.</p>\n<p><b>R1</b>: ~35ft from two bolts LDC. There is a slung stone out of flow RDC.</p>\n<p><b>R2</b>: ~80ft from: a. two bolts LDC descending into a hanging granite bowl from which you can continue to rappel or climb down the rest of the way or b. a slung tree root (ldc). If using the tree root, be mindful of abrasive edges. Depending on the season, this bowl can be a swim or it can be ankle deep.</p>\n<p>Continue down canyon. You will be hiking for a short while now. Maybe 1/4 of a mile further downstream, you will arrive at the main falls. This is a sequence of three back-to-back rappels.</p>\n<p><b>R3</b>: 85ft Option 1: Slightly exposed RDC off bolts and chains in the water course. A <a href=\"https://www.youtube.com/watch?v=N3Fz9tuLpd4&amp;themeRefresh=1\">retrievable traverse line</a> from a tree to the anchor could be useful for accessing it safely. Option 2: LDC off a tree or C. avoiding water RDC off tree (this route will bypass R4 and is about 140ft. This is the first of three consecutive falls and descends into a hanging bowl. The bowl can again be a complete swim, or a knee deep walk.</p>\n<p>It is advisable to set an extra 15' of rope on R3 and stay on rappel to reach the R4 bolted anchor. It may also be a good idea to treat this transition as a <a href=\"https://dyeclan.com/outdoors101/canyoneering101/?page=rebelay\">rebelay</a> or to tie a stopper knot in the end of the rope to protect this transition (the R3 to R4 transition has been the source of a fall - see incident report from May 2019).</p>\n<p><b>R4</b>: 75ft from two bolts RDC. Access to this anchor require exposed maneuvers in the watercourse and should be protected given algae and flow conditions (see above).</p>\n<p><b>R5</b>: 95ft from a. bolts RDC into the main flow (there is a bolt to clip into) b. a tree RDC to avoid the flow.</p>"
+       ],
+       [
+        4,
+        1,
+        3,
+        "Exit",
+        "To exit, head downstream to where it meets with the main drainage. Cross the middle fork and climb the far bank and you will be back on the main trail. Head back out the way you came and go have a nice dinner.",
+        "To exit, head downstream to where it meets with the main drainage. Cross the middle fork and climb the far bank and you will be back on the main trail. Head back out the way you came and go have a nice dinner.",
+        "<p>To exit, head downstream to where it meets with the main drainage. Cross the middle fork and climb the far bank and you will be back on the main trail. Head back out the way you came and go have a nice dinner.</p>"
+       ],
+       [
+        5,
+        1,
+        4,
+        "Red tape",
+        "Online permits can be obtained at: https://permits.sgwa.org/\n\nAs of 2024-06-11 The canyon itself lies within the Cucamonga Wilderness which requires a permit to enter which may be obtained online only \n\nAs of 2019-05-31 Dangel was informed by a Ranger behind the desk at the Lytle Creek Front Country Ranger Station that the current wilderness closure order had expired and a backcountry permit is not necessary to access the canyon currently.\n\nThe canyon itself lies within the Cucamonga Wilderness which requires a permit to enter which may be obtained at the [http://www.fs.usda.gov/detail/sbnf/passes-permits/recreation/?cid=fsbdev7_007802 Lytle Creek Ranger Station] (more information available [http://cucamongawilderness.org/wilderness-permit/ here]).  The wilderness boundary is a little past half way through the approach.",
+        "Online permits can be obtained at: https://permits.sgwa.org/\n\nAs of 2024-06-11 The canyon itself lies within the Cucamonga Wilderness which requires a permit to enter which may be obtained online only\n\nAs of 2019-05-31 Dangel was informed by a Ranger behind the desk at the Lytle Creek Front Country Ranger Station that the current wilderness closure order had expired and a backcountry permit is not necessary to access the canyon currently.\n\nThe canyon itself lies within the Cucamonga Wilderness which requires a permit to enter which may be obtained at the Lytle Creek Ranger Station (more information available here). The wilderness boundary is a little past half way through the approach.",
+        "<p>Online permits can be obtained at: <a href=\"https://permits.sgwa.org/\">https://permits.sgwa.org/</a></p>\n<p>As of 2024-06-11 The canyon itself lies within the Cucamonga Wilderness which requires a permit to enter which may be obtained online only</p>\n<p>As of 2019-05-31 Dangel was informed by a Ranger behind the desk at the Lytle Creek Front Country Ranger Station that the current wilderness closure order had expired and a backcountry permit is not necessary to access the canyon currently.</p>\n<p>The canyon itself lies within the Cucamonga Wilderness which requires a permit to enter which may be obtained at the <a href=\"http://www.fs.usda.gov/detail/sbnf/passes-permits/recreation/?cid=fsbdev7_007802\">Lytle Creek Ranger Station</a> (more information available <a href=\"http://cucamongawilderness.org/wilderness-permit/\">here</a>).  The wilderness boundary is a little past half way through the approach.</p>"
+       ],
+       [
+        6,
+        1,
+        5,
+        "Beta sites",
+        "* [[File:rwl_en.png|alt=|link=]][http://brennen.caltech.edu/advents/midlyt.htm Chris Brennen's Adventure Hikes (St Gabriels)]  : Middle Fork Lytle Creek\n* [http://alltrails.com/trail/us/california/lytle-creek-middle-fork AllTrails]\n* [http://www.theatsteam.com/adventureworks/middle-fork-canyon.html ATS AdventureWorks]\n* [[File:rwl_en.png|alt=|link=]][http://ropewiki.com/User:Super_Amazing_Map?id=Lytle_Creek_(Middle_Fork)_-_California_(San_Gabriels) Super Amazing Map]  : Lytle Creek (Middle Fork)\n* [[File:rwl_en.png|alt=|link=]][http://canyonchronicles.com/middle-fork-lytle-creek?kmlidx=205701186783545362755.0004e482413688e384d50 CanyonChronicles.com]  : Middle Fork Lytle Creek\n* [[File:rwl_en.png|alt=|link=]][http://web.archive.org/web/20240229153613/http://canyoncollective.com/betabase/lytle-creek-middle-fork.444?kmlidxna CanyonCollective.com]  : Lytle Creek (Middle Fork)\n* [[File:rwl_en.png|alt=|link=]][http://summitpost.org/lytle-creek-canyon/405236 SummitPost.org]  : Lytle Creek Canyon",
+        "- Chris Brennen's Adventure Hikes (St Gabriels) : Middle Fork Lytle Creek\n- AllTrails\n- ATS AdventureWorks\n- Super Amazing Map : Lytle Creek (Middle Fork)\n- CanyonChronicles.com : Middle Fork Lytle Creek\n- CanyonCollective.com : Lytle Creek (Middle Fork)\n- SummitPost.org : Lytle Creek Canyon",
+        "<ul><li><a href=\"http://brennen.caltech.edu/advents/midlyt.htm\">Chris Brennen's Adventure Hikes (St Gabriels)</a>  : Middle Fork Lytle Creek</li><li><a href=\"http://alltrails.com/trail/us/california/lytle-creek-middle-fork\">AllTrails</a></li><li><a href=\"http://www.theatsteam.com/adventureworks/middle-fork-canyon.html\">ATS AdventureWorks</a></li><li><a href=\"http://ropewiki.com/User:Super_Amazing_Map?id=Lytle_Creek_(Middle_Fork)_-_California_(San_Gabriels)\">Super Amazing Map</a>  : Lytle Creek (Middle Fork)</li><li><a href=\"http://canyonchronicles.com/middle-fork-lytle-creek?kmlidx=205701186783545362755.0004e482413688e384d50\">CanyonChronicles.com</a>  : Middle Fork Lytle Creek</li><li><a href=\"http://web.archive.org/web/20240229153613/http://canyoncollective.com/betabase/lytle-creek-middle-fork.444?kmlidxna\">CanyonCollective.com</a>  : Lytle Creek (Middle Fork)</li><li><a href=\"http://summitpost.org/lytle-creek-canyon/405236\">SummitPost.org</a>  : Lytle Creek Canyon</li></ul>"
+       ],
+       [
+        7,
+        1,
+        6,
+        "Trip reports and media",
+        "{{#ev:vimeo|1209824181}}\n\n{{#ev:vimeo|553826826}}\n\n{{#ev:youtube|v=X7DdPMHe7Og}}\n\n* https://youtu.be/cjiOneag6jc - Lytle Creek Middle Fork June7th 2017 - Great Water Flow! \n* [[File:rwl_en.png|alt=|link=]][http://candition.com/canyons/middle-fork-lytle-creek Candition.com]  : Middle Fork Lytle Creek",
+        "- https://youtu.be/cjiOneag6jc - Lytle Creek Middle Fork June7th 2017 - Great Water Flow!\n- Candition.com : Middle Fork Lytle Creek",
+        "<ul><li><a href=\"https://youtu.be/cjiOneag6jc\">https://youtu.be/cjiOneag6jc</a> - Lytle Creek Middle Fork June7th 2017 - Great Water Flow!</li><li><a href=\"http://candition.com/canyons/middle-fork-lytle-creek\">Candition.com</a>  : Middle Fork Lytle Creek</li></ul>"
+       ],
+       [
+        8,
+        1,
+        7,
+        "Background",
+        "First known canyoneering descent by: David Wales, Clancy Rowley and Chris Brennen on May 13th, 2000.",
+        "First known canyoneering descent by: David Wales, Clancy Rowley and Chris Brennen on May 13th, 2000.",
+        "<p>First known canyoneering descent by: David Wales, Clancy Rowley and Chris Brennen on May 13th, 2000.</p>"
+       ]
+      ]
+     }
+    ],
+    "updated_at": "2026-11-10T06:17:23Z"
+   },
+   "canyon": {
+    "digest": "385c60b7f3b9ebcc8692c880565db60d4ab3789bd027f8ed44743f68c437a88a",
+    "tables": [
+     {
+      "columns": [
+       "id",
+       "ropewiki_title",
+       "ropewiki_page_id",
+       "also_known_as",
+       "region",
+       "technical_rating",
+       "water_rating",
+       "time_rating",
+       "number_of_rappels",
+       "longest_rappel_m",
+       "hike_length_km",
+       "approach_gain_m",
+       "exit_gain_m",
+       "fastest_time_h",
+       "slowest_time_h",
+       "permits",
+       "best_season",
+       "vehicle",
+       "shuttle",
+       "explored",
+       "raw_template_json",
+       "source_url",
+       "source_revision_id",
+       "fetched_at",
+       "geom",
+       "license_name",
+       "license_url",
+       "anonymous_authors"
+      ],
+      "fks": {},
+      "geometry": "geom",
+      "mode": "update",
+      "name": "canyons",
+      "rows": [
+       [
+        1,
+        "Lytle Creek (Middle Fork)",
+        408,
+        "Lytle Creek Canyon; Middle Fork Lytle Creek",
+        "Changed Region",
+        3,
+        "B",
+        "III",
+        5,
+        30.48,
+        10.62,
+        609.6,
+        null,
+        5.0,
+        8.0,
+        "Yes",
+        "Spring;Summer;Fall;Winter",
+        "4WD - High Clearance",
+        0,
+        1,
+        "{\"AKA\": \"Lytle Creek Canyon; Middle Fork Lytle Creek\", \"Approach elevation gain\": \"2000\", \"Best season\": \"Spring;Summer;Fall;Winter\", \"Coordinates\": \"34.2533, -117.57694\", \"Explored\": \"Yes\", \"Fastest typical time\": \"5\", \"Hike length\": \"6.6\", \"Longest rappel\": \"100\", \"Number of rappels\": \"5\", \"Permits\": \"Yes\", \"Region\": \"Lytle Creek Area\", \"Shuttle\": \"0\", \"Slowest typical time\": \"8\", \"Technical rating\": \"3\", \"Time rating\": \"III\", \"Vehicle\": \"4WD - High Clearance\", \"Water rating\": \"B\"}",
+        "https://ropewiki.com/Lytle_Creek_(Middle_Fork)",
+        318052,
+        "2026-11-09T05:34:37+00:00",
+        "R1AAAeYQAAABAQAAAEXwv5XsZF3A1QloImwgQUA=",
+        "Creative Commons Attribution Non-Commercial Share Alike",
+        "http://creativecommons.org/licenses/by-nc-sa/3.0/",
+        2
+       ]
+      ]
+     },
+     {
+      "columns": [
+       "id",
+       "canyon_id",
+       "name"
+      ],
+      "fks": {
+       "canyon_id": "canyons"
+      },
+      "geometry": null,
+      "mode": "replace",
+      "name": "authors",
+      "rows": [
+       [
+        1,
+        1,
+        "Dangel"
+       ]
+      ]
+     }
+    ],
+    "updated_at": "2026-11-10T06:17:23Z"
+   },
+   "conditions": {
+    "digest": "f379f7c182416e28a607787add47f9234dd8a01e0430649b84c6b6c354bb8012",
+    "tables": [
+     {
+      "columns": [
+       "id",
+       "canyon_id",
+       "source_title",
+       "trip_date",
+       "trip_date_source",
+       "reported_by",
+       "reported_at",
+       "revised_at",
+       "revision_id",
+       "location_text",
+       "quality_code",
+       "quality_label",
+       "water_code",
+       "water_label",
+       "water_note",
+       "wetsuit_code",
+       "wetsuit_label",
+       "wetsuit_note",
+       "difficulty_code",
+       "difficulty_label",
+       "difficulty_note",
+       "team_size",
+       "team_time_h",
+       "team_min_experience",
+       "team_max_experience",
+       "general_notes",
+       "source_url",
+       "raw_template_json"
+      ],
+      "fks": {
+       "canyon_id": "canyons"
+      },
+      "geometry": null,
+      "mode": "replace",
+      "name": "conditions",
+      "rows": [
+       [
+        1,
+        1,
+        "Conditions:Lytle Creek (Middle Fork)-20260921035610",
+        "2026-09-20",
+        "date_field",
+        "SBeast",
+        "2026-09-21T03:56:10",
+        null,
+        1,
+        "Lytle Creek (Middle Fork)",
+        2,
+        "Ok",
+        1,
+        "Very Low",
+        "class B = a2",
+        2,
+        "Thin wetsuit",
+        "3mm-4mm",
+        2,
+        "Normal",
+        null,
+        3,
+        5.5,
+        "Advanced",
+        "Intermediate",
+        "Road: The beginning of the dirt road has a pretty deep dip, but it wasn't bad after getting past it.\n\nWater levels are low compared to the spring, but still a fun run. Each of us wore a different combination of thermal insulation: one wore a 3mm wetsuit; another no wetsuit but had rain pants and a rain jacket; I was comfortable in 3mm and a light rain jacket (I run cold). The norm spots were breezy and chilly, R4 to R5.\n\nLots of mosquitoes out on the hike in and out.",
+        "https://ropewiki.com/Conditions:Lytle_Creek_(Middle_Fork)-20260921035610",
+        "{\"Comments\": \"Road: The beginning of the dirt road has a pretty deep dip, but it wasn't bad after getting past it.\\n\\nWater levels are low compared to the spring, but still a fun run. Each of us wore a different combination of thermal insulation: one wore a 3mm wetsuit; another no wetsuit but had rain pants and a rain jacket; I was comfortable in 3mm and a light rain jacket (I run cold). The norm spots were breezy and chilly, R4 to R5. \\n\\nR1: Bolt is slightly loose\\n\\nR2: Bowl is still over waist deep\\n\\nR3: Bowl is shallow, transition to R4 is straightforward\\n\\nR4 & R5: Webbing is good\\n\\nLots of mosquitoes out on the hike in and out.\", \"Date\": \"2026-09-20\", \"Difficulty condition\": \"2 - Normal\", \"FileList\": \"20260920 122828.jpg, 20260920 124421.jpg,\", \"Location\": \"Lytle Creek (Middle Fork)\", \"Quality condition\": \"2 - Ok\", \"ReportedBy\": \"SBeast\", \"Team max experience\": \"Intermediate\", \"Team min experience\": \"Advanced\", \"Team size\": \"3\", \"Team time\": \"5.5\", \"Water condition\": \"1 - Very Low (class B = a2)\", \"Wetsuit condition\": \"2 - Thin wetsuit (3mm-4mm)\"}"
+       ]
+      ]
+     },
+     {
+      "columns": [
+       "id",
+       "report_id",
+       "rappel_label",
+       "note"
+      ],
+      "fks": {
+       "report_id": "conditions"
+      },
+      "geometry": null,
+      "mode": "replace",
+      "name": "condition_rappel_notes",
+      "rows": [
+       [
+        1,
+        1,
+        "R1",
+        "Bolt is slightly loose"
+       ],
+       [
+        2,
+        1,
+        "R2",
+        "Bowl is still over waist deep"
+       ],
+       [
+        3,
+        1,
+        "R3",
+        "Bowl is shallow, transition to R4 is straightforward"
+       ],
+       [
+        4,
+        1,
+        "R4",
+        "Webbing is good"
+       ],
+       [
+        5,
+        1,
+        "R5",
+        "Webbing is good"
+       ]
+      ]
+     },
+     {
+      "columns": [
+       "id",
+       "report_id",
+       "sequence",
+       "filename"
+      ],
+      "fks": {
+       "report_id": "conditions"
+      },
+      "geometry": null,
+      "mode": "replace",
+      "name": "condition_photos",
+      "rows": [
+       [
+        1,
+        1,
+        0,
+        "20260920 122828.jpg"
+       ],
+       [
+        2,
+        1,
+        1,
+        "20260920 124421.jpg"
+       ]
+      ]
+     }
+    ],
+    "updated_at": "2026-11-10T06:17:23Z"
+   },
+   "geometry": {
+    "digest": "6fb948c66827667394033d711e27286affdcb0c9ac7eb103fc9a08f5361ed1ac",
+    "tables": [
+     {
+      "columns": [
+       "id",
+       "canyon_id",
+       "file_title",
+       "url",
+       "sha256",
+       "downloaded_at"
+      ],
+      "fks": {
+       "canyon_id": "canyons"
+      },
+      "geometry": null,
+      "mode": "replace",
+      "name": "kml_files",
+      "rows": []
+     },
+     {
+      "columns": [
+       "id",
+       "canyon_id",
+       "kind",
+       "name",
+       "kml_file_id",
+       "length_m",
+       "geom",
+       "color"
+      ],
+      "fks": {
+       "canyon_id": "canyons",
+       "kml_file_id": "kml_files"
+      },
+      "geometry": "geom",
+      "mode": "replace",
+      "name": "routes",
+      "rows": [
+       [
+        1,
+        1,
+        "descent",
+        "Descent",
+        null,
+        900.0,
+        "R1AAAeYQAAABAgAAAAMAAAD+Q/rt62RdwFafq63YH0FA1CtlGeJkXcAdWmQ73x9BQM3MzMzMZF3AAAAAAAAgQUA=",
+        null
+       ]
+      ]
+     },
+     {
+      "columns": [
+       "id",
+       "canyon_id",
+       "kind",
+       "name",
+       "kml_file_id",
+       "geom",
+       "description"
+      ],
+      "fks": {
+       "canyon_id": "canyons",
+       "kml_file_id": "kml_files"
+      },
+      "geometry": "geom",
+      "mode": "replace",
+      "name": "waypoints",
+      "rows": []
+     },
+     {
+      "columns": [
+       "id",
+       "canyon_id",
+       "sequence",
+       "label",
+       "height_m",
+       "anchor_text",
+       "notes",
+       "kml_file_id",
+       "geom",
+       "kml_name",
+       "kml_description"
+      ],
+      "fks": {
+       "canyon_id": "canyons",
+       "kml_file_id": "kml_files"
+      },
+      "geometry": "geom",
+      "mode": "replace",
+      "name": "rappels",
+      "rows": [
+       [
+        1,
+        1,
+        1,
+        "R1",
+        99.0,
+        null,
+        "~35ft from two bolts LDC. There is a slung stone out of flow RDC.",
+        null,
+        "R1AAAeYQAAABAQAAAE0VjErqZF3A8kHPZtUfQUA=",
+        null,
+        null
+       ],
+       [
+        2,
+        1,
+        2,
+        "R2",
+        24.4,
+        null,
+        "~80ft from: a. two bolts LDC descending into a hanging granite bowl from which you can continue to rappel or climb down the rest of the way or b. a slung tree root (ldc). If using the tree root, be mindful of abrasive edges. Depending on the season, this bowl can be a swim or it can be ankle deep.",
+        null,
+        null,
+        null,
+        null
+       ],
+       [
+        3,
+        1,
+        3,
+        "R3",
+        25.9,
+        null,
+        "85ft Option 1: Slightly exposed RDC off bolts and chains in the water course. A retrievable traverse line from a tree to the anchor could be useful for accessing it safely. Option 2: LDC off a tree or C. avoiding water RDC off tree (this route will bypass R4 and is about 140ft. This is the first of three consecutive falls and descends into a hanging bowl. The bowl can again be a complete swim, or a knee deep walk.",
+        null,
+        null,
+        null,
+        null
+       ],
+       [
+        4,
+        1,
+        4,
+        "R4",
+        22.9,
+        null,
+        "75ft from two bolts RDC. Access to this anchor require exposed maneuvers in the watercourse and should be protected given algae and flow conditions (see above).",
+        null,
+        null,
+        null,
+        null
+       ],
+       [
+        5,
+        1,
+        5,
+        "R5",
+        29.0,
+        null,
+        "95ft from a. bolts RDC into the main flow (there is a bolt to clip into) b. a tree RDC to avoid the flow.",
+        null,
+        null,
+        null,
+        null
+       ]
+      ]
+     }
+    ],
+    "updated_at": "2026-11-10T06:17:23Z"
+   },
+   "links": {
+    "digest": "bb6c5168f1219968479921f44fae03624815bc920a837c31d84bd433f2f0897c",
+    "tables": [
+     {
+      "columns": [
+       "id",
+       "canyon_id",
+       "label",
+       "url",
+       "source_name"
+      ],
+      "fks": {
+       "canyon_id": "canyons"
+      },
+      "geometry": null,
+      "mode": "replace",
+      "name": "links",
+      "rows": [
+       [
+        1,
+        1,
+        "Chris Brennen's Adventure Hikes (St Gabriels)",
+        "http://brennen.caltech.edu/advents/midlyt.htm",
+        "brennen.caltech.edu"
+       ],
+       [
+        2,
+        1,
+        "AllTrails",
+        "http://alltrails.com/trail/us/california/lytle-creek-middle-fork",
+        "alltrails.com"
+       ],
+       [
+        3,
+        1,
+        "ATS AdventureWorks",
+        "http://www.theatsteam.com/adventureworks/middle-fork-canyon.html",
+        "www.theatsteam.com"
+       ],
+       [
+        4,
+        1,
+        "Super Amazing Map",
+        "http://ropewiki.com/User:Super_Amazing_Map?id=Lytle_Creek_(Middle_Fork)_-_California_(San_Gabriels)",
+        "ropewiki.com"
+       ],
+       [
+        5,
+        1,
+        "CanyonChronicles.com",
+        "http://canyonchronicles.com/middle-fork-lytle-creek?kmlidx=205701186783545362755.0004e482413688e384d50",
+        "canyonchronicles.com"
+       ],
+       [
+        6,
+        1,
+        "CanyonCollective.com",
+        "http://web.archive.org/web/20240229153613/http://canyoncollective.com/betabase/lytle-creek-middle-fork.444?kmlidxna",
+        "web.archive.org"
+       ],
+       [
+        7,
+        1,
+        "SummitPost.org",
+        "http://summitpost.org/lytle-creek-canyon/405236",
+        "summitpost.org"
+       ],
+       [
+        8,
+        1,
+        "New beta",
+        "https://example.org/new",
+        "example.org"
+       ]
+      ]
+     }
+    ],
+    "updated_at": "2026-11-10T06:17:23Z"
+   },
+   "ratings": {
+    "digest": "87993a21c13ea79777ad9d66b204c7061bb68bc51d43a2132f1cd2242eaa526c",
+    "tables": [
+     {
+      "columns": [
+       "id",
+       "canyon_id",
+       "source_title",
+       "rater",
+       "rating"
+      ],
+      "fks": {
+       "canyon_id": "canyons"
+      },
+      "geometry": null,
+      "mode": "replace",
+      "name": "ratings",
+      "rows": [
+       [
+        1,
+        1,
+        "Votes:Lytle Creek (Middle Fork)/Demo",
+        "Demo",
+        1
+       ]
+      ]
+     }
+    ],
+    "updated_at": "2026-11-10T06:17:23Z"
+   }
+  },
+  "title": "Lytle Creek (Middle Fork)"
+ },
+ "manifest": {
+  "data_fetched_at": "2026-11-09T05:34:37+00:00",
+  "map": null,
+  "schema_version": "5",
+  "sections": {
+   "beta": {
+    "digest": "27301619730ec2d67d18370aafd9815efe41db4b078b989c61e7662a503aed79",
+    "label": "Description",
+    "updated_at": "2026-11-10T06:17:23Z"
+   },
+   "canyon": {
+    "digest": "385c60b7f3b9ebcc8692c880565db60d4ab3789bd027f8ed44743f68c437a88a",
+    "label": "Canyon details",
+    "updated_at": "2026-11-10T06:17:23Z"
+   },
+   "conditions": {
+    "digest": "f379f7c182416e28a607787add47f9234dd8a01e0430649b84c6b6c354bb8012",
+    "label": "Condition reports",
+    "updated_at": "2026-11-10T06:17:23Z"
+   },
+   "geometry": {
+    "digest": "6fb948c66827667394033d711e27286affdcb0c9ac7eb103fc9a08f5361ed1ac",
+    "label": "Tracks and rappels",
+    "updated_at": "2026-11-10T06:17:23Z"
+   },
+   "links": {
+    "digest": "bb6c5168f1219968479921f44fae03624815bc920a837c31d84bd433f2f0897c",
+    "label": "Links",
+    "updated_at": "2026-11-10T06:17:23Z"
+   },
+   "ratings": {
+    "digest": "87993a21c13ea79777ad9d66b204c7061bb68bc51d43a2132f1cd2242eaa526c",
+    "label": "Ratings",
+    "updated_at": "2026-11-10T06:17:23Z"
+   }
+  },
+  "title": "Lytle Creek (Middle Fork)"
+ }
+}

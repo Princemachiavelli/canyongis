@@ -26,7 +26,7 @@ from urllib.parse import urlparse
 
 from ..io import log
 from .geometry import linestring_blob, point_blob
-from .schema import create_geopackage, open_geopackage, refresh_extents
+from .schema import create_geopackage, open_geopackage, refresh_extents, upgrade_geopackage
 from .wikitext import (
     Rappel,
     external_links,
@@ -85,6 +85,8 @@ class CanyonRow:
     conditions: list[dict[str, Any]] = field(default_factory=list)
     ratings: list[dict[str, Any]] = field(default_factory=list)
     kmls: list[dict[str, Any]] = field(default_factory=list)
+    # {authors, anonymous, license_name, license_url}: who wrote the page, and under what licence
+    attribution: dict[str, Any] | None = None
 
 
 # -----------------------------------------------------------------------------
@@ -156,6 +158,47 @@ def kml_urls(titles: list[str]) -> dict[str, str]:
 # -----------------------------------------------------------------------------
 # Page -> row
 # -----------------------------------------------------------------------------
+
+
+_RIGHTS: tuple[str | None, str | None] | None = None
+
+
+def _site_license() -> tuple[str | None, str | None]:
+    """Ropewiki's licence (name, url), fetched once."""
+    global _RIGHTS
+    if _RIGHTS is None:
+        data = _query(action="query", meta="siteinfo", siprop="rightsinfo")
+        rights = data.get("query", {}).get("rightsinfo") or {}
+        _RIGHTS = (rights.get("text"), rights.get("url"))
+    return _RIGHTS
+
+
+def fetch_attribution(title: str) -> dict[str, Any]:
+    """The page's authors as Ropewiki lists them (every registered contributor, plus how many
+    anonymous ones) and the site's licence."""
+    authors: list[str] = []
+    anonymous = 0
+    params: dict[str, Any] = {
+        "action": "query",
+        "titles": title,
+        "prop": "contributors",
+        "pclimit": "max",
+    }
+    while True:
+        data = _query(**params)
+        page = (data.get("query", {}).get("pages") or [{}])[0]
+        authors += [c["name"] for c in page.get("contributors", []) if c.get("name")]
+        anonymous = max(anonymous, int(page.get("anoncontributors") or 0))
+        if not data.get("continue"):
+            break
+        params.update(data["continue"])
+    name, url = _site_license()
+    return {
+        "authors": list(dict.fromkeys(authors)),
+        "anonymous": anonymous,
+        "license_name": name,
+        "license_url": url,
+    }
 
 
 def _clean(value: str | None) -> str | None:
@@ -334,6 +377,11 @@ def _download_kml(url: str, cache_dir: Path) -> Path | None:
     return download_ropewiki_kml(url, cache_dir)
 
 
+def _text_or_none(value: Any) -> str | None:
+    """A cell from the parsed KML frames: pandas turns missing text into NaN."""
+    return value if isinstance(value, str) and value else None
+
+
 def parse_kml_geometry(path: Path) -> dict[str, Any]:
     from pyproj import Geod
 
@@ -349,6 +397,7 @@ def parse_kml_geometry(path: Path) -> dict[str, Any]:
                 {
                     "kind": _route_kind(row["name"], row["category"]),
                     "name": row["name"],
+                    "color": _text_or_none(row.get("color")),
                     "coords": coords,
                     "length_m": _polyline_length(geod, coords),
                 }
@@ -358,6 +407,7 @@ def parse_kml_geometry(path: Path) -> dict[str, Any]:
         anchors.append(
             {
                 "name": row["name"],
+                "description": _text_or_none(row.get("description")),
                 "key": _anchor_key(row["name"]),
                 "lon": row.geometry.x,
                 "lat": row.geometry.y,
@@ -372,6 +422,7 @@ def parse_kml_geometry(path: Path) -> dict[str, Any]:
             {
                 "kind": _waypoint_kind(row["name"]),
                 "name": row["name"],
+                "description": _text_or_none(row.get("description")),
                 "lon": row.geometry.x,
                 "lat": row.geometry.y,
             }
@@ -404,8 +455,8 @@ def _replace_canyon(
             water_rating, time_rating, number_of_rappels, longest_rappel_m, hike_length_km,
             approach_gain_m, exit_gain_m, fastest_time_h, slowest_time_h, permits,
             best_season, vehicle, shuttle, explored, raw_template_json, source_url,
-            source_revision_id, fetched_at, geom)
-           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+            source_revision_id, fetched_at, license_name, license_url, anonymous_authors, geom)
+           VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
         (
             row.ropewiki_title,
             row.ropewiki_page_id,
@@ -430,10 +481,17 @@ def _replace_canyon(
             source_url,
             row.revision_id,
             fetched,
+            (row.attribution or {}).get("license_name"),
+            (row.attribution or {}).get("license_url"),
+            (row.attribution or {}).get("anonymous"),
             point_blob(*coords) if coords else None,
         ),
     )
     canyon_id = cur.lastrowid
+    conn.executemany(
+        "INSERT OR IGNORE INTO authors (canyon_id, name) VALUES (?,?)",
+        [(canyon_id, name) for name in (row.attribution or {}).get("authors", [])],
+    )
 
     conn.executemany(
         "INSERT INTO beta (canyon_id, position, heading, body_wiki, body_text, body_html)"
@@ -544,14 +602,30 @@ def _insert_geometry(
     kml_id = next(iter(kml_ids.values()), None)
     for r in geo["routes"]:
         conn.execute(
-            "INSERT INTO routes (canyon_id, kind, name, kml_file_id, length_m, geom)"
-            " VALUES (?,?,?,?,?,?)",
-            (canyon_id, r["kind"], r["name"], kml_id, r["length_m"], linestring_blob(r["coords"])),
+            "INSERT INTO routes (canyon_id, kind, name, color, kml_file_id, length_m, geom)"
+            " VALUES (?,?,?,?,?,?,?)",
+            (
+                canyon_id,
+                r["kind"],
+                r["name"],
+                r.get("color"),
+                kml_id,
+                r["length_m"],
+                linestring_blob(r["coords"]),
+            ),
         )
     for w in geo["waypoints"]:
         conn.execute(
-            "INSERT INTO waypoints (canyon_id, kind, name, kml_file_id, geom) VALUES (?,?,?,?,?)",
-            (canyon_id, w["kind"], w["name"], kml_id, point_blob(w["lon"], w["lat"])),
+            "INSERT INTO waypoints (canyon_id, kind, name, description, kml_file_id, geom)"
+            " VALUES (?,?,?,?,?,?)",
+            (
+                canyon_id,
+                w["kind"],
+                w["name"],
+                w.get("description"),
+                kml_id,
+                point_blob(w["lon"], w["lat"]),
+            ),
         )
     # Rappels: wiki rappel lines, each matched to a KML anchor by number. Anchors that
     # appear only in the KML are added after, so nothing is dropped.
@@ -565,7 +639,7 @@ def _insert_geometry(
             used.add(anchor["name"])
         conn.execute(
             "INSERT INTO rappels (canyon_id, sequence, label, height_m, anchor_text, notes,"
-            " kml_file_id, geom) VALUES (?,?,?,?,?,?,?,?)",
+            " kml_name, kml_description, kml_file_id, geom) VALUES (?,?,?,?,?,?,?,?,?,?)",
             (
                 canyon_id,
                 sequence,
@@ -573,6 +647,8 @@ def _insert_geometry(
                 r.height_m,
                 None,
                 wiki_to_text(r.text),
+                anchor["name"] if anchor else None,
+                anchor.get("description") if anchor else None,
                 kml_id,
                 point_blob(anchor["lon"], anchor["lat"]) if anchor else None,
             ),
@@ -583,7 +659,7 @@ def _insert_geometry(
         sequence += 1
         conn.execute(
             "INSERT INTO rappels (canyon_id, sequence, label, height_m, anchor_text, notes,"
-            " kml_file_id, geom) VALUES (?,?,?,?,?,?,?,?)",
+            " kml_name, kml_description, kml_file_id, geom) VALUES (?,?,?,?,?,?,?,?,?,?)",
             (
                 canyon_id,
                 sequence,
@@ -591,6 +667,8 @@ def _insert_geometry(
                 None,
                 None,
                 None,
+                a["name"],
+                a.get("description"),
                 kml_id,
                 point_blob(a["lon"], a["lat"]),
             ),
@@ -621,16 +699,25 @@ def _load_kmls(titles: list[str], cache_dir: Path) -> dict[str, dict[str, Any]]:
 
 
 def convert(
-    gpkg_path: str | Path, titles: list[str], cache_dir: str | Path, fetch_kml: bool = True
+    gpkg_path: str | Path,
+    titles: list[str],
+    cache_dir: str | Path,
+    fetch_kml: bool = True,
+    forecast: bool = True,
 ) -> list[str]:
     """Write or update ``gpkg_path`` with the given Ropewiki page titles.
 
-    Returns the titles that were stored. Pages that are missing or lack a
+    With ``forecast`` each stored canyon also gets a cached weather forecast (skipped with a
+    log line when the network is unavailable). Returns the titles that were stored. Pages that are missing or lack a
     ``{{Canyon}}`` infobox are logged and skipped.
     """
     cache = Path(cache_dir)
     gpkg = Path(gpkg_path)
-    conn = open_geopackage(gpkg) if gpkg.exists() else create_geopackage(gpkg)
+    if gpkg.exists():
+        conn = open_geopackage(gpkg)
+        upgrade_geopackage(conn)
+    else:
+        conn = create_geopackage(gpkg)
     pages = fetch_pages(titles)
     stored: list[str] = []
     kmls = _load_kmls(list(pages), cache) if fetch_kml else {}
@@ -646,6 +733,10 @@ def convert(
         row = build_row(title, page, tpl)
         row.conditions = _subpage_records(title, NS_CONDITIONS, condition_record)
         row.ratings = _subpage_records(title, NS_VOTES, rating_record)
+        try:
+            row.attribution = fetch_attribution(title)
+        except (OSError, ValueError, KeyError) as err:  # keep the canyon without its authors
+            log(f"authors not fetched for {title}: {err}")
         geo = None
         if title in kmls:
             kml = kmls[title]
@@ -656,8 +747,13 @@ def convert(
         stored.append(title)
         log(
             f"stored {title}: {len(row.rappels)} rappels, {len(row.conditions)} conditions, "
-            f"{len(row.ratings)} ratings, {'KML' if geo else 'no KML'}"
+            f"{len(row.ratings)} ratings, {'KML' if geo else 'no KML'}, "
+            f"{len((row.attribution or {}).get('authors', []))} authors"
         )
+    if forecast and stored:
+        from .forecast import refresh_forecasts
+
+        refresh_forecasts(conn, stored)
     refresh_extents(conn)
     conn.close()
     return stored
@@ -690,12 +786,21 @@ def convert_cli(argv: list[str] | None = None) -> None:
     parser.add_argument("pages", nargs="+", help="Ropewiki page titles or URLs")
     parser.add_argument("--cache-dir", default="runs/ropewiki-gpkg/cache")
     parser.add_argument("--no-kml", action="store_true", help="skip KML download and geometry")
+    parser.add_argument(
+        "--no-forecast", action="store_true", help="do not cache a weather forecast per canyon"
+    )
     args = parser.parse_args(argv)
 
     from ..ingest import normalize_ropewiki_title
 
     titles = [normalize_ropewiki_title(p).replace("_", " ") for p in args.pages]
-    stored = convert(args.gpkg, titles, args.cache_dir, fetch_kml=not args.no_kml)
+    stored = convert(
+        args.gpkg,
+        titles,
+        args.cache_dir,
+        fetch_kml=not args.no_kml,
+        forecast=not args.no_forecast,
+    )
     print(f"stored {len(stored)} of {len(titles)} pages in {args.gpkg}")
 
 

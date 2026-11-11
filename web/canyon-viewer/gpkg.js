@@ -1,4 +1,4 @@
-// Read a canyon GeoPackage (schema v2) with @ngageoint/geopackage.
+// Read a canyon GeoPackage (schema v2 to v4) with @ngageoint/geopackage.
 // Works in the browser (global `GeoPackage`) and in Node (require) for tests.
 (function (root) {
   "use strict";
@@ -18,7 +18,13 @@
     const geopackage = await lib.GeoPackageAPI.open(bytes);
     return {
       geopackage,
+      // `run` queries and returns rows; `exec` runs one statement (or, without params, a
+      // script) and returns {lastInsertRowid, changes}; `transaction` is synchronous.
       run: (sql, params = []) => geopackage.connection.all(sql, params),
+      exec: (sql, params) => geopackage.connection.run(sql, params),
+      transaction: (work) => geopackage.connection.transaction(work),
+      // The whole database as file bytes (a Uint8Array). Frees the driver's cached statements.
+      export: () => geopackage.connection.export(),
       decode: (blob) => decodeGeometry(lib, blob),
       close: () => geopackage.connection.close(),
     };
@@ -46,6 +52,42 @@
     });
   }
 
+  // Columns that only newer files have: the ones of `wanted` that `table` really has, so a file
+  // built before they existed still loads (the missing values read as null).
+  function presentColumns(db, table, wanted) {
+    const have = new Set(db.run(`SELECT name FROM pragma_table_info('${table}')`).map((r) => r.name));
+    return wanted.filter((column) => have.has(column));
+  }
+  const withColumns = (base, extra) => (extra.length ? `${base}, ${extra.join(", ")}` : base);
+
+  // The cached weather forecast stored for a canyon (same shape as forecast.parseForecast), or
+  // null. Files built before schema version 3 have no forecast tables.
+  function loadForecast(db, canyonId) {
+    const hasTable = db.run(
+      "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'forecasts'").length > 0;
+    if (!hasTable) return null;
+    const [head] = db.run("SELECT * FROM forecasts WHERE canyon_id = ?", [canyonId]);
+    if (!head) return null;
+    return {
+      source: head.source,
+      fetched_at: head.fetched_at,
+      latitude: head.latitude,
+      longitude: head.longitude,
+      elevation_m: head.elevation_m,
+      timezone: head.timezone,
+      days: db.run(
+        `SELECT date, weather_code, temp_max_c, temp_min_c, precip_mm, precip_prob_pct,
+                wind_max_kmh, gust_max_kmh, sunrise, sunset
+           FROM forecast_days WHERE forecast_id = ? ORDER BY date`, [head.id]),
+      // Hourly values (none in a file saved before they existed).
+      hours: db.run("SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'forecast_hours'").length
+        ? db.run(
+          `SELECT time, weather_code, temp_c, precip_mm, precip_prob_pct, wind_kmh, gust_kmh
+             FROM forecast_hours WHERE forecast_id = ? ORDER BY time`, [head.id])
+        : [],
+    };
+  }
+
   // Everything shown on a canyon's detail view, in one object.
   function loadCanyon(db, id) {
     const run = db.run;
@@ -65,8 +107,9 @@
       return { ...c, rappelNotes: notes, photos };
     });
     const geometry = run(
-      `SELECT kind, name, length_m, geom FROM routes WHERE canyon_id = ? ORDER BY id`, [id]
-    ).map((r) => ({ kind: r.kind, name: r.name, lengthM: r.length_m,
+      `SELECT ${withColumns("kind, name, length_m, geom", presentColumns(db, "routes", ["color"]))}
+         FROM routes WHERE canyon_id = ? ORDER BY id`, [id]
+    ).map((r) => ({ kind: r.kind, name: r.name, lengthM: r.length_m, color: r.color ?? null,
                     line: db.decode(r.geom) }));
     return {
       canyon: {
@@ -92,19 +135,27 @@
         sourceUrl: canyon.source_url,
         fetchedAt: canyon.fetched_at,
         revisionId: canyon.source_revision_id,
+        licenseName: canyon.license_name ?? null,
+        licenseUrl: canyon.license_url ?? null,
+        anonymousAuthors: canyon.anonymous_authors ?? null,
         point: db.decode(canyon.geom),
       },
       sections: run(
         "SELECT position, heading, body_text, body_html FROM beta WHERE canyon_id = ? ORDER BY position",
         [id]
       ),
+      // kml_name / kml_description: the node's own name and text in the KML (null in files
+      // built before schema v4); waypoints carry the node's description.
       rappels: run(
-        `SELECT sequence, label, height_m, notes, geom FROM rappels
-          WHERE canyon_id = ? ORDER BY sequence`, [id]
-      ).map((r) => ({ ...r, point: db.decode(r.geom) })),
+        `SELECT ${withColumns("sequence, label, height_m, notes, geom",
+          presentColumns(db, "rappels", ["kml_name", "kml_description"]))}
+           FROM rappels WHERE canyon_id = ? ORDER BY sequence`, [id]
+      ).map((r) => ({ ...r, kml_name: r.kml_name ?? null, kml_description: r.kml_description ?? null,
+                      point: db.decode(r.geom) })),
       waypoints: run(
-        "SELECT kind, name, geom FROM waypoints WHERE canyon_id = ? ORDER BY id", [id]
-      ).map((w) => ({ ...w, point: db.decode(w.geom) })),
+        `SELECT ${withColumns("kind, name, geom", presentColumns(db, "waypoints", ["description"]))}
+           FROM waypoints WHERE canyon_id = ? ORDER BY id`, [id]
+      ).map((w) => ({ ...w, description: w.description ?? null, point: db.decode(w.geom) })),
       routes: geometry,
       conditions,
       ratings: run(
@@ -112,6 +163,11 @@
         [id]
       ),
       links: run("SELECT label, url, source_name FROM links WHERE canyon_id = ? ORDER BY id", [id]),
+      // Ropewiki page authors, for attribution (empty for files built before schema v5).
+      authors: presentColumns(db, "authors", ["name"]).length
+        ? run("SELECT name FROM authors WHERE canyon_id = ? ORDER BY id", [id]).map((a) => a.name)
+        : [],
+      forecast: loadForecast(db, id),
     };
   }
 
@@ -121,7 +177,11 @@
   // Bottom-to-top draw order for the layers canyongis-gpkg-tiles writes; others follow by name.
   const TILE_LAYER_ORDER = [
     "tiles_osm", "tiles_imagery", "tiles_hillshade", "tiles_contours_m", "tiles_contours_ft",
+    "tiles_terrain",
   ];
+  // Elevation, not a picture: Terrarium-encoded PNG tiles (metres = R * 256 + G + B / 256 - 32768)
+  // that the 3D map drapes the other layers over. Never shown as a layer of its own.
+  const TERRAIN_TABLE = "tiles_terrain";
 
   function mercatorToLonLat(x, y) {
     const lon = (x / WORLD_HALF_SIZE) * 180;
@@ -135,7 +195,8 @@
     return match ? { text: match[1], attribution: match[2] } : { text: description || "", attribution: "" };
   }
 
-  // Tile layers in draw order (bottom first). Only Web Mercator tables are supported.
+  // Tile layers in draw order (bottom first). Only Web Mercator tables are supported. The
+  // elevation table (terrain: true) comes last; filter it out to list the pictures.
   function listTileLayers(db) {
     const rows = db.run(
       `SELECT c.table_name, c.identifier, c.description, c.min_x, c.min_y, c.max_x, c.max_y,
@@ -155,6 +216,7 @@
       const { text, attribution } = splitDescription(r.description);
       return {
         table: r.table_name,
+        terrain: r.table_name === TERRAIN_TABLE,
         name: r.identifier || r.table_name,
         description: text,
         attribution,
@@ -185,7 +247,7 @@
   }
 
   const api = {
-    decodeGeometry, openDatabase, listCanyons, loadCanyon, listTileLayers, getTile,
+    decodeGeometry, openDatabase, listCanyons, loadCanyon, listTileLayers, getTile, TERRAIN_TABLE,
   };
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;

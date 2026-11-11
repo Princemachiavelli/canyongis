@@ -5,6 +5,7 @@
   --line: #d9d9d2;
   --accent: #2f6f4e;
   --panel: #ffffff;
+  --link: #1a5fb4;
 }
 @media (prefers-color-scheme: dark) {
   :root:not([data-theme="light"]) {
@@ -14,6 +15,7 @@
     --line: #34352f;
     --accent: #7fc09a;
     --panel: #1d1e1b;
+    --link: #8db8ff;
   }
 }
 :root[data-theme="dark"] {
@@ -23,6 +25,7 @@
   --line: #34352f;
   --accent: #7fc09a;
   --panel: #1d1e1b;
+  --link: #8db8ff;
 }
 * { box-sizing: border-box; }
 body {
@@ -34,11 +37,12 @@ body {
 html, body { height: 100%; }
 /* No page zoom (double-tapping Next zoomed the page); the map handles its own pinch zoom. */
 html, body { touch-action: pan-x pan-y; }
-body { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
+body {
+  display: flex; flex-direction: column; height: 100vh; height: 100dvh;
+}
 .views { flex: 1; min-height: 0; position: relative; }
 .view { position: absolute; inset: 0; background: var(--bg); }
 .view[hidden] { display: none; }
-.view.scroll { overflow: auto; }
 .view-inner { max-width: 720px; margin: 0 auto; padding: 16px; }
 .view-inner h1 { font-size: 20px; margin: 0 0 12px; }
 .button {
@@ -52,8 +56,6 @@ body { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
 .canyon-list li { padding: 8px; border-radius: 6px; cursor: pointer; }
 .canyon-list li:hover, .canyon-list li.active { background: var(--line); }
 .canyon-list .meta { color: var(--muted); font-size: 12px; }
-.credits-title { font-size: 14px; margin: 24px 0 4px; color: var(--muted); }
-.credits { margin: 0; padding-left: 18px; color: var(--muted); font-size: 12px; }
 #map { height: 100%; width: 100%; }
 .detail { display: flex; flex-direction: column; overflow: hidden; background: var(--panel); }
 .detail .tabs, .detail .panel { width: 100%; max-width: 720px; margin: 0 auto; }
@@ -66,11 +68,13 @@ body { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
   color: var(--muted); font: inherit; padding: 12px 8px; cursor: pointer;
 }
 .bottom-bar button.active { color: var(--fg); border-top-color: var(--accent); font-weight: 600; }
-.tabs { display: flex; flex-wrap: wrap; border-bottom: 1px solid var(--line); }
+/* The tabs are at the bottom of the page, above the main bar, so a thumb reaches them. */
+.tabs { display: flex; flex-wrap: wrap; border-top: 1px solid var(--line); }
 .tabs button {
-  background: none; border: 0; color: var(--muted); padding: 8px 10px; cursor: pointer;
+  background: none; border: 0; border-top: 3px solid transparent; color: var(--muted);
+  padding: 12px 6px; cursor: pointer; flex: 1 1 auto; font-size: 13.5px; white-space: nowrap;
 }
-.tabs button.active { color: var(--fg); border-bottom: 2px solid var(--accent); }
+.tabs button.active { color: var(--fg); border-top-color: var(--accent); }
 .panel { overflow: auto; flex: 1; padding: 12px 16px; }
 .panel h2 { font-size: 17px; margin: 0 0 8px; }
 .panel h3 { font-size: 15px; margin: 16px 0 4px; }
@@ -103,9 +107,18 @@ body { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
   background: none; border: 0; color: inherit; font: inherit; font-weight: 600;
   padding: 0; cursor: pointer;
 }
+.layer-head { display: flex; align-items: center; gap: 8px; }
+.layer-head .layer-toggle { flex: 1; }
 .layer-credits { margin-top: 6px; font-size: 11px; color: var(--muted); }
-.layer-panel:not(.collapsed) .layer-toggle { margin-bottom: 4px; }
+.layer-panel:not(.collapsed) .layer-head { margin-bottom: 4px; }
 .layer-toggle { padding: 4px 0; }
+/* (i): quiet on purpose; the credits show when it is tapped */
+.layer-info {
+  flex: 0 0 auto; width: 16px; height: 16px; padding: 0; border-radius: 50%; cursor: pointer;
+  border: 1px solid var(--muted); background: none; color: var(--muted); opacity: 0.55;
+  font: italic 600 11px/14px Georgia, serif; text-align: center;
+}
+.layer-info[aria-expanded="true"], .layer-info:hover { opacity: 0.9; }
 
 /* Companion mode */
 .companion { display: flex; flex-direction: column; background: var(--panel); }
@@ -115,6 +128,10 @@ body { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
 .companion-top h3 { font-size: 16px; margin: 0; }
 .companion-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; }
 .mono { font-variant-numeric: tabular-nums; font-family: ui-monospace, monospace; }
+.clock-col { display: flex; flex-direction: column; align-items: flex-end; }
+/* Forecast pictures under the stopwatch (Companion run screen only). */
+.weather-icons { display: flex; gap: 6px; margin-top: 2px; min-height: 28px; }
+.wx-icon { display: inline-block; width: 28px; height: 28px; }
 .gps { font-size: 13px; color: var(--muted); margin: 2px 0 8px; }
 .gps.bad { color: #c0392b; }
 .card { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; }
@@ -141,7 +158,7 @@ body { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
 .locate-btn.active { background: #3d8bfd; color: #fff; }
 .plain { list-style: none; margin: 0; padding: 0; }
 .companion-map { position: relative; flex: 1 1 0; min-height: 140px; }
-/* Leaflet sets position: relative inline on its container, hence !important. */
+/* MapLibre's stylesheet sets position: relative on its container, hence !important. */
 .companion-map #map { position: absolute !important; inset: 0; height: auto; }
 .companion-actions {
   flex: 0 1 auto; max-height: 45%; overflow: auto; padding: 8px 16px;
@@ -167,19 +184,152 @@ body { display: flex; flex-direction: column; height: 100vh; height: 100dvh; }
 .companion-actions .row button.small.wide { flex: 1; }
 
 /* Settings */
-.view-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 12px; }
-.view-head h1 { margin: 0; }
 .gear { background: none; border: 0; color: var(--muted); font-size: 22px; padding: 4px 8px; cursor: pointer; }
-.settings { background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 10px; max-width: min(420px, 92vw); width: 100%; }
+.settings { background: var(--panel); color: var(--fg); border: 1px solid var(--line); border-radius: 10px; max-width: min(420px, 92vw); width: 100%; max-height: 88dvh; overflow-y: auto; }
 .settings::backdrop { background: rgba(0, 0, 0, 0.4); }
 .settings h2 { margin: 0 0 8px; font-size: 18px; }
 .settings h3 { margin: 16px 0 4px; font-size: 14px; }
 .settings fieldset { border: 1px solid var(--line); border-radius: 8px; margin: 0 0 8px; }
 .settings label { display: block; padding: 4px 0; }
+.settings input[type=number] { width: 4.5em; font: inherit; padding: 2px 4px; }
 .settings p { margin: 4px 0; font-size: 13px; }
 .dialog-row { display: flex; justify-content: space-between; gap: 8px; margin-top: 12px; }
 .settings button { font: inherit; padding: 8px 12px; border-radius: 8px; border: 1px solid var(--line); background: var(--bg); color: var(--fg); cursor: pointer; }
 .settings button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 .settings button:disabled { opacity: 0.45; cursor: default; }
-.heading-icon { background: none; border: 0; }
-.heading-wedge { width: 44px; height: 44px; display: block; transform-origin: 50% 50%; }
+
+/* Weather forecast tab */
+.fc-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; margin-bottom: 8px; }
+.fc-head .updated { flex: 1; min-width: 12em; }
+.panel button.small {
+  font: inherit; font-size: 13px; padding: 6px 12px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--fg); cursor: pointer;
+}
+.panel button.small:disabled { opacity: 0.5; cursor: default; }
+.fc-day { border-left: 3px solid var(--line); padding: 4px 0 4px 10px; margin: 0 0 10px; }
+.fc-day.warn { border-left-color: #c2410c; }
+.fc-day .top { display: flex; justify-content: space-between; gap: 8px; }
+.fc-day .sub { font-size: 13px; color: var(--muted); }
+.panel .notice { color: #b45309; }
+
+/* On this device / Get a canyon (Canyons view) */
+.section-title { font-size: 14px; margin: 16px 0 4px; color: var(--muted); }
+.canyon-list .entry { display: flex; align-items: center; gap: 8px; }
+.canyon-list .what { flex: 1; min-width: 0; overflow-wrap: anywhere; }
+.canyon-list li.outdated { outline: 2px solid #d33; outline-offset: -2px; }
+.canyon-list .outdated-note { color: #d33; font-weight: 600; }
+.canyon-list .update-btn { border-color: #d33; }
+.canyon-list .meta.file { font-size: 11px; opacity: 0.85; }
+.entry-actions { display: flex; gap: 6px; flex: 0 0 auto; }
+.canyon-list button, .job button, #get-canyon button {
+  font: inherit; font-size: 13px; padding: 6px 10px; border-radius: 8px;
+  border: 1px solid var(--line); background: var(--bg); color: var(--fg); cursor: pointer;
+}
+.canyon-list button:disabled, .job button:disabled { opacity: 0.5; cursor: default; }
+.job { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; margin: 8px 0; background: var(--panel); }
+.job h3 { margin: 0 0 4px; font-size: 16px; }
+.job progress { width: 100%; }
+.job button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+.job .dialog-row { justify-content: flex-start; }
+#catalog-search { width: 100%; padding: 8px; margin-bottom: 4px; font-size: 16px; }
+
+/* Map nodes are map layers (see app.js); their tapped details show in a narrow popup. MapLibre's
+   popup is always light, so these colours are fixed. */
+.node-popup-box .maplibregl-popup-content {
+  padding: 8px 22px 8px 10px; background: #fff; border-radius: 6px;
+}
+.node-popup-box .maplibregl-popup-close-button { font-size: 18px; line-height: 1; padding: 0 5px; color: #555; }
+.node-popup-box .maplibregl-popup-tip { border-top-color: #fff; border-bottom-color: #fff; }
+.node-popup { color: #1d1d1b; font: 13px/1.35 -apple-system, system-ui, sans-serif; }
+.node-facts { color: #555; font-size: 12px; }
+.node-desc { margin: 3px 0 0; white-space: pre-line; }
+
+
+/* Installed app: start below the status bar (the device's top inset) plus room for iOS's fade. */
+.is-standalone body { padding-top: calc(env(safe-area-inset-top) + 24px); }
+
+/* Description sections: tap the heading to collapse */
+.desc-section { margin: 4px 0; border-bottom: 1px solid var(--line); padding-bottom: 4px; }
+.desc-section > summary { cursor: pointer; list-style: none; display: flex; align-items: center; gap: 6px; }
+.desc-section > summary::-webkit-details-marker { display: none; }
+.desc-section > summary::before { content: "▾"; color: var(--muted); font-size: 12px; width: 1em; }
+.desc-section:not([open]) > summary::before { content: "▸"; }
+.desc-section > summary h3 { margin: 8px 0 4px; }
+
+/* Links: the browser's default blue is too dark on the dark theme. (Map popups stay light.) */
+a, a:visited { color: var(--link); }
+.maplibregl-popup-content a, .maplibregl-popup-content a:visited { color: #1a5fb4; }
+
+/* Canyons: the list scrolls, its controls stay in a toolbar at the bottom */
+.view.canyons:not([hidden]) { display: flex; flex-direction: column; }
+/* column-reverse makes the scroll area start at its bottom, where the thumb is */
+.canyons-scroll { flex: 1; min-height: 0; overflow: auto; display: flex; flex-direction: column-reverse; }
+.canyons-scroll > .view-inner { display: flex; flex-direction: column; min-height: 100%; width: 100%; }
+/* Lists fill from the bottom up: the first entry is the lowest, right above the toolbar */
+#canyons, #catalog-results { display: flex; flex-direction: column-reverse; }
+#canyons { margin-top: auto; }
+.canyon-toolbar {
+  display: flex; align-items: center; gap: 8px; padding: 8px 12px;
+  border-top: 1px solid var(--line); background: var(--panel);
+}
+.canyon-toolbar #search { flex: 1; min-width: 0; width: auto; margin: 0; }
+.canyon-toolbar .button { padding: 10px 12px; white-space: nowrap; }
+.canyon-toolbar .gear { font-size: 24px; padding: 2px 6px; }
+
+/* Map buttons at the bottom right: Layers on top; below it a row with the locate button (shown
+   during a run), tilt / north, and the zoom buttons, nearest the thumb. A grid places them
+   regardless of when each control was added. */
+.maplibregl-ctrl-bottom-right {
+  display: grid; grid-template-columns: auto auto auto; justify-content: end; align-items: end;
+}
+.maplibregl-ctrl-bottom-right > .maplibregl-ctrl { float: none; clear: none; margin: 0 10px 10px 0; }
+.maplibregl-ctrl-bottom-right .layer-panel { grid-column: 1 / -1; grid-row: 1; justify-self: end; }
+.maplibregl-ctrl-bottom-right .locate-control { grid-column: 1; grid-row: 2; }
+.maplibregl-ctrl-bottom-right .tilt-control { grid-column: 2; grid-row: 2; }
+.maplibregl-ctrl-bottom-right .zoom-control { grid-column: 3; grid-row: 2; }
+.map-bar {
+  background: var(--panel); color: var(--fg); border-radius: 4px;
+  box-shadow: 0 0 0 2px rgba(0, 0, 0, 0.2);
+}
+/* Buttons in a bar are 40 px, side by side, with a line between. */
+.zoom-control, .tilt-control { display: flex; }
+.map-btn {
+  width: 40px; height: 40px; padding: 0; border: 0; background: none; color: inherit;
+  font: 600 20px/40px -apple-system, system-ui, sans-serif; cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+}
+.map-btn[hidden] { display: none; }
+.map-btn + .map-btn { border-left: 1px solid var(--line); }
+.tilt-btn { font-size: 15px; }
+.tilt-btn[aria-pressed="true"] { background: var(--accent); color: #fff; border-radius: 0 4px 4px 0; }
+.north-btn svg { transform: rotate(var(--bearing, 0deg)); }
+
+/* A new version of the page has been installed: one tap to load it */
+.update-banner {
+  position: fixed; left: 8px; right: 8px; z-index: 50;
+  top: calc(env(safe-area-inset-top) + 8px); padding: 10px 12px; border-radius: 8px;
+  border: 1px solid var(--accent); background: var(--accent); color: #fff; font: inherit;
+  font-size: 14px; text-align: center; cursor: pointer;
+}
+
+/* Forecast: an icon on each day, and today by the hour */
+.fc-day .day-title { display: flex; align-items: center; gap: 8px; }
+.fc-hours { display: flex; flex-direction: column; padding: 2px 0 6px; }
+.fc-hour {
+  display: grid; grid-template-columns: 4.2em 24px 3.2em 1fr auto; align-items: center; gap: 8px;
+  padding: 3px 4px; font-size: 13px; border-left: 3px solid transparent;
+}
+.fc-hour .wx-icon { width: 22px; height: 22px; }
+.fc-hour .hour, .fc-hour .temp { font-variant-numeric: tabular-nums; }
+.fc-hour .rain { color: var(--muted); text-align: right; }
+.fc-hour .wind { color: var(--muted); min-width: 4.5em; text-align: right; }
+.fc-hour.past { opacity: 0.5; }
+.fc-hour.now { border-left-color: var(--accent); font-weight: 600; background: var(--bg); }
+
+/* Description: sections fill from the bottom up. column-reverse starts the scroll at the bottom. */
+.panel.bottom-up { display: flex; flex-direction: column-reverse; }
+.bottom-up-list { display: flex; flex-direction: column-reverse; }
+
+/* While a search field has focus the bottom bar steps aside, for more room */
+body.searching #bottom-bar { display: none; }
+.fc-hour-day { font-size: 12px; color: var(--muted); margin: 8px 0 2px; padding-top: 4px; border-top: 1px solid var(--line); }

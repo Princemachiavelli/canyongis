@@ -8,6 +8,9 @@ Layers (each its own tile table, so they can be switched and blended in the view
 * ``tiles_hillshade`` hillshade from a 1 m DEM, zoom 14-17
 * ``tiles_contours_m`` / ``tiles_contours_ft``  contour lines with elevation labels (``--topo``),
                       zoom 14-17, one overlay per unit so the viewer can follow its setting
+* ``tiles_terrain``   elevation for the viewer's 3D map (``--terrain``): Terrarium-encoded PNG,
+                      zoom 11-16, from the DEM. Data, not a picture: the viewer does not list it
+                      as a layer. ``--terrain`` alone adds it to a file that already has tiles.
 
 Imagery and DEM can be local files (``--imagery``, ``--dem``) or downloaded for the canyon
 area (``--fetch-naip``, ``--fetch-dem``). Downloads go to ``tile_cache`` beside the GeoPackage.
@@ -22,6 +25,7 @@ Usage (inside ``nix develop``)::
 from __future__ import annotations
 
 import argparse
+import json
 import sqlite3
 import sys
 from pathlib import Path
@@ -33,6 +37,7 @@ from .tiles import (
     ZOOMS_HILLSHADE,
     ZOOMS_IMAGERY,
     ZOOMS_MAP,
+    ZOOMS_TERRAIN,
     buffer_bbox_lonlat,
     count_tiles,
     write_tile_table,
@@ -47,6 +52,7 @@ ATTRIBUTION = {
     "imagery": "USDA NAIP, public domain",
     "hillshade": "Hillshade from USGS 1 m DEM, public domain",
     "contours": "Contours from USGS 1 m DEM, public domain",
+    "terrain": "Elevation from USGS 1 m DEM, public domain",
 }
 CONTOUR_LAYERS = {"contours_m": "m", "contours_ft": "ft"}
 
@@ -74,6 +80,7 @@ def plan(bbox: tuple[float, float, float, float], layers: list[str]) -> dict[str
         "hillshade": ZOOMS_HILLSHADE,
         "contours_m": ZOOMS_CONTOURS,
         "contours_ft": ZOOMS_CONTOURS,
+        "terrain": ZOOMS_TERRAIN,
     }
     return {layer: count_tiles(bbox, zooms[layer]) for layer in layers}
 
@@ -103,7 +110,19 @@ def build_cli(argv: list[str] | None = None) -> None:
         help="download USGS 1 m DEM tiles covering the canyons (TNM)",
     )
     parser.add_argument(
+        "--terrain",
+        action="store_true",
+        help="add the elevation tile layer (tiles_terrain) the viewer's 3D map needs; "
+        "needs --dem/--fetch-dem",
+    )
+    parser.add_argument(
         "--cache-dir", type=Path, help="downloads (default: tile_cache beside the GeoPackage)"
+    )
+    parser.add_argument(
+        "--dem-source-dir",
+        type=Path,
+        help="where the raw 1 m DEM tiles are kept (default: the cache dir); shared between "
+        "builds, so canyons that are close together download them once",
     )
     parser.add_argument("--buffer-m", type=float, default=DEFAULT_BUFFER_M)
     parser.add_argument("--max-tiles", type=int, default=DEFAULT_MAX_TILES)
@@ -118,18 +137,25 @@ def build_cli(argv: list[str] | None = None) -> None:
         parser.error("--topo and --osm-mbtiles both write tiles_osm; give one")
     if args.topo and not dem_source:
         parser.error("--topo needs a DEM for contours and relief: add --dem or --fetch-dem")
+    if args.terrain and not dem_source:
+        parser.error("--terrain needs a DEM for elevation: add --dem or --fetch-dem")
     layers = []
     if args.osm_mbtiles or args.topo:
         layers.append("osm")
     if imagery_source:
         layers.append("imagery")
-    if dem_source:
+    # --terrain alone (with a DEM) only adds elevation, e.g. to a file that already has its tiles
+    terrain_only = args.terrain and not (args.topo or imagery_source or args.osm_mbtiles)
+    if dem_source and not terrain_only:
         layers.append("hillshade")
     if args.topo:
         layers += list(CONTOUR_LAYERS)
+    if args.terrain:
+        layers.append("terrain")
     if not layers:
         parser.error(
-            "give at least one of --osm-mbtiles, --topo, --imagery/--fetch-naip, --dem/--fetch-dem"
+            "give at least one of --osm-mbtiles, --topo, --terrain, --imagery/--fetch-naip, "
+            "--dem/--fetch-dem"
         )
 
     cache = args.cache_dir or args.gpkg.parent / "tile_cache"
@@ -156,8 +182,10 @@ def build_cli(argv: list[str] | None = None) -> None:
             dem = cache / "dem_mosaic.tif"
             if not dem.exists():
                 products = data_fetch.dem_products(bbox)
-                paths = data_fetch.download_dem_tiles(products, cache)
+                paths = data_fetch.download_dem_tiles(products, args.dem_source_dir or cache)
                 data_fetch.build_dem_mosaic(paths, bbox, dem)
+                # which raw tiles the cropped DEM was cut from, for whoever keeps it (and cleans up)
+                (cache / "dem_sources.json").write_text(json.dumps([str(p) for p in paths]))
         return dem
 
     def ensure_imagery() -> Path:
@@ -234,6 +262,18 @@ def build_cli(argv: list[str] | None = None) -> None:
             attribution=ATTRIBUTION["hillshade"],
         )
         print(f"tiles_hillshade: wrote {sum(n.values())} tiles")
+    if "terrain" in layers:
+        n = write_tile_table(
+            conn,
+            "tiles_terrain",
+            identifier="Elevation",
+            description="Terrain elevation (Terrarium PNG)",
+            bbox_lonlat=bbox,
+            zooms=ZOOMS_TERRAIN,
+            render=tile_sources.terrain_source(ensure_dem()),
+            attribution=ATTRIBUTION["terrain"],
+        )
+        print(f"tiles_terrain: wrote {sum(n.values())} tiles")
     if args.topo:
         renderer = tile_sources.topo_renderer(bbox, cache, ensure_dem(), shade, imagery)
         n = write_tile_table(

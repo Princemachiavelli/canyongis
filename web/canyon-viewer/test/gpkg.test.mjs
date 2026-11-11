@@ -80,3 +80,29 @@ test("unknown canyon id returns null", () => {
 });
 
 test.after(() => db.close());
+
+test("an older file without the KML columns reads them as null", () => {
+  const detail = gpkg.loadCanyon(db, 1);
+  assert.equal(detail.routes[0].color, null);
+  assert.ok(detail.rappels.every((r) => r.kml_name === null && r.kml_description === null));
+  assert.ok(detail.waypoints.every((w) => w.description === null));
+});
+
+test("colours, node names and descriptions are read when the file has them", async () => {
+  const newer = await gpkg.openDatabase(geopackageLib, readFileSync(fixture));
+  for (const sql of [
+    "ALTER TABLE routes ADD COLUMN color TEXT",
+    "ALTER TABLE waypoints ADD COLUMN description TEXT",
+    "ALTER TABLE rappels ADD COLUMN kml_name TEXT",
+    "ALTER TABLE rappels ADD COLUMN kml_description TEXT",
+  ]) newer.exec(sql);
+  newer.exec("UPDATE routes SET color = '#ffff00'");
+  newer.exec("UPDATE rappels SET kml_name = 'R1-R5', kml_description = 'Back to back.' WHERE label = 'R1'");
+  newer.exec("INSERT INTO waypoints (canyon_id, kind, name, description) VALUES (1, 'parking', 'Trailhead', 'Park here')");
+  const detail = gpkg.loadCanyon(newer, 1);
+  assert.equal(detail.routes[0].color, "#ffff00");
+  const r1 = detail.rappels.find((r) => r.label === "R1");
+  assert.deepEqual([r1.kml_name, r1.kml_description], ["R1-R5", "Back to back."]);
+  assert.equal(detail.rappels.find((r) => r.label === "R2").kml_name, null);
+  assert.deepEqual(detail.waypoints.map((w) => w.description).filter(Boolean), ["Park here"]);
+});

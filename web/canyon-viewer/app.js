@@ -5,14 +5,28 @@
 
   // @ngageoint/geopackage 4.2.10 from jsDelivr. Its dist/ folder holds the SQLite WASM.
   const GEOPACKAGE_BASE = "https://cdn.jsdelivr.net/npm/@ngageoint/geopackage@4.2.10/dist/";
-  const TABS = ["Overview", "Description", "Rappels", "Conditions", "Links", "Ratings"];
+  const TABS = ["Overview", "Forecast", "Description", "Rappels", "Conditions"];
+  // A forecast older than this is refreshed when the Forecast tab opens (if there is a network).
+  const FORECAST_STALE_MS = 3 * 3600e3;
+  const GPKG_TYPE = "application/geopackage+sqlite3";
   const ALLOWED_TAGS = new Set(["P", "H4", "UL", "OL", "LI", "A", "B", "I", "BR"]);
 
   const state = {
     db: null, canyons: [], selectedId: null, detail: null, tab: "Overview",
-    view: "canyons", pendingMap: null, tileBounds: [], limitArea: null,
+    view: "canyons", pendingMap: null, tileBounds: [],
+    fileName: "canyons.gpkg",
+    library: [], // the files saved on this device (metadata only)
+    // Forecast of the selected canyon: {title, record, busy, message}.
+    forecast: null,
   };
   const $ = (id) => document.getElementById(id);
+
+  // The installed app (Home Screen on iOS) is drawn under the status bar, and iOS fades the area
+  // around it over the top of the page. The page therefore starts below the device's top inset
+  // with room to spare (see style.css). Browser tabs are laid out by the browser and are left alone.
+  if (navigator.standalone === true || matchMedia("(display-mode: standalone)").matches) {
+    document.documentElement.classList.add("is-standalone");
+  }
 
   // ---- DOM helpers (text is always set with textContent) -------------------------
 
@@ -92,155 +106,326 @@
   }
 
   // ---- map ------------------------------------------------------------------------
+  // MapLibre GL, so the map can be tilted. When the file has an elevation layer (tiles_terrain,
+  // Terrarium-encoded PNGs) the picture layers are draped over it; without one the map is flat
+  // (it can still be tilted). MapLibre's zoom is one less than the 256 px tile zoom the file's
+  // layers are numbered in, so the zooms below are the old ones minus one.
 
-  // Past a layer's last stored zoom Leaflet stretches its tiles, so allow zooming further in.
-  // The Leaflet attribution bar is off; credits are listed in the Layers panel and Canyons tab.
-  const map = L.map("map", {
-    preferCanvas: true, maxZoom: 22, attributionControl: false, maxBoundsViscosity: 1,
-  })
-    .setView([34, -118], 7);
-  const canyonLayer = L.layerGroup().addTo(map);
-  const detailLayer = L.layerGroup().addTo(map);
+  const EMPTY = { type: "FeatureCollection", features: [] };
+  const MAX_PITCH = 60;
+  const TILT_PITCH = 50; // the 3D button
+  const OPEN_PITCH = 45; // a canyon opens at this tilt when the file has elevation
+  const DEFAULT_EXAGGERATION = 1.5;
+
+  const map = new maplibregl.Map({
+    container: "map",
+    style: {
+      version: 8,
+      sources: {
+        canyons: { type: "geojson", data: EMPTY },
+        routes: { type: "geojson", data: EMPTY },
+        nodes: { type: "geojson", data: EMPTY },
+      },
+      layers: [
+        // Outside the file's map layers the map is plain grey; it can be zoomed and moved freely.
+        { id: "background", type: "background", paint: { "background-color": "#cfcfcf" } },
+        // Lines are drawn in the colour the KML gives them (as Ropewiki does); this is only for a
+        // KML that gives none.
+        {
+          id: "routes", type: "line", source: "routes",
+          layout: { "line-cap": "round", "line-join": "round" },
+          paint: { "line-color": ["get", "color"], "line-width": 4 },
+        },
+        // The KML's nodes are layers like the track, so they sit on the terrain exactly as it
+        // does (DOM markers drift away from it when the view moves). Names are drawn as images
+        // because text needs glyph files, which are not available offline.
+        {
+          id: "node-hit", type: "circle", source: "nodes",
+          paint: { "circle-radius": 15, "circle-opacity": 0.01 },
+        },
+        {
+          id: "node-dots", type: "circle", source: "nodes",
+          paint: {
+            "circle-radius": ["case", ["==", ["get", "kind"], "rappel"], 6, 5],
+            "circle-color": ["case", ["==", ["get", "kind"], "rappel"], "#ff0", "#8ac"],
+            "circle-stroke-color": ["case", ["==", ["get", "kind"], "rappel"], "#000", "#237"],
+            "circle-stroke-width": 1,
+          },
+        },
+        {
+          id: "node-labels", type: "symbol", source: "nodes", filter: ["has", "icon"],
+          layout: {
+            "icon-image": ["get", "icon"], "icon-anchor": "left", "icon-offset": [9, 0],
+            "icon-allow-overlap": true, "icon-ignore-placement": true,
+            "icon-pitch-alignment": "viewport", "icon-rotation-alignment": "viewport",
+          },
+        },
+        {
+          id: "canyon-points", type: "circle", source: "canyons",
+          paint: {
+            "circle-radius": 6, "circle-color": "#7fc09a", "circle-opacity": 0.9,
+            "circle-stroke-color": "#2f6f4e", "circle-stroke-width": 1,
+          },
+        },
+      ],
+    },
+    center: [-118, 34],
+    zoom: 6,
+    maxZoom: 21,
+    maxPitch: MAX_PITCH,
+    attributionControl: false, // credits are behind the (i) next to "Layers"
+    canvasContextAttributes: { antialias: true },
+  });
+  // A tile the file lacks is not worth a console error.
+  map.on("error", (e) => console.debug("map:", e.error && e.error.message));
+
+  // Style changes wait for the style to load (the map may still be hidden and zero-sized, so
+  // not for the first rendered frame).
+  let styleReady = false;
+  const styleQueue = [];
+  function whenStyleReady(action) {
+    if (styleReady) action();
+    else styleQueue.push(action);
+  }
+  map.once("style.load", () => {
+    styleReady = true;
+    for (const action of styleQueue.splice(0)) action();
+  });
+
+  // Tiles come from the open GeoPackage: gpkg://<table>/<z>/<x>/<y>.
+  let tileDb = null;
+  const BLANK_TILE = Uint8Array.from(atob(
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII="),
+  (c) => c.charCodeAt(0));
+  maplibregl.addProtocol("gpkg", async (params) => {
+    const m = /^gpkg:\/\/(\w+)\/(\d+)\/(\d+)\/(\d+)$/.exec(params.url);
+    let tile = null;
+    try {
+      if (m && tileDb) tile = gpkg.getTile(tileDb, m[1], Number(m[2]), Number(m[3]), Number(m[4]));
+    } catch (err) {
+      console.debug("tile read failed:", err);
+    }
+    // MapLibre copies nothing: the bytes must not be a view into the database's memory.
+    if (tile) return { data: tile.data.slice().buffer };
+    // A missing picture is transparent; a missing elevation tile must not read as sea level.
+    if (m && m[1] === gpkg.TERRAIN_TABLE) throw new Error("no elevation tile");
+    return { data: BLANK_TILE.slice().buffer };
+  });
+
+  // MapLibre 4.7 holds the camera's ground height while an animated move runs and does not always
+  // let go of it afterwards. The height is then wherever the terrain was when the move began, often
+  // sea level, and the whole view ends up hundreds of pixels off. So moves that go somewhere new
+  // are jumps while terrain is on, and anything left frozen is released when a move ends.
+  map.on("moveend", () => {
+    if (map._elevationFreeze && !map.isMoving()) {
+      map._elevationFreeze = false;
+      map.triggerRepaint();
+    }
+  });
+
+  const bounds = (points) => points.reduce((b, p) => b.extend(p), new maplibregl.LngLatBounds());
 
   function drawCanyons() {
-    canyonLayer.clearLayers();
-    const bounds = [];
+    const features = [];
+    const points = [];
     for (const c of state.canyons) {
       if (c.lat === null || c.lon === null) continue;
-      const marker = L.circleMarker([c.lat, c.lon], {
-        radius: 6, color: "#2f6f4e", fillColor: "#7fc09a", fillOpacity: 0.9, weight: 1,
+      features.push({
+        type: "Feature", properties: { id: c.id, title: c.title },
+        geometry: { type: "Point", coordinates: [c.lon, c.lat] },
       });
-      marker.bindTooltip(c.title);
-      marker.on("click", () => selectCanyon(c.id));
-      marker.addTo(canyonLayer);
-      bounds.push([c.lat, c.lon]);
+      points.push([c.lon, c.lat]);
     }
-    if (bounds.length) {
-      onMapVisible(() => map.fitBounds(bounds, { padding: [24, 24], maxZoom: 12 }));
-    }
+    whenStyleReady(() => map.getSource("canyons").setData({ type: "FeatureCollection", features }));
+    if (points.length) onMapVisible(() => fitPoints(points, { padding: 24, maxZoom: 11 }));
   }
 
-  // Leaflet measures a hidden map as 0x0, so map moves wait until the Map tab is showing.
+  // A canyon's name while the pointer is over it (touch screens just select it).
+  const hoverPopup = new maplibregl.Popup({
+    closeButton: false, closeOnClick: false, className: "node-popup-box", offset: 8,
+  });
+  map.on("mouseenter", "canyon-points", (e) => {
+    map.getCanvas().style.cursor = "pointer";
+    const feature = e.features && e.features[0];
+    if (feature) {
+      hoverPopup.setLngLat(feature.geometry.coordinates).setText(feature.properties.title).addTo(map);
+    }
+  });
+  map.on("mouseleave", "canyon-points", () => {
+    map.getCanvas().style.cursor = "";
+    hoverPopup.remove();
+  });
+  map.on("click", "canyon-points", (e) => {
+    const feature = e.features && e.features[0];
+    if (feature) selectCanyon(feature.properties.id);
+  });
+
+  // A hidden map measures 0x0, so map moves wait until the Map tab is showing.
   function onMapVisible(action) {
     state.pendingMap = action;
     if (state.view === "map") runPendingMap();
   }
 
-  // The map can only be moved within the area the file covers: its tile layers, or else its
-  // canyons plus a margin. It cannot be zoomed out past the level where that area fills the
-  // whole map view, so no blank space shows outside it.
-  const NO_TILES_MARGIN_DEG = 0.05;
-
-  function coveredArea() {
-    const boxes = state.tileBounds.slice();
-    if (!boxes.length) {
-      for (const c of state.canyons) {
-        if (c.lat !== null && c.lon !== null) boxes.push([c.lon, c.lat, c.lon, c.lat]);
-      }
-    }
-    if (!boxes.length) return null;
-    const margin = state.tileBounds.length ? 0 : NO_TILES_MARGIN_DEG;
-    return L.latLngBounds(
-      [Math.min(...boxes.map((b) => b[1])) - margin, Math.min(...boxes.map((b) => b[0])) - margin],
-      [Math.max(...boxes.map((b) => b[3])) + margin, Math.max(...boxes.map((b) => b[2])) + margin]);
+  function fitPoints(points, { padding, maxZoom, pitch, duration = 600 }) {
+    const camera = map.cameraForBounds(bounds(points), { padding, maxZoom, bearing: 0 });
+    if (!camera) return;
+    if (pitch !== undefined) camera.pitch = pitch;
+    if (duration && !(terrain.info && terrain.on)) map.easeTo({ ...camera, duration });
+    else map.jumpTo(camera);
   }
-
-  function applyMapLimits() {
-    const area = state.limitArea;
-    if (!area) {
-      map.setMaxBounds(null);
-      map.setMinZoom(0);
-      return;
-    }
-    map.setMaxBounds(area);
-    const size = map.getSize();
-    if (size.x > 0 && size.y > 0) map.setMinZoom(map.getBoundsZoom(area, true));
-  }
-  map.on("resize", applyMapLimits);
 
   function runPendingMap() {
-    map.invalidateSize();
+    map.resize();
     const action = state.pendingMap;
     state.pendingMap = null;
     if (action) action();
   }
 
-  // Zoom to the selected canyon's route, rappels and waypoints, or else its location.
+  // Zoom to the selected canyon's route, rappels and waypoints, or else its location; tilted
+  // when there is elevation to show.
   function focusDetail(detail) {
     const points = [];
     for (const route of detail.routes) {
-      if (route.line) route.line.coordinates.forEach(([lon, lat]) => points.push([lat, lon]));
+      if (route.line) route.line.coordinates.forEach(([lon, lat]) => points.push([lon, lat]));
     }
     for (const item of [...detail.rappels, ...detail.waypoints]) {
-      if (item.point) points.push([item.point.coordinates[1], item.point.coordinates[0]]);
+      if (item.point) points.push(item.point.coordinates);
     }
-    if (!points.length && detail.canyon.point) {
-      points.push([detail.canyon.point.coordinates[1], detail.canyon.point.coordinates[0]]);
-    }
+    if (!points.length && detail.canyon.point) points.push(detail.canyon.point.coordinates);
     if (!points.length) return;
-    onMapVisible(() => map.fitBounds(points, { padding: [32, 32], maxZoom: 16 }));
+    const pitch = terrain.info && terrain.on ? OPEN_PITCH : undefined;
+    onMapVisible(() => fitPoints(points, { padding: 32, maxZoom: 15, pitch }));
+  }
+
+  // What a tapped node shows: its name, a line of facts, and the KML's description.
+  function nodePopup(title, facts, description) {
+    return el("div", { class: "node-popup" }, [
+      el("b", {}, [title]),
+      facts ? el("div", { class: "node-facts" }, [facts]) : null,
+      description ? el("p", { class: "node-desc" }, [description]) : null,
+    ]);
+  }
+
+  // Only one popup is open at a time.
+  let openPopup = null;
+  function showPopup(popup) {
+    popup.on("open", () => {
+      if (openPopup && openPopup !== popup) openPopup.remove();
+      openPopup = popup;
+    });
+    popup.addTo(map);
+  }
+
+  // A name drawn as a small label image (white pill, dark text), added to the map once.
+  function labelImage(text) {
+    const id = `label:${text}`;
+    if (map.hasImage(id)) return id;
+    const ratio = 2;
+    const font = `600 ${12 * ratio}px -apple-system, system-ui, sans-serif`;
+    const probe = document.createElement("canvas").getContext("2d");
+    probe.font = font;
+    const width = Math.ceil(probe.measureText(text).width) + 8 * ratio;
+    const height = 18 * ratio;
+    const canvas = document.createElement("canvas");
+    canvas.width = width;
+    canvas.height = height;
+    const ctx = canvas.getContext("2d");
+    ctx.fillStyle = "rgba(255, 255, 255, 0.88)";
+    ctx.beginPath();
+    ctx.roundRect(0, 0, width, height, 3 * ratio);
+    ctx.fill();
+    ctx.fillStyle = "#111";
+    ctx.font = font;
+    ctx.textBaseline = "middle";
+    ctx.fillText(text, 4 * ratio, height / 2 + ratio / 2);
+    map.addImage(id, ctx.getImageData(0, 0, width, height), { pixelRatio: ratio });
+    return id;
+  }
+
+  function clearDetail() {
+    whenStyleReady(() => {
+      map.getSource("routes").setData(EMPTY);
+      map.getSource("nodes").setData(EMPTY);
+    });
+    if (openPopup) openPopup.remove();
   }
 
   function drawDetail(detail) {
-    detailLayer.clearLayers();
-    for (const route of detail.routes) {
-      if (!route.line) continue;
-      const latlngs = route.line.coordinates.map(([lon, lat]) => [lat, lon]);
-      L.polyline(latlngs, { color: "#d33", weight: 4 })
-        .bindTooltip(`${route.kind}${route.name ? `: ${route.name}` : ""}`)
-        .addTo(detailLayer);
-    }
+    clearDetail();
+    const routes = detail.routes.filter((r) => r.line).map((route) => ({
+      type: "Feature",
+      properties: {
+        color: route.color || DEFAULT_ROUTE_COLOR,
+        name: `${route.kind}${route.name ? `: ${route.name}` : ""}`,
+      },
+      geometry: route.line,
+    }));
+    const nodes = [];
     for (const r of detail.rappels) {
       if (!r.point) continue;
-      L.circleMarker([r.point.coordinates[1], r.point.coordinates[0]], {
-        radius: 5, color: "#000", fillColor: "#ff0", fillOpacity: 1, weight: 1,
-      }).bindTooltip(r.label).addTo(detailLayer);
+      // The name on the map is the KML node's own (such as "R1-R5"), as on Ropewiki. It is always
+      // shown beside the dot; tapping the node adds the details.
+      const title = r.kml_name || r.label;
+      const facts = [r.kml_name && r.kml_name !== r.label ? `Rappel ${r.label}` : null,
+        r.height_m ? metres(r.height_m) : null].filter(Boolean).join(" · ");
+      nodes.push({ kind: "rappel", title, facts, desc: r.kml_description || "", coordinates: r.point.coordinates });
     }
     for (const w of detail.waypoints) {
       if (!w.point) continue;
-      L.circleMarker([w.point.coordinates[1], w.point.coordinates[0]], {
-        radius: 4, color: "#237", fillColor: "#8ac", fillOpacity: 1, weight: 1,
-      }).bindTooltip(`${w.kind}: ${w.name}`).addTo(detailLayer);
+      nodes.push({
+        kind: "waypoint", title: w.name || w.kind, facts: w.name ? w.kind : "",
+        desc: w.description || "", coordinates: w.point.coordinates,
+      });
     }
+    whenStyleReady(() => {
+      map.getSource("routes").setData({ type: "FeatureCollection", features: routes });
+      map.getSource("nodes").setData({
+        type: "FeatureCollection",
+        features: nodes.map(({ coordinates, ...properties }) => ({
+          type: "Feature",
+          properties: properties.kind === "rappel" ? { ...properties, icon: labelImage(properties.title) } : properties,
+          geometry: { type: "Point", coordinates },
+        })),
+      });
+    });
+  }
+  const DEFAULT_ROUTE_COLOR = "#d33";
+
+  // A tapped node shows its details in a narrow popup; a tapped route names itself.
+  map.on("click", "node-hit", (e) => {
+    const feature = e.features && e.features[0];
+    if (!feature) return;
+    const p = feature.properties;
+    showPopup(new maplibregl.Popup({ maxWidth: "200px", className: "node-popup-box", offset: 10 })
+      .setLngLat(feature.geometry.coordinates).setDOMContent(nodePopup(p.title, p.facts, p.desc)));
+  });
+  map.on("click", "routes", (e) => {
+    const feature = e.features && e.features[0];
+    if (!feature) return;
+    if (map.queryRenderedFeatures(e.point, { layers: ["node-hit"] }).length) return; // a node was tapped
+    showPopup(new maplibregl.Popup({ closeButton: false, className: "node-popup-box", maxWidth: "200px" })
+      .setLngLat(e.lngLat).setDOMContent(nodePopup(feature.properties.name, "", "")));
+  });
+  for (const layer of ["routes", "node-hit"]) {
+    map.on("mouseenter", layer, () => { map.getCanvas().style.cursor = "pointer"; });
+    map.on("mouseleave", layer, () => { map.getCanvas().style.cursor = ""; });
   }
 
-  // ---- base layers and the layer panel ----------------------------------------------
+  // ---- base layers, elevation and the layer panel ---------------------------------------
   // Rows are listed top-most first. The online OpenStreetMap layer is shown only while the
   // GeoPackage has no tile layers of its own; each GeoPackage layer starts hidden except
-  // the bottom one, and the hillshade starts translucent so it can sit over imagery.
-
-  // A Leaflet grid layer whose tiles come from a tile table in the open GeoPackage.
-  const GpkgTileLayer = L.GridLayer.extend({
-    initialize(db, info, options) {
-      L.GridLayer.prototype.initialize.call(this, options);
-      this._db = db;
-      this._info = info;
-    },
-    createTile(coords, done) {
-      const tile = gpkg.getTile(this._db, this._info.table, coords.z, coords.x, coords.y);
-      if (!tile) {
-        const blank = document.createElement("div");
-        setTimeout(() => done(null, blank), 0);
-        return blank;
-      }
-      const img = document.createElement("img");
-      img.alt = "";
-      const url = URL.createObjectURL(new Blob([tile.data], { type: tile.type }));
-      img.onload = () => { URL.revokeObjectURL(url); done(null, img); };
-      img.onerror = (err) => { URL.revokeObjectURL(url); done(err, img); };
-      img.src = url;
-      return img;
-    },
-  });
+  // the bottom one, and the hillshade starts translucent so it can sit over imagery. The
+  // elevation layer is not a picture: it only shapes the ground (a "3D terrain" row).
 
   const onlineOsm = {
     id: "online-osm",
     key: "online-osm",
     name: "OpenStreetMap (online)",
     note: "",
-    layer: L.tileLayer("https://tile.openstreetmap.org/{z}/{x}/{y}.png", {
-      maxNativeZoom: 19, maxZoom: 22, zIndex: 1,
-    }),
+    source: {
+      type: "raster", tiles: ["https://tile.openstreetmap.org/{z}/{x}/{y}.png"], tileSize: 256,
+      maxzoom: 19,
+    },
     credit: "© OpenStreetMap contributors",
     opacity: 1,
     visible: true,
@@ -248,11 +433,52 @@
   // Base layers shown in the panel; GeoPackage tile layers replace all but the online one.
   let tileEntries = [onlineOsm];
   let prefs = {}; // per-layer on/off and opacity, kept while the same file stays open
-  onlineOsm.layer.addTo(map);
+  // The elevation layer of the open file: {info, on, exaggeration}; info is null without one.
+  const terrain = { info: null, on: true, exaggeration: DEFAULT_EXAGGERATION };
+  let terrainOnMap = null;
+  const onMap = new Map(); // layer id -> the entry it was added for
+
+  // Bring the map's style in line with tileEntries and terrain.
+  function syncMapLayers() {
+    whenStyleReady(() => {
+      const wanted = new Map(tileEntries.map((e) => [e.id, e]));
+      for (const [id, entry] of onMap) {
+        if (wanted.get(id) === entry) continue;
+        map.removeLayer(id);
+        map.removeSource(id);
+        onMap.delete(id);
+      }
+      for (const e of tileEntries) {
+        if (!onMap.has(e.id)) {
+          map.addSource(e.id, e.source);
+          map.addLayer({ id: e.id, type: "raster", source: e.id }, "routes");
+          onMap.set(e.id, e);
+        }
+        map.setLayoutProperty(e.id, "visibility", e.visible ? "visible" : "none");
+        map.setPaintProperty(e.id, "raster-opacity", e.opacity);
+      }
+      const info = terrain.info;
+      if (terrainOnMap && terrainOnMap !== info) {
+        map.setTerrain(null);
+        map.removeSource("terrain");
+        terrainOnMap = null;
+      }
+      if (info && !terrainOnMap) {
+        map.addSource("terrain", {
+          type: "raster-dem", tiles: [`gpkg://${info.table}/{z}/{x}/{y}`], tileSize: 256,
+          encoding: "terrarium", minzoom: info.minZoom, maxzoom: info.maxZoom, bounds: info.bounds,
+        });
+        terrainOnMap = info;
+      }
+      if (info && terrain.on) map.setTerrain({ source: "terrain", exaggeration: terrain.exaggeration });
+      else map.setTerrain(null);
+    });
+  }
 
   function removeGpkgLayers() {
-    for (const entry of tileEntries) if (entry !== onlineOsm) map.removeLayer(entry.layer);
     tileEntries = [onlineOsm];
+    terrain.info = null;
+    syncMapLayers();
   }
 
   // The metre and foot contour overlays share one panel row: only the one matching the units
@@ -269,60 +495,50 @@
 
   function setGpkgLayers(db) {
     for (const e of tileEntries) prefs[e.key] = { visible: e.visible, opacity: e.opacity };
-    removeGpkgLayers();
-    let infos = [];
+    tileDb = db;
+    tileEntries = [onlineOsm];
+    terrain.info = null;
+    let all = [];
     try {
-      infos = chooseLayers(gpkg.listTileLayers(db));
+      all = gpkg.listTileLayers(db);
     } catch (err) {
       console.error(err);
     }
+    terrain.info = all.find((info) => info.terrain) || null;
+    terrain.on = prefs.terrain ? prefs.terrain.on : true;
+    terrain.exaggeration = prefs.terrain ? prefs.terrain.exaggeration : DEFAULT_EXAGGERATION;
+    const infos = chooseLayers(all.filter((info) => !info.terrain));
     let firstBase = true;
-    infos.forEach((info, i) => {
+    infos.forEach((info) => {
       const key = contourUnit(info) ? "contours" : info.table;
       const saved = prefs[key];
       const opacity = saved ? saved.opacity : info.table === "tiles_hillshade" ? 0.6 : 1;
       const isOverlay = key === "contours";
-      const layer = new GpkgTileLayer(db, info, {
-        minNativeZoom: info.minZoom,
-        maxNativeZoom: info.maxZoom,
-        maxZoom: 22,
-        bounds: L.latLngBounds([info.bounds[1], info.bounds[0]], [info.bounds[3], info.bounds[2]]),
-        opacity,
-        zIndex: 2 + i,
-      });
       const entry = {
         id: info.table,
         key,
         name: info.name,
         note: `zoom ${info.minZoom}–${info.maxZoom}`,
         credit: info.attribution,
-        layer,
+        source: {
+          type: "raster", tiles: [`gpkg://${info.table}/{z}/{x}/{y}`], tileSize: 256,
+          minzoom: info.minZoom, maxzoom: info.maxZoom, bounds: info.bounds,
+        },
         opacity,
         // Only the bottom base layer starts on; overlays start off.
         visible: saved ? saved.visible : !isOverlay && firstBase,
       };
       if (!isOverlay) firstBase = false;
-      if (entry.visible) layer.addTo(map);
       tileEntries.push(entry);
     });
     // The online map is a fallback for files that carry no tiles.
     state.tileBounds = infos.map((info) => info.bounds);
     onlineOsm.visible = infos.length === 0 && (prefs["online-osm"] ? prefs["online-osm"].visible : true);
-    if (onlineOsm.visible) onlineOsm.layer.addTo(map);
-    else map.removeLayer(onlineOsm.layer);
+    syncMapLayers();
     renderLayerPanel();
     updateCredits();
+    updateTiltButton();
   }
-
-  const layerControl = L.control({ position: "topright" });
-  layerControl.onAdd = () => {
-    const box = el("div", { class: "layer-panel leaflet-bar" });
-    L.DomEvent.disableClickPropagation(box);
-    L.DomEvent.disableScrollPropagation(box);
-    layerControl.box = box;
-    return box;
-  };
-  layerControl.addTo(map);
 
   // The panel starts collapsed on phones, where it would cover much of the map.
   const LAYERS_OPEN_KEY = "canyon-viewer.layersOpen";
@@ -332,6 +548,7 @@
     if (saved !== null) layersOpen = saved === "1";
   } catch (err) { /* storage can be blocked; the default stands */ }
   let panelCredits = null;
+  let creditsOpen = false;
 
   function setLayersOpen(open) {
     layersOpen = open;
@@ -339,31 +556,85 @@
     renderLayerPanel();
   }
 
-  // Credits of the layers currently on the map (panel) and of every layer (Canyons tab).
+  // Credits of the layers currently on the map, behind the (i) next to "Layers".
   function updateCredits() {
-    const all = tileEntries.filter((e) => e.credit);
-    $("credits").replaceChildren(...(all.length
-      ? all.map((e) => el("li", {}, [el("b", {}, [e.name]), `: ${e.credit}`]))
-      : [el("li", { class: "muted" }, ["None."])]), el("li", {}, [el("b", {}, ["Map"]), ": Leaflet"]));
-    if (panelCredits) {
-      const shown = all.filter((e) => e.visible).map((e) => e.credit);
-      panelCredits.textContent = shown.length ? shown.join(" · ") : "";
-      panelCredits.hidden = !shown.length;
-    }
+    if (!panelCredits) return;
+    const shown = tileEntries.filter((e) => e.credit && e.visible).map((e) => e.credit);
+    if (terrain.info && terrain.on && terrain.info.attribution) shown.push(terrain.info.attribution);
+    panelCredits.textContent = shown.length ? shown.join(" · ") : "No map layers are shown.";
+    panelCredits.hidden = !creditsOpen;
   }
 
+  // ---- map buttons -------------------------------------------------------------------
+  // Bottom right, within reach of a thumb (style.css lays them out): Layers on top; below it a
+  // row of the locate button (during a run), tilt / north, and zoom.
+
+  function mapControl(element, position = "bottom-right") {
+    element.classList.add("maplibregl-ctrl", "map-bar");
+    map.addControl({ onAdd: () => element, onRemove: () => element.remove() }, position);
+    return element;
+  }
+
+  function barButton(label, title, onClick, className) {
+    const button = el("button", {
+      type: "button", class: className || "map-btn", title, "aria-label": title,
+    }, [label]);
+    button.addEventListener("click", onClick);
+    return button;
+  }
+
+  const layerBox = mapControl(el("div", { class: "layer-panel" }));
+
+  // - on the left, + on the right, nearest the edge.
+  mapControl(el("div", { class: "zoom-control" }, [
+    barButton("−", "Zoom out", () => map.zoomOut()),
+    barButton("+", "Zoom in", () => map.zoomIn()),
+  ]));
+
+  const NORTH_ICON = '<svg viewBox="0 0 24 24" width="22" height="22" aria-hidden="true">'
+    + '<path d="M12 2 L17 13 L12 11 L7 13 Z" fill="#d33"/>'
+    + '<path d="M12 22 L7 11 L12 13 L17 11 Z" fill="currentColor" opacity="0.55"/></svg>';
+  const northButton = barButton("", "Face north", () => map.easeTo({ bearing: 0 }), "map-btn north-btn");
+  northButton.innerHTML = NORTH_ICON; // fixed markup above, no user text
+  northButton.hidden = true;
+  const tiltButton = barButton("3D", "Tilt the map", () => {
+    map.easeTo({ pitch: map.getPitch() > 5 ? 0 : TILT_PITCH, duration: 500 });
+  }, "map-btn tilt-btn");
+  mapControl(el("div", { class: "tilt-control" }, [northButton, tiltButton]));
+
+  function updateTiltButton() {
+    const tilted = map.getPitch() > 5;
+    tiltButton.textContent = tilted ? "2D" : "3D";
+    tiltButton.setAttribute("aria-pressed", String(tilted));
+    tiltButton.title = terrain.info || !tileDb ? (tilted ? "Flatten the map" : "Tilt the map")
+      : "Tilt the map (this file has no elevation data, so the ground stays flat)";
+    northButton.style.setProperty("--bearing", `${-map.getBearing()}deg`);
+    northButton.hidden = Math.abs(map.getBearing()) < 1;
+  }
+  map.on("pitch", updateTiltButton);
+  map.on("rotate", updateTiltButton);
+
   function renderLayerPanel() {
-    const box = layerControl.box;
-    if (!box) return;
+    const box = layerBox;
     const toggle = el("button", {
       type: "button", class: "layer-toggle", "aria-expanded": String(layersOpen),
     }, [el("span", {}, ["Layers"]), el("span", { class: "chevron", "aria-hidden": "true" },
       [layersOpen ? "▴" : "▾"])]);
     toggle.addEventListener("click", () => setLayersOpen(!layersOpen));
+    // A small, quiet (i): the map credits are one tap away, not on the map all the time.
+    const info = el("button", {
+      type: "button", class: "layer-info", title: "Map credits", "aria-label": "Map credits",
+      "aria-expanded": String(creditsOpen),
+    }, ["i"]);
+    info.addEventListener("click", () => {
+      creditsOpen = !creditsOpen;
+      renderLayerPanel();
+    });
+    const head = el("div", { class: "layer-head" }, [toggle, info]);
+    panelCredits = el("div", { class: "layer-credits" });
     box.classList.toggle("collapsed", !layersOpen);
     if (!layersOpen) {
-      panelCredits = null;
-      box.replaceChildren(toggle);
+      box.replaceChildren(head, panelCredits);
       updateCredits();
       return;
     }
@@ -380,13 +651,12 @@
       check.addEventListener("change", () => {
         entry.visible = check.checked;
         slider.disabled = !entry.visible;
-        if (entry.visible) entry.layer.addTo(map);
-        else map.removeLayer(entry.layer);
+        syncMapLayers();
         updateCredits();
       });
       slider.addEventListener("input", () => {
         entry.opacity = Number(slider.value) / 100;
-        entry.layer.setOpacity(entry.opacity);
+        syncMapLayers();
         percent.textContent = `${slider.value}%`;
       });
       return el("div", { class: "layer-row" }, [
@@ -396,31 +666,393 @@
         el("div", { class: "layer-opacity" }, [slider, percent]),
       ]);
     });
-    panelCredits = el("div", { class: "layer-credits" });
-    box.replaceChildren(toggle, ...rows, panelCredits);
+    box.replaceChildren(head, terrainRow(), ...rows, panelCredits);
     updateCredits();
+  }
+
+  // The ground: on/off and how much the relief is exaggerated, or why there is none.
+  function terrainRow() {
+    if (!tileDb) return el("div", {});
+    if (!terrain.info) {
+      return el("div", { class: "layer-row muted" }, [
+        "Flat map: this file has no elevation data. Download or rebuild the canyon to get 3D.",
+      ]);
+    }
+    const check = el("input", { type: "checkbox", id: "layer-terrain" });
+    check.checked = terrain.on;
+    const slider = el("input", {
+      type: "range", min: "10", max: "30", step: "1", "aria-label": "Relief exaggeration",
+    });
+    slider.value = String(Math.round(terrain.exaggeration * 10));
+    slider.disabled = !terrain.on;
+    const factor = el("span", { class: "percent" }, [`×${terrain.exaggeration.toFixed(1)}`]);
+    const remember = () => { prefs.terrain = { on: terrain.on, exaggeration: terrain.exaggeration }; };
+    check.addEventListener("change", () => {
+      terrain.on = check.checked;
+      slider.disabled = !terrain.on;
+      remember();
+      syncMapLayers();
+      updateCredits();
+    });
+    slider.addEventListener("input", () => {
+      terrain.exaggeration = Number(slider.value) / 10;
+      factor.textContent = `×${terrain.exaggeration.toFixed(1)}`;
+      remember();
+      syncMapLayers();
+    });
+    return el("div", { class: "layer-row" }, [
+      el("label", { class: "layer-name", for: check.id }, [check, "3D terrain"]),
+      el("div", { class: "layer-opacity" }, [slider, factor]),
+    ]);
   }
 
   renderLayerPanel();
 
   // ---- sidebar --------------------------------------------------------------------
 
+  // One list for everything on this device: the canyons of the open file, and the canyons of
+  // every other saved file (recorded when it was saved). Each entry shows its file's size and
+  // date, with Open (for a file that is not open) and Remove.
   function renderList() {
     const list = $("canyons");
     list.replaceChildren();
     const filter = $("search").value.trim().toLowerCase();
-    for (const c of state.canyons) {
-      const haystack = `${c.title} ${c.region || ""}`.toLowerCase();
-      if (filter && !haystack.includes(filter)) continue;
-      const meta = [c.region, c.technicalRating !== null ? `T${c.technicalRating}` : null,
-                    c.waterRating, c.timeRating].filter(Boolean).join(" · ");
+    const openFile = state.library.find((f) => f.name === state.fileName) || null;
+    const entries = state.canyons.map((c) => ({ canyon: c, file: openFile, open: true }));
+    for (const f of state.library) {
+      if (f.name === state.fileName) continue; // listed above, from its live canyons
+      const held = f.canyons && f.canyons.length ? f.canyons : [{ title: f.label || f.name }];
+      for (const c of held) entries.push({ canyon: c, file: f, open: false });
+    }
+    for (const { canyon: c, file, open } of entries) {
+      if (filter && !`${c.title} ${c.region || ""}`.toLowerCase().includes(filter)) continue;
+      const meta = [c.region, c.technicalRating !== null && c.technicalRating !== undefined
+        ? `T${c.technicalRating}` : null, c.waterRating, c.timeRating].filter(Boolean).join(" · ");
+      const buttons = [];
+      const flags = outdated.get(c.title);
+      if (flags) {
+        const busy = updating.has(c.title);
+        const updateBtn = el("button", {
+          type: "button", class: "update-btn", disabled: busy ? "" : null,
+          title: "Download what changed (and rebuild the map if needed)",
+        }, [busy ? "Updating…" : "Update"]);
+        updateBtn.addEventListener("click", (e) => { e.stopPropagation(); updateFromList(c, file, open); });
+        buttons.push(updateBtn);
+      }
+      if (file && !open) {
+        const openBtn = el("button", { type: "button" }, ["Open"]);
+        openBtn.addEventListener("click", (e) => { e.stopPropagation(); openLibraryFile(file.name, c.title); });
+        buttons.push(openBtn);
+      }
+      if (file) {
+        const removeBtn = el("button", { type: "button", title: `Remove ${file.label || file.name} from this device` }, ["Remove"]);
+        removeBtn.addEventListener("click", (e) => { e.stopPropagation(); removeLibraryFile(file); });
+        buttons.push(removeBtn);
+      }
       const item = el("li", {
-        class: c.id === state.selectedId ? "active" : null,
-        "data-id": c.id,
-      }, [el("div", {}, [c.title]), el("div", { class: "meta" }, [meta])]);
-      item.addEventListener("click", () => selectCanyon(c.id, "map"));
+        class: [open && c.id === state.selectedId ? "active" : null, flags ? "outdated" : null]
+          .filter(Boolean).join(" ") || null,
+      }, [
+        el("div", { class: "entry" }, [
+          el("div", { class: "what" }, [
+            el("div", {}, [c.title]),
+            meta ? el("div", { class: "meta" }, [meta]) : null,
+            flags ? el("div", { class: "meta outdated-note" }, [outdatedText(flags)]) : null,
+            file ? el("div", { class: "meta file" }, [
+              `${file.name} · ${formatSize(file.size)} · saved ${new Date(file.savedAt).toLocaleDateString()}`,
+            ]) : null,
+          ]),
+          buttons.length ? el("div", { class: "entry-actions" }, buttons) : null,
+        ]),
+      ]);
+      item.addEventListener("click", () => {
+        if (open) selectCanyon(c.id, "map");
+        else openLibraryFile(file.name, c.title);
+      });
       list.append(item);
     }
+  }
+
+  // ---- which cached canyons are out of date --------------------------------------------------
+  // Each canyon on this device (the open file's, and the others from their saved summaries) is
+  // compared with the server's manifest whenever the server can be reached: the list outlines the
+  // out-of-date ones in red and offers an Update button. A copy that records nothing about what it
+  // holds (saved before fingerprints existed) counts as out of date until it has been updated.
+
+  const outdated = new Map(); // canyon title -> {sections, tiles, pending}; absent when current
+  const updating = new Set(); // titles being updated from the list
+  const serverApi = catalog.create();
+  let lastOutdatedCheck = 0;
+  let outdatedRunning = false;
+  let outdatedAgain = false; // asked again while a check was running
+
+  const LAYER_NAMES = {
+    tiles_osm: "street map", tiles_imagery: "aerial imagery", tiles_hillshade: "hillshade",
+    tiles_contours_m: "contours", tiles_contours_ft: "contours", tiles_terrain: "3D elevation",
+  };
+  function outdatedText(flags) {
+    const parts = [...flags.sections];
+    const layers = new Set([...flags.tiles.map((t) => t.layer), ...flags.pending]);
+    if (layers.size) parts.push(`map: ${[...new Set([...layers].map((l) => LAYER_NAMES[l] || l))].join(", ")}`);
+    return `Out of date: ${parts.join(", ") || "newer data on the server"}`;
+  }
+
+  async function checkOutdated(force = false) {
+    if (navigator.onLine === false) return;
+    if (outdatedRunning) {
+      outdatedAgain = outdatedAgain || force || state.db !== null; // the files may have changed
+      return;
+    }
+    if (!force && Date.now() - lastOutdatedCheck < 30_000) return;
+    outdatedRunning = true;
+    outdatedAgain = false;
+    try {
+      if (!(await serverApi.status())) return;
+      const items = [];
+      if (state.db) {
+        const tiles = gpkgUpdate.readTileStamps(state.db);
+        for (const c of state.canyons) {
+          items.push({ title: c.title, stamps: gpkgUpdate.readStamps(state.db, c.id), tiles });
+        }
+      }
+      for (const f of state.library) {
+        if (f.name === state.fileName) continue;
+        for (const c of f.canyons || []) items.push({ title: c.title, stamps: c.stamps || {}, tiles: c.tiles || {} });
+      }
+      if (items.length) lastOutdatedCheck = Date.now();
+      for (const item of items) {
+        let info = null;
+        try {
+          info = await serverApi.manifest(item.title);
+        } catch (err) {
+          console.debug("no manifest for", item.title, err.message);
+          continue; // not on this server, or unreachable: say nothing
+        }
+        const sections = gpkgUpdate.needsUpdate(gpkgUpdate.compare(item.stamps, info))
+          .map((r) => r.label);
+        const tiles = gpkgUpdate.tileUpdates(item.tiles, info.map && info.map.layers);
+        const pending = Object.keys((info.map && info.map.pending) || {});
+        if (sections.length || tiles.length || pending.length) outdated.set(item.title, { sections, tiles, pending });
+        else outdated.delete(item.title);
+      }
+      renderList();
+    } catch (err) {
+      console.warn("Could not check which canyons are out of date:", err);
+    } finally {
+      outdatedRunning = false;
+      if (outdatedAgain) checkOutdated(true);
+    }
+  }
+  window.addEventListener("online", () => checkOutdated(true));
+
+  // Update a canyon from the list: open its file if it is not the open one, then run the same
+  // update as the Overview's button (the server rebuilds stale map layers first).
+  async function updateFromList(c, file, isOpen) {
+    if (updating.has(c.title)) return;
+    updating.add(c.title);
+    renderList();
+    try {
+      setStatus(`Updating ${c.title}…`);
+      if (!isOpen && !(await openLibraryFile(file.name, c.title, null))) return;
+      const current = state.canyons.find((x) => x.title === c.title);
+      if (!current) return;
+      if (!state.detail || state.detail.canyon.id !== current.id) selectCanyon(current.id);
+      await updatesView.run(state.detail, false);
+      setStatus(updatesView.message(c.title) || `${c.title} updated.`);
+    } finally {
+      updating.delete(c.title);
+      outdated.delete(c.title);
+      renderList();
+      checkOutdated(true);
+    }
+  }
+
+  // ---- field data store, shared with the Companion view ---------------------------------
+
+  let storePromise = null;
+  const getStore = () => {
+    storePromise = storePromise || companionStore.openStore(companion);
+    return storePromise;
+  };
+
+  // ---- weather forecast -----------------------------------------------------------------
+  // The GeoPackage may carry a forecast cached when it was built; one fetched here is kept in
+  // IndexedDB (not in the 100 MB file) and the newer of the two is shown. "Save GeoPackage" in
+  // Settings writes the newest into the exported file.
+
+  function ageText(ms) {
+    const minutes = Math.max(0, Math.round(ms / 60_000));
+    if (minutes < 1) return "just now";
+    if (minutes < 60) return `${minutes} min ago`;
+    if (minutes < 48 * 60) return `${Math.round(minutes / 60)} h ago`;
+    return `${Math.round(minutes / 1440)} days ago`;
+  }
+
+  function loadForecast(detail) {
+    const title = detail.canyon.title;
+    const entry = { title, record: detail.forecast, busy: false, message: "", ready: null };
+    state.forecast = entry;
+    // `ready` settles once the copy kept on this device has been read, so the staleness check
+    // never runs against a forecast that is only missing because it hasn't loaded yet.
+    entry.ready = (async () => {
+      try {
+        const saved = await (await getStore()).getForecast(title);
+        entry.record = forecast.newest(detail.forecast, saved);
+      } catch (err) {
+        console.warn("Could not read the saved forecast:", err);
+      }
+      if (state.forecast === entry) companionView.refreshWeather();
+      if (state.forecast === entry && state.tab === "Forecast") {
+        renderPanel();
+        refreshForecastIfStale();
+      }
+    })();
+  }
+
+  async function refreshForecast(manual) {
+    const entry = state.forecast;
+    const detail = state.detail;
+    if (!entry || !detail || entry.title !== detail.canyon.title || entry.busy) return;
+    const redraw = () => { if (state.forecast === entry && state.tab === "Forecast") renderPanel(); };
+    if (!detail.canyon.point) {
+      entry.message = "This canyon has no location, so there is no forecast to fetch.";
+      redraw();
+      return;
+    }
+    if (navigator.onLine === false) {
+      if (manual) entry.message = "No network connection. Showing the last saved forecast.";
+      redraw();
+      return;
+    }
+    entry.busy = true;
+    entry.message = "";
+    redraw();
+    try {
+      const [lon, lat] = detail.canyon.point.coordinates;
+      entry.record = await forecast.fetchForecast(lat, lon);
+      try {
+        await (await getStore()).saveForecast(entry.title, entry.record);
+      } catch (err) {
+        entry.message = `Updated, but it could not be kept for offline use (${err.message}).`;
+      }
+    } catch (err) {
+      entry.message = `Could not update the forecast (${err.message}). Showing the last saved one.`;
+    }
+    entry.busy = false;
+    if (state.forecast === entry) companionView.refreshWeather();
+    redraw();
+  }
+
+  async function refreshForecastIfStale() {
+    const entry = state.forecast;
+    if (!entry) return;
+    await entry.ready;
+    if (state.forecast !== entry || entry.busy) return;
+    const stale = !entry.record
+      || Date.now() - Date.parse(entry.record.fetched_at) > FORECAST_STALE_MS;
+    if (stale && navigator.onLine !== false) refreshForecast(false);
+  }
+
+  function dayLabel(date) {
+    return new Date(`${date}T12:00:00`).toLocaleDateString([], {
+      weekday: "short", month: "short", day: "numeric",
+    });
+  }
+
+  // The last 2 hours and the next 24, hour by hour: weather, temperature, rain and wind. Past
+  // hours are dimmed, the current hour is marked, and a day heading marks where tomorrow begins.
+  // Collapsible like the description sections.
+  let hourlyOpen = true;
+
+  function renderHourly(record, u) {
+    const hours = forecast.hoursAround(record);
+    if (!hours.length) {
+      return el("p", { class: "muted" }, [
+        "Hourly values are not in this forecast yet; update the forecast to get them.",
+      ]);
+    }
+    const now = forecast.currentHourAt(record.timezone);
+    const rows = [];
+    hours.forEach((h, i) => {
+      if (i > 0 && h.time.slice(0, 10) !== hours[i - 1].time.slice(0, 10)) {
+        rows.push(el("div", { class: "fc-hour-day" }, [dayLabel(h.time.slice(0, 10))]));
+      }
+      const category = forecast.weatherCategory(h.weather_code);
+      const rain = [h.precip_mm > 0 ? forecast.formatRain(h.precip_mm, u) : null,
+        h.precip_prob_pct > 0 ? `${h.precip_prob_pct}%` : null].filter(Boolean).join(" · ");
+      rows.push(el("div", { class: `fc-hour${h.time < now ? " past" : ""}${h.time === now ? " now" : ""}` }, [
+        el("span", { class: "hour" }, [forecast.hourLabel(h.time)]),
+        category ? weatherIcons.element(category, forecast.describeWeather(h.weather_code))
+          : el("span", {}, []),
+        el("span", { class: "temp" }, [forecast.formatTemp(h.temp_c, u)]),
+        el("span", { class: "rain" }, [rain]),
+        el("span", { class: "wind" }, [forecast.formatWind(h.wind_kmh, u)]),
+      ]));
+    });
+    const details = el("details", { class: "desc-section hourly" }, [
+      el("summary", {}, [el("h3", {}, ["Next 24 hours"])]),
+      el("div", { class: "fc-hours" }, rows),
+    ]);
+    details.open = hourlyOpen;
+    details.addEventListener("toggle", () => { hourlyOpen = details.open; });
+    return details;
+  }
+
+  function renderForecast(d) {
+    const entry = state.forecast && state.forecast.title === d.canyon.title ? state.forecast : null;
+    const record = entry && entry.record;
+    const u = units();
+    const button = el("button", {
+      type: "button", class: "small", disabled: entry && entry.busy ? "" : null,
+    }, [entry && entry.busy ? "Updating…" : "Update forecast"]);
+    button.addEventListener("click", () => refreshForecast(true));
+    const updated = record
+      ? `Updated ${new Date(record.fetched_at).toLocaleString()} (${
+        ageText(Date.now() - Date.parse(record.fetched_at))})`
+      : "No forecast saved for this canyon yet.";
+    const parts = [
+      el("div", { class: "fc-head" }, [el("div", { class: "updated" }, [updated]), button]),
+      entry && entry.message ? el("p", { class: "notice" }, [entry.message]) : null,
+    ];
+    if (!record) {
+      parts.push(el("p", { class: "muted" }, [
+        "Update it when you have a network connection; it is then kept for offline use.",
+      ]));
+      return parts;
+    }
+    parts.push(renderHourly(record, u));
+    for (const day of record.days) {
+      const storm = forecast.isThunderstorm(day.weather_code);
+      const wet = day.precip_mm !== null && day.precip_mm >= 10;
+      const rain = [forecast.formatRain(day.precip_mm, u),
+        day.precip_prob_pct ? `${day.precip_prob_pct}%` : null].filter(Boolean).join(" · ");
+      const category = forecast.weatherCategory(day.weather_code);
+      parts.push(el("div", { class: storm || wet ? "fc-day warn" : "fc-day" }, [
+        el("div", { class: "top" }, [
+          el("span", { class: "day-title" }, [
+            category ? weatherIcons.element(category, forecast.describeWeather(day.weather_code)) : null,
+            el("b", {}, [dayLabel(day.date)]),
+          ]),
+          el("span", {}, [forecast.describeWeather(day.weather_code)]),
+        ]),
+        el("div", {}, [
+          `${forecast.formatTemp(day.temp_max_c, u)} / ${forecast.formatTemp(day.temp_min_c, u)}`
+          + ` · Rain ${rain} · Wind ${forecast.formatWind(day.wind_max_kmh, u)}`
+          + `, gusts ${forecast.formatWind(day.gust_max_kmh, u)}`,
+        ]),
+        el("div", { class: "sub" }, [
+          `Daylight ${forecast.clockTime(day.sunrise)} – ${forecast.clockTime(day.sunset)}`,
+        ]),
+      ]));
+    }
+    parts.push(el("p", { class: "muted" }, [
+      `${record.source === "open-meteo" ? "Open-Meteo" : record.source} model forecast for `
+      + `${record.elevation_m !== null && record.elevation_m !== undefined
+        ? `a point at ${metres(record.elevation_m)}` : "the canyon's mapped point"}`
+      + ", not for the canyon floor. It is not a flash-flood warning: check the official "
+      + "forecast and radar before committing to a descent.",
+    ]));
+    return parts;
   }
 
   // ---- detail tabs ----------------------------------------------------------------
@@ -434,6 +1066,7 @@
         state.tab = name;
         renderTabs();
         renderPanel();
+        if (name === "Forecast") refreshForecastIfStale();
       });
       bar.append(button);
     }
@@ -441,8 +1074,32 @@
 
   function table(rows) {
     const body = el("tbody", {}, rows.filter(([, v]) => v !== "" && v !== null && v !== undefined)
-      .map(([k, v]) => el("tr", {}, [el("th", {}, [k]), el("td", {}, [String(v)])])));
+      .map(([k, v]) => el("tr", {}, [el("th", {}, [k]),
+        el("td", {}, [v instanceof Node ? v : String(v)])])));
     return el("table", {}, [body]);
+  }
+
+  // Only web links are made clickable (the file's text is not trusted to be a safe URL).
+  const webUrl = (url) => (/^https?:\/\//i.test(url || "") ? url : null);
+
+  // Credit for the canyon's text and data: Ropewiki, its licence and the page's authors.
+  function renderAttribution(d) {
+    const c = d.canyon;
+    const link = (url, label) => (webUrl(url)
+      ? el("a", { href: url, target: "_blank", rel: "noopener noreferrer" }, [label]) : label);
+    const authors = d.authors.length
+      ? `${d.authors.join(", ")}${c.anonymousAuthors ? `, and ${c.anonymousAuthors} anonymous` : ""}`
+      : null;
+    return el("section", { class: "attribution" }, [
+      el("h3", {}, ["Attribution"]),
+      el("p", {}, [
+        "Canyon data and text from ", link(c.sourceUrl, "Ropewiki"),
+        c.licenseName ? [", used under ", link(c.licenseUrl, c.licenseName)] : null,
+        ". Authors of this page: ",
+        authors || "not recorded in this file (see the page history on Ropewiki)",
+        ".",
+      ].flat()),
+    ]);
   }
 
   function renderOverview(d) {
@@ -472,16 +1129,66 @@
           ["Ropewiki page"]) : null],
         ["Fetched", c.fetchedAt],
       ]),
+      d.links.length ? collapsedSection(d, "links", `Links (${d.links.length})`, renderLinks(d)) : null,
+      d.ratings.length
+        ? collapsedSection(d, "ratings", `Ratings (${ratingsSummary(d)})`, renderRatings(d)) : null,
+      updatesView.render(d),
+      renderAttribution(d),
     ];
   }
 
+  // Description sections the user has collapsed, by canyon and section, so switching tabs or
+  // changing units does not open them again.
+  const collapsedSections = new Set();
+  const DOUBLE_TAP_MS = 350;
+
+  // A double tap anywhere in a section collapses it, so a thumb need not reach the heading.
+  // Tracked by screen position across the whole tab: tapping a heading collapses its section at
+  // once, which moves the sections around, so the second tap of a double tap may land on a
+  // different one. That second tap is absorbed, and the section tapped first ends up collapsed.
+  // Taps on links are left alone.
+  let lastTap = null;
+  let pendingScroll = null; // a section the user just opened by tapping its heading
+  $("panel").addEventListener("click", (event) => {
+    if (state.tab !== "Description" || event.target.closest("a")) return;
+    if (lastTap && event.timeStamp - lastTap.time < DOUBLE_TAP_MS
+      && Math.hypot(event.clientX - lastTap.x, event.clientY - lastTap.y) < 40) {
+      event.preventDefault();
+      event.stopPropagation();
+      lastTap.details.open = false;
+      lastTap = null;
+      return;
+    }
+    const details = event.target.closest("details.desc-section");
+    lastTap = details ? { time: event.timeStamp, x: event.clientX, y: event.clientY, details } : null;
+    // Opening a section by its heading brings its top to the top of the page.
+    pendingScroll = details && !details.open && event.target.closest("summary") ? details : null;
+  }, true);
+
+  // Each section of the page text can be collapsed by tapping its heading or double-tapping it.
   function renderDescription(d) {
     if (!d.sections.length) return [el("p", { class: "muted" }, ["No description."])];
-    return d.sections.map((s) => {
+    // Sections fill from the bottom up (the first is the lowest), like the lists.
+    const sections = d.sections.map((s) => {
+      const key = `${d.canyon.title}\u0000${s.position}`;
       const body = el("div", {});
       body.innerHTML = sanitize(s.body_html);
-      return el("section", {}, [el("h3", {}, [s.heading]), body]);
+      const details = el("details", { class: "desc-section" }, [
+        el("summary", {}, [el("h3", {}, [s.heading])]),
+        body,
+      ]);
+      details.open = !collapsedSections.has(key);
+      details.addEventListener("toggle", () => {
+        if (details.open) collapsedSections.delete(key);
+        else collapsedSections.add(key);
+        if (details.open && pendingScroll === details) {
+          pendingScroll = null;
+          details.scrollIntoView({ block: "start", behavior: "smooth" });
+        }
+      });
+      return details;
     });
+    return [el("div", { class: "bottom-up-list" }, sections)];
   }
 
   function renderRappels(d) {
@@ -520,29 +1227,51 @@
   }
 
   function renderLinks(d) {
-    if (!d.links.length) return [el("p", { class: "muted" }, ["No links."])];
     return [el("ul", {}, d.links.map((l) => el("li", {}, [
-      el("a", { href: l.url, target: "_blank", rel: "noopener noreferrer" }, [l.label || l.url]),
+      webUrl(l.url)
+        ? el("a", { href: l.url, target: "_blank", rel: "noopener noreferrer" }, [l.label || l.url])
+        : (l.label || l.url),
       l.source_name ? el("span", { class: "muted" }, [` (${l.source_name})`]) : null,
     ])))];
   }
 
-  function renderRatings(d) {
-    if (!d.ratings.length) return [el("p", { class: "muted" }, ["No ratings."])];
+  function ratingsSummary(d) {
     const avg = d.ratings.reduce((sum, r) => sum + (r.rating || 0), 0) / d.ratings.length;
+    const n = d.ratings.length;
+    return `${n} ${n === 1 ? "rating" : "ratings"}, average ${avg.toFixed(1)}`;
+  }
+
+  function renderRatings(d) {
     return [
-      el("p", {}, [`${d.ratings.length} ratings, average ${avg.toFixed(1)}`]),
+      el("p", {}, [ratingsSummary(d)]),
       table(d.ratings.map((r) => [r.rater || "anonymous", r.rating])),
     ];
   }
 
+  // Overview sections that start collapsed (Links, Ratings); the ones the user opened stay open
+  // while switching tabs or changing units.
+  const openOverviewSections = new Set();
+
+  function collapsedSection(d, name, summary, content) {
+    const key = `${d.canyon.title}\u0000${name}`;
+    const details = el("details", { class: "desc-section overview-section" }, [
+      el("summary", {}, [el("h3", {}, [summary])]),
+      el("div", {}, content),
+    ]);
+    details.open = openOverviewSections.has(key);
+    details.addEventListener("toggle", () => {
+      if (details.open) openOverviewSections.add(key);
+      else openOverviewSections.delete(key);
+    });
+    return details;
+  }
+
   const RENDERERS = {
     Overview: renderOverview,
+    Forecast: renderForecast,
     Description: renderDescription,
     Rappels: renderRappels,
     Conditions: renderConditions,
-    Links: renderLinks,
-    Ratings: renderRatings,
   };
 
   function renderPanel() {
@@ -551,13 +1280,18 @@
       panel.replaceChildren(el("p", { class: "muted" }, ["Select a canyon."]));
       return;
     }
-    panel.replaceChildren(...RENDERERS[state.tab](state.detail));
+    // The Description tab starts at its bottom (see style.css); the others at their top.
+    panel.classList.toggle("bottom-up", state.tab === "Description");
+    panel.replaceChildren(...RENDERERS[state.tab](state.detail).filter(Boolean));
+    if (panel.dataset.tab !== state.tab) panel.scrollTop = 0; // a new tab starts at its start
+    panel.dataset.tab = state.tab;
   }
 
   // ---- actions --------------------------------------------------------------------
 
   function showView(name) {
     state.view = name;
+    document.body.classList.remove("searching");
     for (const section of document.querySelectorAll(".view")) {
       section.hidden = section.id !== `view-${name}`;
     }
@@ -568,6 +1302,7 @@
       else button.removeAttribute("aria-current");
     }
     if (name === "map") runPendingMap();
+    if (name === "canyons") catalogView.check();
     companionView.onViewChange(name);
   }
 
@@ -585,6 +1320,7 @@
       return;
     }
     companionView.setCanyon(state.detail);
+    loadForecast(state.detail);
     renderList();
     renderTabs();
     renderPanel();
@@ -597,16 +1333,29 @@
 
   // Resolves true once the file is open (false after reporting an error in the status line).
   // `remember` keeps a copy in IndexedDB so the page can reopen it offline.
-  function loadDatabase(bytes, label, remember = true) {
-    return gpkg.openDatabase(GeoPackage, bytes).then((db) => {
+  // Updates downloaded for this device are kept as small patches (the file itself is not
+  // rewritten); apply them to a freshly opened file, and drop the ones it already contains.
+  async function applyKeptPatches(db) {
+    try {
+      const store = await getStore();
+      const result = gpkgUpdate.applyStoredPatches(db, await store.allPatches());
+      if (result.obsolete.length) await store.deletePatches(result.obsolete);
+    } catch (err) {
+      console.warn("Could not apply the updates kept on this device:", err);
+    }
+  }
+
+  function loadDatabase(bytes, label, remember = true, fileName = label) {
+    return gpkg.openDatabase(GeoPackage, bytes).then(async (db) => {
+      await applyKeptPatches(db);
       if (state.db) state.db.close();
       state.db = db;
+      state.fileName = fileName;
+      state.forecast = null;
       removeGpkgLayers();
       prefs = {};
       setGpkgLayers(db);
       state.canyons = gpkg.listCanyons(db);
-      state.limitArea = coveredArea();
-      applyMapLimits();
       state.selectedId = null;
       state.detail = null;
       companionView.setCanyon(null);
@@ -614,10 +1363,12 @@
       setStatus(`${label}: ${state.canyons.length} canyons`);
       renderList();
       drawCanyons();
-      detailLayer.clearLayers();
+      clearDetail();
       renderTabs();
       renderPanel();
-      if (remember) rememberFile(bytes, label);
+      if (remember) rememberFile(bytes, fileName);
+      else backfillCanyons(fileName);
+      renderLibrary();
       return true;
     }).catch((err) => {
       setStatus(`Could not open ${label}: ${err.message}`);
@@ -633,9 +1384,30 @@
     return fileCachePromise;
   };
 
+  // What the list shows for a file that is not open: a short summary of its canyons.
+  // It also records what the file holds (section fingerprints, map layer stamps), so the list can
+  // tell which cached canyons are out of date without opening each file.
+  const canyonSummaries = () => {
+    const tiles = gpkgUpdate.readTileStamps(state.db);
+    return state.canyons.map((c) => ({
+      title: c.title, region: c.region, technicalRating: c.technicalRating,
+      waterRating: c.waterRating, timeRating: c.timeRating,
+      stamps: gpkgUpdate.readStamps(state.db, c.id), tiles,
+    }));
+  };
+
+  // Files saved before the summary existed (and downloads) get it once they have been opened.
+  async function backfillCanyons(name) {
+    try {
+      if (await (await getFileCache()).setMeta(name, { canyons: canyonSummaries() })) renderLibrary();
+    } catch (err) {
+      console.warn("Could not record the canyons of a saved file:", err);
+    }
+  }
+
   async function rememberFile(bytes, name) {
     try {
-      await (await getFileCache()).save(name, bytes);
+      await (await getFileCache()).save(name, bytes, { canyons: canyonSummaries() });
       try { await navigator.storage?.persist?.(); } catch (err) { /* best effort */ }
       settingsView.refreshOffline();
     } catch (err) {
@@ -643,12 +1415,82 @@
     }
   }
 
+  // ---- the files kept on this device -------------------------------------------------------
+
+  const formatSize = (bytes) => (bytes >= 1e6 ? `${(bytes / 1e6).toFixed(1)} MB`
+    : `${Math.max(1, Math.round(bytes / 1e3))} kB`);
+
+  async function renderLibrary() {
+    try {
+      state.library = await (await getFileCache()).list();
+    } catch (err) {
+      console.warn("Could not list the saved GeoPackages:", err);
+      state.library = [];
+    }
+    $("search").disabled = !state.db && state.library.length === 0;
+    renderList();
+    checkOutdated();
+  }
+
+  async function removeLibraryFile(file) {
+    const count = file.canyons && file.canyons.length > 1 ? ` It holds ${file.canyons.length} canyons.` : "";
+    if (!confirm(`Remove ${file.label || file.name} (${formatSize(file.size)}) from this device?${count} Runs you recorded stay.`)) return;
+    await (await getFileCache()).remove(file.name);
+    await renderLibrary();
+    settingsView.refreshOffline();
+  }
+
+  // Open a saved file, then show one of its canyons (by title) when asked.
+  async function openLibraryFile(name, selectTitle, show = "map") {
+    try {
+      const saved = await (await getFileCache()).load(name);
+      if (!saved) { setStatus(`${name} is no longer saved on this device.`); renderLibrary(); return false; }
+      setStatus(`Opening ${saved.label || saved.name}…`);
+      if (await loadDatabase(saved.bytes, saved.label || saved.name, false, saved.name)) {
+        await (await getFileCache()).setLast(saved.name);
+        const wanted = selectTitle && state.canyons.find((c) => c.title === selectTitle);
+        if (wanted) selectCanyon(wanted.id, show);
+        return true;
+      }
+    } catch (err) {
+      setStatus(`Could not open ${name}: ${err.message}`);
+    }
+    return false;
+  }
+
+  // A GeoPackage the server built was downloaded (and already saved): open it, and show the
+  // canyon when the file is for just one.
+  async function openDownloaded({ bytes, name, label }) {
+    if (!(await loadDatabase(bytes, label, false, name))) throw new Error("The file could not be opened");
+    if (state.canyons.length === 1) selectCanyon(state.canyons[0].id, "map");
+    settingsView.refreshOffline();
+  }
+
+  // Download the server's current file for a canyon (its map layers changed) and open it in place
+  // of the one open now. Runs, events and fixes live apart from the file, so they carry over.
+  async function refetchCanyonFile(title, onStage) {
+    const api = catalog.create();
+    onStage("Asking the server for the current map");
+    let job = await api.startBuild(title, { tiles: true });
+    job = await api.waitForJob(job.id, { onUpdate: (j) => onStage(j.stage) });
+    if (job.state === "failed") throw new Error(job.error || "The build failed.");
+    onStage(`Downloading ${formatSize(job.size)}`);
+    const bytes = await api.download(job.url);
+    const cache = await getFileCache();
+    const previous = state.fileName;
+    await cache.save(job.file, bytes, { label: job.title });
+    if (previous && previous !== job.file) await cache.remove(previous).catch(() => {});
+    await openDownloaded({ bytes, name: job.file, label: job.title });
+    await renderLibrary();
+  }
+
   // Open the saved copy; false when there is none.
   async function openSaved(note) {
     try {
       const saved = await (await getFileCache()).load();
       if (!saved) return false;
-      return await loadDatabase(saved.bytes, `${saved.name} (saved copy${note || ""})`, false);
+      return await loadDatabase(
+        saved.bytes, `${saved.name} (saved copy${note || ""})`, false, saved.name);
     } catch (err) {
       console.warn("Could not open the saved GeoPackage:", err);
       return false;
@@ -656,8 +1498,25 @@
   }
 
   if ("serviceWorker" in navigator && window.isSecureContext) {
-    navigator.serviceWorker.register("sw.js").then(() => settingsView.refreshOffline())
-      .catch((err) => console.warn("Offline support unavailable:", err));
+    // An installed app can stay open for days on old code. When a new version of the page has
+    // been installed, say so and offer a reload (not forced: a run in progress must not be cut
+    // off); and look for a new version whenever the app comes back to the foreground.
+    const hadController = Boolean(navigator.serviceWorker.controller);
+    let offered = false;
+    navigator.serviceWorker.addEventListener("controllerchange", () => {
+      if (!hadController || offered) return;
+      offered = true;
+      const reload = el("button", { type: "button", class: "update-banner" },
+        ["A new version of this page is ready. Tap to reload."]);
+      reload.addEventListener("click", () => window.location.reload());
+      document.body.append(reload);
+    });
+    navigator.serviceWorker.register("sw.js").then((registration) => {
+      settingsView.refreshOffline();
+      document.addEventListener("visibilitychange", () => {
+        if (document.visibilityState === "visible") registration.update().catch(() => {});
+      });
+    }).catch((err) => console.warn("Offline support unavailable:", err));
   }
 
   // A GeoPackage is a SQLite file, so check the header rather than the file name or type.
@@ -682,9 +1541,62 @@
 
   // ---- wiring ---------------------------------------------------------------------
 
+  // The open GeoPackage plus everything recorded on this device, as a file to share or download.
+  // Writes into the open database (idempotent), so the page keeps working afterwards.
+  async function prepareExport() {
+    if (!state.db) throw new Error("Open a GeoPackage first.");
+    const summary = gpkgWrite.saveInto(state.db, await (await getStore()).allRecords());
+    const bytes = await state.db.export();
+    const base = state.fileName.replace(/\.gpkg$/i, "").replace(/-\d{8}$/, "") || "canyons";
+    const name = `${base}-${new Date().toISOString().slice(0, 10).replaceAll("-", "")}.gpkg`;
+    let file = share.makeFile(name, bytes, GPKG_TYPE);
+    // iOS only shares media types it knows; fall back to a generic one (no second copy: the
+    // new file points at the same data).
+    if (share.prefersShareSheet() && !share.canShareFile(file)) {
+      file = share.makeFile(name, file, "application/octet-stream");
+    }
+    const count = (n, word, plural = `${word}s`) => `${n} ${n === 1 ? word : plural}`;
+    const notes = [`${name} · ${(file.size / 1e6).toFixed(1)} MB.`,
+      `Written: ${count(summary.runs, "run")}, ${count(summary.events, "event")}, `
+      + `${count(summary.fixes, "GPS fix", "GPS fixes")} and `
+      + `${count(summary.forecasts, "new forecast")}.`];
+    if (summary.skippedRuns) {
+      notes.push(`${count(summary.skippedRuns, "run")} for canyons not in this file left out.`);
+    }
+    return { file, note: notes.join(" ") };
+  }
+
   // Companion mode (GPS guidance down the selected canyon) lives in its own view.
-  const companionView = companionUI.create({ el, $, map, goTo: showView });
-  const settingsView = settingsUI.create({ $, settings, getFileCache });
+  const companionView = companionUI.create({
+    el, $, map, whenStyleReady, fitPoints, labelImage, goTo: showView, getStore,
+    // The forecast of the canyon being run, for the pictures under the stopwatch.
+    getForecast: (title) => (state.forecast && state.forecast.title === title
+      ? state.forecast.record : null),
+  });
+  const settingsView = settingsUI.create({
+    $, settings, getFileCache, prepareExport, hasDatabase: () => Boolean(state.db),
+  });
+  window.addEventListener("online", () => {
+    if (state.view === "detail" && state.tab === "Forecast") refreshForecastIfStale();
+  });
+  // Out-of-date parts of the open canyon, compared with the server's fingerprints.
+  const updatesView = updatesUI.create({
+    el, catalog: catalog.create(), update: gpkgUpdate, getDb: () => state.db, getStore,
+    onApplied: (title) => {
+      state.canyons = gpkg.listCanyons(state.db); // the update may have changed the list's details
+      if (state.detail && state.detail.canyon.title === title) selectCanyon(state.selectedId);
+      else renderList();
+      backfillCanyons(state.fileName); // the list's record of what this file holds
+      checkOutdated(true);
+    },
+    redraw: () => { if (state.tab === "Overview") renderPanel(); },
+    refetch: refetchCanyonFile,
+  });
+
+  // Search and download canyons from the server (shown only while it can be reached).
+  const catalogView = catalogUI.create({
+    $, el, catalog: catalog.create(), getFileCache, onDownloaded: openDownloaded,
+  });
   let lastUnits = settings.get().units;
   settings.onChange((now) => {
     renderPanel();
@@ -702,6 +1614,19 @@
     if (file) openFile(file);
   });
   $("search").addEventListener("input", renderList);
+  // While typing in a search field the bottom bar steps aside, leaving more room for the results.
+  // It comes back a moment after the field loses focus, so a tap on a result is not lost to the
+  // layout moving under the finger.
+  let barTimer = null;
+  for (const id of ["search", "catalog-search"]) {
+    $(id).addEventListener("focus", () => {
+      clearTimeout(barTimer);
+      document.body.classList.add("searching");
+    });
+    $(id).addEventListener("blur", () => {
+      barTimer = setTimeout(() => document.body.classList.remove("searching"), 300);
+    });
+  }
   $("bottom-bar").addEventListener("click", (event) => {
     const button = event.target.closest("button[data-view]");
     if (button) showView(button.dataset.view);
@@ -724,7 +1649,7 @@
     setStatus(`Loading ${url}…`);
     fetch(url)
       .then((r) => { if (!r.ok) throw new Error(`HTTP ${r.status}`); return r.arrayBuffer(); })
-      .then((buf) => loadDatabase(new Uint8Array(buf), url))
+      .then((buf) => loadDatabase(new Uint8Array(buf), url, true, url.split("/").pop()))
       .catch(async (err) => {
         if (!(await openSaved(`; could not load ${url}: ${err.message}`))) {
           setStatus(`Could not load ${url}: ${err.message}`);
@@ -736,5 +1661,6 @@
 
   renderTabs();
   renderPanel();
+  renderLibrary();
   showView("canyons");
 })();

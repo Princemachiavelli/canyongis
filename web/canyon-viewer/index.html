@@ -3,27 +3,54 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-  <title>Canyon GeoPackage Viewer</title>
-  <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+  <title>Canyon Viewer</title>
+  <link rel="manifest" href="manifest.webmanifest">
+  <meta name="theme-color" content="#2f6f4e">
+  <meta name="mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="apple-mobile-web-app-title" content="Canyons">
+  <meta name="apple-mobile-web-app-status-bar-style" content="default">
+  <link rel="icon" type="image/png" sizes="192x192" href="icons/icon-192.png">
+  <link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css">
   <link rel="stylesheet" href="style.css">
 </head>
 <body>
   <div id="drop" class="views">
-    <section id="view-canyons" class="view scroll" aria-label="Canyons">
+    <section id="view-canyons" class="view canyons" aria-label="Canyons">
+      <div class="canyons-scroll">
       <div class="view-inner">
-        <div class="view-head">
-          <h1>Canyon viewer</h1>
-          <button type="button" id="open-settings" class="gear" aria-label="Settings" title="Settings">⚙</button>
-        </div>
+        <h1>Canyon viewer</h1>
+        <p id="status" class="status">Open a canyon GeoPackage to begin.</p>
+        <section id="get-canyon" hidden>
+          <h2 class="section-title">Get a canyon</h2>
+          <input id="catalog-search" type="search" placeholder="Search Ropewiki canyons" autocomplete="off">
+          <p id="catalog-note" class="status"></p>
+          <ul id="catalog-results" class="canyon-list"></ul>
+          <div id="catalog-job" class="job" hidden>
+            <h3 id="catalog-job-title"></h3>
+            <label class="check"><input type="checkbox" id="catalog-tiles" checked> Include the offline map</label>
+            <p id="catalog-tiles-note" class="muted"></p>
+            <progress id="catalog-progress" hidden></progress>
+            <p id="catalog-stage"></p>
+            <p id="catalog-detail" class="muted"></p>
+            <div class="dialog-row">
+              <button type="button" id="catalog-start" class="primary">Get GeoPackage</button>
+              <button type="button" id="catalog-cancel">Close</button>
+            </div>
+          </div>
+        </section>
+        <ul id="canyons" class="canyon-list"></ul>
+      </div>
+      </div>
+      <!-- Controls at the bottom, where a thumb reaches them -->
+      <div class="canyon-toolbar">
+        <input id="search" type="search" placeholder="Filter canyons" disabled>
         <label class="button">
           Open .gpkg
           <input id="file" type="file">
         </label>
-        <p id="status" class="status">Open a canyon GeoPackage to begin.</p>
-        <input id="search" type="search" placeholder="Filter canyons" disabled>
-        <ul id="canyons" class="canyon-list"></ul>
-        <h2 class="credits-title">Map credits</h2>
-        <ul id="credits" class="credits"></ul>
+        <button type="button" id="open-settings" class="gear" aria-label="Settings" title="Settings">⚙</button>
       </div>
     </section>
 
@@ -38,8 +65,8 @@
     </section>
 
     <section id="view-detail" class="view detail" aria-label="Details" hidden>
-      <nav class="tabs" id="tabs"></nav>
       <div id="panel" class="panel"><p class="muted">Select a canyon.</p></div>
+      <nav class="tabs" id="tabs"></nav>
     </section>
   </div>
 
@@ -50,8 +77,27 @@
       <label><input type="radio" name="units" value="metric"> Metric (m, km)</label>
       <label><input type="radio" name="units" value="imperial"> Imperial (ft, mi)</label>
     </fieldset>
+    <fieldset>
+      <legend>Temperature pictures (Companion)</legend>
+      <label>Hot icon when the day's high is above
+        <input type="number" id="set-hot" inputmode="numeric" step="1" min="-50" max="140">
+        <span class="temp-unit"></span></label>
+      <label>Cold icon when the day's high is below
+        <input type="number" id="set-cold" inputmode="numeric" step="1" min="-50" max="140">
+        <span class="temp-unit"></span></label>
+    </fieldset>
     <label class="check"><input type="checkbox" id="set-compass"> Compass heading on the map</label>
     <p id="compass-note" class="muted"></p>
+    <h3>Install</h3>
+    <p id="install-note" class="muted"></p>
+    <p id="display-note" class="muted"></p>
+    <button type="button" id="install-app" hidden>Install app</button>
+    <p id="storage-note" class="muted"></p>
+    <h3>Save GeoPackage</h3>
+    <p class="muted">Writes the runs, GPS fixes and forecasts saved on this device into a copy of
+      the open GeoPackage.</p>
+    <button type="button" id="save-export" disabled>Save GeoPackage</button>
+    <p id="export-note" class="muted"></p>
     <h3>Offline</h3>
     <p id="app-cache" class="muted"></p>
     <p id="saved-file" class="muted"></p>
@@ -68,9 +114,18 @@
     <button type="button" data-view="companion">Companion</button>
   </nav>
 
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/@ngageoint/geopackage@4.2.10/dist/geopackage.min.js"></script>
   <script src="gpkg.js"></script>
+  <script src="gpkg-write.js"></script>
+  <script src="gpkg-update.js"></script>
+  <script src="forecast.js"></script>
+  <script src="weather-icons.js"></script>
+  <script src="share.js"></script>
+  <script src="catalog.js"></script>
+  <script src="catalog-ui.js"></script>
+  <script src="updates-ui.js"></script>
+  <script src="install.js"></script>
   <script src="settings.js"></script>
   <script src="filecache.js"></script>
   <script src="companion.js"></script>

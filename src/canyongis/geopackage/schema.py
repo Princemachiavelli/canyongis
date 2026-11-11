@@ -1,4 +1,4 @@
-"""GeoPackage schema for canyon data (version 1).
+"""GeoPackage schema for canyon data (version 5).
 
 The GeoPackage is an intermediate, portable copy of the canonical store. Its
 tables and types are chosen to map cleanly onto PostGIS later:
@@ -7,8 +7,14 @@ tables and types are chosen to map cleanly onto PostGIS later:
   ``canyons`` (point), ``routes`` (line), ``waypoints`` (point), ``rappels`` (point).
 * Attribute tables (no geometry): ``conditions`` (one row per condition report, dated
   by ``trip_date``) with ``condition_rappel_notes`` and ``condition_photos`` children,
-  ``ratings``, ``beta`` (wiki, plain and HTML text), ``links``, ``kml_files``.
+  ``ratings``, ``beta`` (wiki, plain and HTML text), ``links``, ``kml_files``, and the
+  weather ``forecasts`` / ``forecast_days``.
+* Run tables written by the canyon companion app (``runs`` line, ``run_events`` and
+  ``run_fixes`` points). They are keyed by canyon title, not ``canyon_id``.
 * ``schema_meta`` holds the schema version and generator.
+
+Version 4 added what the KML itself says: ``routes.color`` (``#rrggbb``), ``waypoints.description``
+and ``rappels.kml_name`` / ``kml_description`` (the node's own name, e.g. ``R1-R5``, and text).
 
 Natural keys (``canyons.ropewiki_title``) are unique, and every child row carries
 an integer ``canyon_id`` foreign key, so loading into PostgreSQL is a row-for-row copy.
@@ -22,7 +28,7 @@ from pathlib import Path
 
 from .geometry import WGS84_SRS_ID, blob_envelope
 
-SCHEMA_VERSION = "2"
+SCHEMA_VERSION = "5"
 GENERATOR = "canyongis-geopackage"
 # GeoPackage 1.4 application_id and user_version (see OGC 12-128r18).
 APPLICATION_ID = 0x47504B47  # 'GPKG'
@@ -42,6 +48,10 @@ FEATURE_TABLES: tuple[tuple[str, str, str, str], ...] = (
     ("routes", "Routes", "Approach, descent, exit and road tracks from KML", "LINESTRING"),
     ("waypoints", "Waypoints", "Parking, start, end and other KML points", "POINT"),
     ("rappels", "Rappels", "Rappel anchor points, labelled R1, R2, ...", "POINT"),
+    # Written by the canyon companion app when it saves a GeoPackage (schema version 3).
+    ("runs", "Runs", "Descents recorded by the companion app (track from GPS fixes)", "LINESTRING"),
+    ("run_events", "Run events", "Start, next, back, jump, mark and finish events", "POINT"),
+    ("run_fixes", "Run GPS fixes", "GPS positions logged during a run", "POINT"),
 )
 
 ATTRIBUTE_TABLES: tuple[tuple[str, str], ...] = (
@@ -50,6 +60,13 @@ ATTRIBUTE_TABLES: tuple[tuple[str, str], ...] = (
     ("beta", "Prose sections of each canyon page: wiki, plain and HTML text"),
     ("links", "External links, from the Beta sites section"),
     ("kml_files", "Source KML files and their checksums"),
+    ("forecasts", "Weather forecast fetched for each canyon, with its fetch time"),
+    ("forecast_days", "Daily forecast values"),
+    ("forecast_hours", "Hourly forecast values"),
+    (
+        "section_stamps",
+        "Content fingerprint of each data section, so updates can tell what changed",
+    ),
 )
 
 _DDL = """
@@ -78,6 +95,9 @@ CREATE TABLE canyons (
     source_url           TEXT NOT NULL,
     source_revision_id   INTEGER,
     fetched_at           TEXT NOT NULL,
+    license_name         TEXT,
+    license_url          TEXT,
+    anonymous_authors    INTEGER,
     geom                 BLOB
 );
 
@@ -86,6 +106,7 @@ CREATE TABLE routes (
     canyon_id    INTEGER NOT NULL REFERENCES canyons(id) ON DELETE CASCADE,
     kind         TEXT NOT NULL CHECK (kind IN ('approach', 'descent', 'exit', 'road', 'unknown')),
     name         TEXT,
+    color        TEXT,
     kml_file_id  INTEGER REFERENCES kml_files(id) ON DELETE SET NULL,
     length_m     REAL,
     geom         BLOB
@@ -96,6 +117,7 @@ CREATE TABLE waypoints (
     canyon_id    INTEGER NOT NULL REFERENCES canyons(id) ON DELETE CASCADE,
     kind         TEXT NOT NULL,
     name         TEXT,
+    description  TEXT,
     kml_file_id  INTEGER REFERENCES kml_files(id) ON DELETE SET NULL,
     geom         BLOB
 );
@@ -108,6 +130,8 @@ CREATE TABLE rappels (
     height_m     REAL,
     anchor_text  TEXT,
     notes        TEXT,
+    kml_name        TEXT,
+    kml_description TEXT,
     kml_file_id  INTEGER REFERENCES kml_files(id) ON DELETE SET NULL,
     geom         BLOB,
     UNIQUE (canyon_id, sequence)
@@ -201,6 +225,104 @@ CREATE TABLE schema_meta (
 );
 """
 
+# Tables added in schema version 3. Runs are keyed by the canyon's Ropewiki title and rappels by
+# sequence number (not by ``canyons.id``): re-running the converter replaces a canyon row, and a
+# foreign key would delete the runs recorded for it. The statements are idempotent so an older
+# file can be upgraded in place; web/canyon-viewer/gpkg-write.js carries an identical copy
+# (tests/geopackage/test_schema_sync.py checks they agree).
+_DDL_V3 = """
+CREATE TABLE IF NOT EXISTS runs (
+    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_uuid     TEXT NOT NULL UNIQUE,
+    canyon_title TEXT NOT NULL,
+    started_at   TEXT NOT NULL,
+    ended_at     TEXT,
+    next_index   INTEGER,
+    source       TEXT,
+    geom         BLOB
+);
+CREATE TABLE IF NOT EXISTS run_events (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_uuid        TEXT NOT NULL REFERENCES runs(run_uuid) ON DELETE CASCADE,
+    seq             INTEGER NOT NULL,
+    t               TEXT NOT NULL,
+    type            TEXT NOT NULL,
+    rappel_sequence INTEGER,
+    acc             REAL,
+    geom            BLOB,
+    UNIQUE (run_uuid, seq)
+);
+CREATE TABLE IF NOT EXISTS run_fixes (
+    id       INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_uuid TEXT NOT NULL REFERENCES runs(run_uuid) ON DELETE CASCADE,
+    seq      INTEGER NOT NULL,
+    t        TEXT NOT NULL,
+    acc      REAL,
+    geom     BLOB,
+    UNIQUE (run_uuid, seq)
+);
+CREATE TABLE IF NOT EXISTS forecasts (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    canyon_id   INTEGER NOT NULL UNIQUE REFERENCES canyons(id) ON DELETE CASCADE,
+    source      TEXT NOT NULL,
+    fetched_at  TEXT NOT NULL,
+    latitude    REAL NOT NULL,
+    longitude   REAL NOT NULL,
+    elevation_m REAL,
+    timezone    TEXT
+);
+CREATE TABLE IF NOT EXISTS forecast_days (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    forecast_id     INTEGER NOT NULL REFERENCES forecasts(id) ON DELETE CASCADE,
+    date            TEXT NOT NULL,
+    weather_code    INTEGER,
+    temp_max_c      REAL,
+    temp_min_c      REAL,
+    precip_mm       REAL,
+    precip_prob_pct INTEGER,
+    wind_max_kmh    REAL,
+    gust_max_kmh    REAL,
+    sunrise         TEXT,
+    sunset          TEXT,
+    UNIQUE (forecast_id, date)
+);
+CREATE INDEX IF NOT EXISTS idx_runs_canyon ON runs (canyon_title);
+"""
+
+# Added in schema version 5: for each canyon, the Ropewiki page authors (attribution) and a
+# fingerprint of every section of its data
+# (see pgstore.SECTIONS), made by the server when it exported the file. A client compares them
+# with the server's to see which sections are out of date. Mirrored in
+# web/canyon-viewer/gpkg-write.js (tests/geopackage/test_forecast.py checks they agree).
+_DDL_V5 = """
+CREATE TABLE IF NOT EXISTS section_stamps (
+    id         INTEGER PRIMARY KEY AUTOINCREMENT,
+    canyon_id  INTEGER NOT NULL REFERENCES canyons(id) ON DELETE CASCADE,
+    section    TEXT NOT NULL,
+    digest     TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    UNIQUE (canyon_id, section)
+);
+CREATE TABLE IF NOT EXISTS forecast_hours (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    forecast_id     INTEGER NOT NULL REFERENCES forecasts(id) ON DELETE CASCADE,
+    time            TEXT NOT NULL,
+    weather_code    INTEGER,
+    temp_c          REAL,
+    precip_mm       REAL,
+    precip_prob_pct INTEGER,
+    wind_kmh        REAL,
+    gust_kmh        REAL,
+    UNIQUE (forecast_id, time)
+);
+CREATE TABLE IF NOT EXISTS authors (
+    id        INTEGER PRIMARY KEY AUTOINCREMENT,
+    canyon_id INTEGER NOT NULL REFERENCES canyons(id) ON DELETE CASCADE,
+    name      TEXT NOT NULL,
+    UNIQUE (canyon_id, name)
+);
+"""
+
 _INDEXES = """
 CREATE INDEX idx_routes_canyon ON routes (canyon_id);
 CREATE INDEX idx_waypoints_canyon ON waypoints (canyon_id);
@@ -232,6 +354,8 @@ def create_geopackage(path: str | Path) -> sqlite3.Connection:
     conn.executescript(_gpkg_core_ddl())
     conn.executescript(_DDL)
     conn.executescript(_INDEXES)
+    conn.executescript(_DDL_V3)
+    conn.executescript(_DDL_V5)
     _register_tables(conn)
     conn.executemany(
         "INSERT INTO schema_meta (key, value) VALUES (?, ?)",
@@ -239,6 +363,36 @@ def create_geopackage(path: str | Path) -> sqlite3.Connection:
     )
     conn.commit()
     return conn
+
+
+# Columns added in version 4: what the KML itself says (line colour, node name and description).
+_COLUMNS_V4 = (
+    ("routes", "color", "TEXT"),
+    ("waypoints", "description", "TEXT"),
+    ("rappels", "kml_name", "TEXT"),
+    ("rappels", "kml_description", "TEXT"),
+    # attribution (schema version 5)
+    ("canyons", "license_name", "TEXT"),
+    ("canyons", "license_url", "TEXT"),
+    ("canyons", "anonymous_authors", "INTEGER"),
+)
+
+
+def upgrade_geopackage(conn: sqlite3.Connection) -> None:
+    """Bring a file built by an older version up to the current schema (adds what is missing:
+    the version 3 tables for runs and forecasts, and the version 4 KML columns)."""
+    conn.executescript(_DDL_V3)
+    conn.executescript(_DDL_V5)
+    for table, column, kind in _COLUMNS_V4:
+        if column not in {r[1] for r in conn.execute(f"PRAGMA table_info({table})")}:
+            conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} {kind}")
+    _register_tables(conn)
+    conn.execute(
+        "INSERT INTO schema_meta (key, value) VALUES ('schema_version', ?)"
+        " ON CONFLICT(key) DO UPDATE SET value = excluded.value",
+        (SCHEMA_VERSION,),
+    )
+    conn.commit()
 
 
 def open_geopackage(path: str | Path) -> sqlite3.Connection:
@@ -320,22 +474,24 @@ INSERT INTO gpkg_spatial_ref_sys VALUES
 def _register_tables(conn: sqlite3.Connection) -> None:
     for table, identifier, description, geom_type in FEATURE_TABLES:
         conn.execute(
-            "INSERT INTO gpkg_contents (table_name, data_type, identifier, description, srs_id)"
+            "INSERT OR IGNORE INTO gpkg_contents"
+            " (table_name, data_type, identifier, description, srs_id)"
             " VALUES (?, 'features', ?, ?, ?)",
             (table, identifier, description, WGS84_SRS_ID),
         )
         conn.execute(
-            "INSERT INTO gpkg_geometry_columns VALUES (?, 'geom', ?, ?, 0, 0)",
+            "INSERT OR IGNORE INTO gpkg_geometry_columns VALUES (?, 'geom', ?, ?, 0, 0)",
             (table, geom_type, WGS84_SRS_ID),
         )
     for table, description in ATTRIBUTE_TABLES:
         conn.execute(
-            "INSERT INTO gpkg_contents (table_name, data_type, identifier, description)"
+            "INSERT OR IGNORE INTO gpkg_contents (table_name, data_type, identifier, description)"
             " VALUES (?, 'attributes', ?, ?)",
             (table, table, description),
         )
     conn.execute(
-        "INSERT INTO gpkg_contents (table_name, data_type, identifier, description, srs_id)"
+        "INSERT OR IGNORE INTO gpkg_contents"
+        " (table_name, data_type, identifier, description, srs_id)"
         " VALUES ('schema_meta', 'attributes', 'schema_meta', 'Schema version', NULL)"
     )
 

@@ -5,17 +5,19 @@
 // Bump VERSION when the file lists change.
 "use strict";
 
-const VERSION = "v1";
+const VERSION = "v10";
 const SHELL_CACHE = `viewer-shell-${VERSION}`;
 const CDN_CACHE = `viewer-cdn-${VERSION}`;
 
 const SHELL = [
-  "./", "style.css", "gpkg.js", "settings.js", "filecache.js", "companion.js", "companion-store.js",
+  "./", "style.css", "manifest.webmanifest", "gpkg.js", "gpkg-write.js", "gpkg-update.js", "forecast.js", "weather-icons.js", "share.js", "catalog.js", "catalog-ui.js", "updates-ui.js",
+  "install.js", "settings.js", "filecache.js", "companion.js", "companion-store.js",
   "companion-ui.js", "settings-ui.js", "app.js",
+  "icons/icon-192.png", "icons/icon-512.png", "icons/apple-touch-icon.png",
 ];
 const CDN = [
-  "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css",
-  "https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js",
+  "https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.css",
+  "https://cdn.jsdelivr.net/npm/maplibre-gl@4.7.1/dist/maplibre-gl.js",
   "https://cdn.jsdelivr.net/npm/@ngageoint/geopackage@4.2.10/dist/geopackage.min.js",
   "https://cdn.jsdelivr.net/npm/@ngageoint/geopackage@4.2.10/dist/sql-wasm.wasm",
 ];

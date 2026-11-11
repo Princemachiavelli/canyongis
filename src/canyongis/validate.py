@@ -19,6 +19,7 @@ Three complementary scoring modes:
 from __future__ import annotations
 
 import argparse
+import html
 import json
 import re
 import xml.etree.ElementTree as ET
@@ -121,10 +122,59 @@ def _coord_tokens_to_point(text: str) -> Point | None:
         return None
 
 
+def kml_color_to_hex(value: str | None) -> str | None:
+    """KML colours are ``aabbggrr``: return ``#rrggbb`` (alpha dropped), or None."""
+    text = (value or "").strip().lstrip("#")
+    if not re.fullmatch(r"[0-9a-fA-F]{6}|[0-9a-fA-F]{8}", text):
+        return None
+    bgr = text[-6:]
+    return f"#{bgr[4:6]}{bgr[2:4]}{bgr[0:2]}".lower()
+
+
+def _style_colors(root: ET.Element) -> dict[str, str | None]:
+    """Line colour of every shared ``Style`` / ``StyleMap`` by id (a map follows its normal)."""
+    colors: dict[str, str | None] = {}
+    for style in root.iter(f"{KML_NS}Style"):
+        if style.get("id"):
+            colors[style.get("id")] = kml_color_to_hex(
+                style.findtext(f"{KML_NS}LineStyle/{KML_NS}color")
+            )
+    for smap in root.iter(f"{KML_NS}StyleMap"):
+        for pair in smap.findall(f"{KML_NS}Pair"):
+            if pair.findtext(f"{KML_NS}key") == "normal":
+                ref = (pair.findtext(f"{KML_NS}styleUrl") or "").lstrip("#")
+                if smap.get("id"):
+                    colors[smap.get("id")] = colors.get(ref)
+    return colors
+
+
+def _line_color(pm: ET.Element, shared: dict[str, str | None]) -> str | None:
+    """The colour the KML gives a placemark's line, inline or through a shared style."""
+    inline = kml_color_to_hex(pm.findtext(f"{KML_NS}Style/{KML_NS}LineStyle/{KML_NS}color"))
+    if inline:
+        return inline
+    return shared.get((pm.findtext(f"{KML_NS}styleUrl") or "").lstrip("#"))
+
+
+def plain_text(value: str | None) -> str | None:
+    """A KML description as plain text: tags removed, entities decoded, one line per break."""
+    if not value:
+        return None
+    text = re.sub(r"(?i)<br\s*/?>|</p>|</div>|</li>", "\n", value)
+    text = html.unescape(re.sub(r"<[^>]+>", "", text))
+    lines = (re.sub(r"[ \t\r\f\v]+", " ", line).strip() for line in text.split("\n"))
+    return "\n".join(line for line in lines if line) or None
+
+
 def parse_kml(path: str | Path) -> KmlFeatures:
-    """Parse a KML file into classified GeoDataFrames (WGS84)."""
+    """Parse a KML file into classified GeoDataFrames (WGS84).
+
+    Lines also carry their ``color`` (``#rrggbb`` from the KML's own style, or None) and every
+    feature its plain-text ``description``.
+    """
     tree = ET.parse(str(path))
     root = tree.getroot()
+    shared_colors = _style_colors(root)
 
     desc_lines: list[dict[str, Any]] = []
     appr_lines: list[dict[str, Any]] = []
@@ -135,6 +185,8 @@ def parse_kml(path: str | Path) -> KmlFeatures:
         name_el = pm.find(f"{KML_NS}name")
         name = (name_el.text or "").strip() if name_el is not None else ""
         category = _classify(name)
+        description = plain_text(pm.findtext(f"{KML_NS}description"))
+        color = _line_color(pm, shared_colors)
 
         for ls in pm.iter(f"{KML_NS}LineString"):
             coords = ls.find(f"{KML_NS}coordinates")
@@ -143,7 +195,13 @@ def parse_kml(path: str | Path) -> KmlFeatures:
             geom = _coord_tokens_to_line(coords.text)
             if geom is None:
                 continue
-            row = {"name": name, "category": category, "geometry": geom}
+            row = {
+                "name": name,
+                "category": category,
+                "color": color,
+                "description": description,
+                "geometry": geom,
+            }
             if category == "descent":
                 desc_lines.append(row)
             elif category == "approach":
@@ -158,7 +216,9 @@ def parse_kml(path: str | Path) -> KmlFeatures:
             geom = _coord_tokens_to_point(coords.text)
             if geom is None:
                 continue
-            pts.append({"name": name, "category": category, "geometry": geom})
+            pts.append(
+                {"name": name, "category": category, "description": description, "geometry": geom}
+            )
 
     wgs84 = "EPSG:4326"
 

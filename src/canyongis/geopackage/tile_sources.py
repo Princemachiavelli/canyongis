@@ -14,6 +14,7 @@ from __future__ import annotations
 import io
 import sqlite3
 from pathlib import Path
+from typing import Any
 
 from .tiles import TILE_SIZE, Render, tile_bounds_3857
 
@@ -105,6 +106,80 @@ def raster_source(
             rgba = np.dstack([np.moveaxis(planes[:3], 0, -1), alpha])
             Image.fromarray(rgba, "RGBA").save(out, "PNG")
         return out.getvalue()
+
+    return render
+
+
+# Terrarium encoding (as used by Mapzen / AWS terrain tiles and read by MapLibre's raster-dem
+# source): metres = (R * 256 + G + B / 256) - 32768, in a lossless PNG. JPEG or any resampling of
+# the encoded colours would corrupt the elevation, so these tiles are only ever PNG.
+TERRARIUM_OFFSET = 32768.0
+
+
+def encode_terrarium(elevation_m: Any) -> bytes:
+    """A 256x256 float array of metres as a Terrarium PNG."""
+    import numpy as np
+    from PIL import Image
+
+    value = np.clip(elevation_m.astype(np.float64) + TERRARIUM_OFFSET, 0.0, 65535.99)
+    red = np.floor(value / 256.0)
+    green = np.floor(value - red * 256.0)
+    blue = np.floor((value - np.floor(value)) * 256.0)
+    rgb = np.stack([red, green, blue], axis=-1).astype(np.uint8)
+    out = io.BytesIO()
+    Image.fromarray(rgb, "RGB").save(out, "PNG")
+    return out.getvalue()
+
+
+def decode_terrarium(png: bytes) -> Any:
+    """Metres from a Terrarium PNG (the inverse of ``encode_terrarium``)."""
+    import numpy as np
+    from PIL import Image
+
+    rgb = np.asarray(Image.open(io.BytesIO(png)).convert("RGB"), dtype=np.float64)
+    return (rgb[..., 0] * 256.0 + rgb[..., 1] + rgb[..., 2] / 256.0 - TERRARIUM_OFFSET).astype(
+        np.float32
+    )
+
+
+def terrain_source(path: str | Path) -> Render:
+    """Render Web Mercator Terrarium tiles from a DEM GeoTIFF (elevations in metres).
+
+    Elevations are resampled bilinearly in floating point. Pixels the DEM does not cover are
+    filled from the nearest covered pixel (a hole left at 0 m would be a cliff in 3D); tiles the
+    DEM does not touch at all return None.
+    """
+    import numpy as np
+    import rasterio
+    from rasterio.enums import Resampling
+    from rasterio.transform import from_bounds
+    from rasterio.warp import reproject
+    from scipy import ndimage
+
+    src = rasterio.open(path)
+
+    def render(zoom: int, x: int, y: int) -> bytes | None:
+        dst = np.full((TILE_SIZE, TILE_SIZE), np.nan, dtype=np.float32)
+        reproject(
+            source=rasterio.band(src, 1),
+            destination=dst,
+            src_transform=src.transform,
+            src_crs=src.crs,
+            src_nodata=src.nodata,
+            dst_transform=from_bounds(*tile_bounds_3857(zoom, x, y), TILE_SIZE, TILE_SIZE),
+            dst_crs="EPSG:3857",
+            dst_nodata=np.nan,
+            resampling=Resampling.bilinear,
+        )
+        covered = np.isfinite(dst)
+        if not covered.any():
+            return None
+        if not covered.all():
+            nearest = ndimage.distance_transform_edt(
+                ~covered, return_distances=False, return_indices=True
+            )
+            dst = dst[tuple(nearest)]
+        return encode_terrarium(dst)
 
     return render
 

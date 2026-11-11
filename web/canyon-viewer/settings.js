@@ -1,16 +1,28 @@
-// Viewer settings (units, compass), kept in localStorage. Works in the browser (global
+// Viewer settings (units, compass, hot and cold limits), kept in localStorage. Works in the browser (global
 // `settings`) and in Node for tests, where a storage object can be passed in.
 (function (root) {
   "use strict";
 
   const KEY = "canyon-viewer.settings";
-  const DEFAULTS = { units: "metric", compass: false };
+  // Hot and cold limits for the temperature pictures, always in degrees C (the defaults are
+  // 85 and 60 degrees F). Shown and edited in the chosen units.
+  const HOT_C = (85 - 32) / 1.8;
+  const COLD_C = (60 - 32) / 1.8;
+  const DEFAULTS = { units: "metric", compass: false, hotC: HOT_C, coldC: COLD_C };
+  const validTemp = (v) => typeof v === "number" && Number.isFinite(v) && v >= -50 && v <= 60;
 
   // Keep only known keys with valid values, so a stale or hand-edited entry cannot break the page.
   function sanitize(raw) {
     const out = { ...DEFAULTS };
     if (raw && (raw.units === "metric" || raw.units === "imperial")) out.units = raw.units;
     if (raw && typeof raw.compass === "boolean") out.compass = raw.compass;
+    if (raw && validTemp(raw.hotC)) out.hotC = raw.hotC;
+    if (raw && validTemp(raw.coldC)) out.coldC = raw.coldC;
+    // A cold limit at or above the hot one makes no sense: use the defaults for both.
+    if (out.coldC >= out.hotC) {
+      out.hotC = HOT_C;
+      out.coldC = COLD_C;
+    }
     return out;
   }
 
@@ -32,7 +44,7 @@
     };
   }
 
-  const api = { create, sanitize, DEFAULTS, KEY };
+  const api = { create, sanitize, DEFAULTS, KEY, HOT_C, COLD_C };
   if (typeof module !== "undefined" && module.exports) {
     module.exports = api;
   } else {

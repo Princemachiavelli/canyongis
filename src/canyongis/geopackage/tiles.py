@@ -13,6 +13,7 @@ import math
 import sqlite3
 from collections.abc import Callable, Iterable, Iterator
 from dataclasses import dataclass
+from datetime import UTC, datetime, timedelta
 
 WEB_MERCATOR_SRS_ID = 3857
 TILE_SIZE = 256
@@ -36,6 +37,82 @@ ZOOMS_MAP = range(13, 19)
 ZOOMS_IMAGERY = range(14, 19)
 ZOOMS_HILLSHADE = range(14, 18)
 ZOOMS_CONTOURS = range(14, 18)
+# Elevation for the 3D map. Beyond the last zoom the viewer stretches the data; 16 is about 2.4 m
+# per pixel at 34 N, close to the 1 m DEM's useful detail at 256 px a tile.
+ZOOMS_TERRAIN = range(11, 17)
+
+# ---- when a built layer is out of date ----------------------------------------------------
+# Each tile table is stamped with the version of the code that built it and when. A client (or
+# the server's own artifact) is out of date for a layer when it has none, when its version is
+# older than LAYER_VERSIONS says, or when it is older than TILE_MAX_AGE. Bump a layer's version
+# whenever its zoom range, source data, rendering or encoding changes, so every copy of it gets
+# rebuilt. A table not listed here counts as version 1.
+LAYER_VERSIONS: dict[str, int] = {
+    "tiles_osm": 1,
+    "tiles_imagery": 1,
+    "tiles_hillshade": 1,
+    "tiles_contours_m": 1,
+    "tiles_contours_ft": 1,
+    "tiles_terrain": 1,
+}
+TILE_MAX_AGE = timedelta(days=365)
+
+
+def layer_version(table: str) -> int:
+    return LAYER_VERSIONS.get(table, 1)
+
+
+def utc_now_iso() -> str:
+    return datetime.now(UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def layer_staleness(
+    version: int | None, built_at: str | None, table: str, now: datetime | None = None
+) -> str | None:
+    """Why a held layer is out of date: ``"version"``, ``"age"`` or ``"unknown"`` (no build
+    time to judge by), else None. A layer that is not held at all is "missing" to the caller."""
+    if version is None or version < layer_version(table):
+        return "version"
+    try:
+        built = datetime.fromisoformat((built_at or "").replace("Z", "+00:00"))
+    except ValueError:
+        return "unknown"
+    if built.tzinfo is None:
+        built = built.replace(tzinfo=UTC)
+    return "age" if (now or datetime.now(UTC)) - built > TILE_MAX_AGE else None
+
+
+def stamp_tile_layer(conn: sqlite3.Connection, table: str) -> None:
+    """Record that ``table`` was just built, by this version of the code."""
+    conn.execute(
+        "CREATE TABLE IF NOT EXISTS tile_stamps ("
+        " layer TEXT PRIMARY KEY, version INTEGER NOT NULL, built_at TEXT NOT NULL)"
+    )
+    conn.execute(
+        "INSERT OR REPLACE INTO tile_stamps (layer, version, built_at) VALUES (?,?,?)",
+        (table, layer_version(table), utc_now_iso()),
+    )
+
+
+def read_tile_stamps(conn: sqlite3.Connection) -> dict[str, dict[str, object]]:
+    """The tile layers a file holds: {table: {version, built_at}}. A layer from before stamps
+    existed counts as version 1, built when its gpkg_contents row last changed."""
+    layers: dict[str, dict[str, object]] = {
+        t: {"version": 1, "built_at": changed}
+        for t, changed in conn.execute(
+            "SELECT table_name, last_change FROM gpkg_contents WHERE data_type = 'tiles'"
+        )
+    }
+    has = conn.execute(
+        "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'tile_stamps'"
+    ).fetchone()
+    if has:
+        for table, version, built_at in conn.execute(
+            "SELECT layer, version, built_at FROM tile_stamps"
+        ):
+            if table in layers:
+                layers[table] = {"version": version, "built_at": built_at}
+    return layers
 
 
 @dataclass(frozen=True)
@@ -207,6 +284,7 @@ def write_tile_table(
                 (tile.zoom, tile.x, tile.tms_row, sqlite3.Binary(data)),
             )
             written[zoom] = written.get(zoom, 0) + 1
+    stamp_tile_layer(conn, table)
     conn.commit()
     return written
 

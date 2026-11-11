@@ -1,6 +1,6 @@
 // Companion mode screen: live GPS guidance down the selected canyon. Starts a run, shows the
 // next rappel and how far away it is, and records what the user does (next / back / save my
-// location / finish) in IndexedDB. Reuses the page's single Leaflet map by moving it into this
+// location / finish) in IndexedDB. Reuses the page's single MapLibre map by moving it into this
 // view while a run is going. The logic lives in companion.js, storage in companion-store.js.
 (function (root) {
   "use strict";
@@ -9,13 +9,115 @@
 
   // deps: { el, $, map, goTo(viewName) }
   function create(deps) {
-    const { el, $, map, goTo } = deps;
+    const { el, $, map, whenStyleReady, fitPoints, labelImage, goTo } = deps;
     const top = $("companion-top");
     const slot = $("companion-map-slot");
     const actions = $("companion-actions");
     const mapEl = map.getContainer();
     const mapHome = $("view-map");
-    const layer = L.layerGroup().addTo(map);
+    // Everything on the map for a run is a layer, so it sits on the terrain like the KML's track
+    // does (DOM markers drift away from it when the view moves): the run's rappels, the position
+    // with its accuracy circle, and the heading wedge.
+    const EMPTY = { type: "FeatureCollection", features: [] };
+    let runNodeCount = 0;
+    // The wedge is drawn once into an image (it points up; the layer rotates it).
+    function wedgeImage() {
+      const size = 44 * 2;
+      const canvas = document.createElement("canvas");
+      canvas.width = size;
+      canvas.height = size;
+      const ctx = canvas.getContext("2d");
+      ctx.scale(2, 2);
+      ctx.lineJoin = "round";
+      ctx.lineWidth = 2;
+      ctx.fillStyle = "#3d8bfd";
+      ctx.strokeStyle = "#fff";
+      ctx.beginPath();
+      ctx.moveTo(22, 2);
+      ctx.lineTo(31, 17);
+      ctx.lineTo(22, 13);
+      ctx.lineTo(13, 17);
+      ctx.closePath();
+      ctx.stroke();
+      ctx.fill();
+      return ctx.getImageData(0, 0, size, size);
+    }
+    whenStyleReady(() => {
+      map.addSource("run-nodes", { type: "geojson", data: EMPTY });
+      map.addSource("run-position", { type: "geojson", data: EMPTY });
+      map.addImage("heading-wedge", wedgeImage(), { pixelRatio: 2 });
+      const part = (name) => ["==", ["get", "part"], name];
+      // the rappel to go to next has a gold ring and its name; ones saved in the field are green
+      map.addLayer({
+        id: "run-nodes", type: "circle", source: "run-nodes",
+        paint: {
+          "circle-radius": ["case", ["get", "active"], 9, 6],
+          "circle-color": ["case", ["get", "recorded"], "#7bd88f", "#f3e9dc"],
+          "circle-stroke-color": ["case", ["get", "active"], "#ffd166", "#7c3f1d"],
+          "circle-stroke-width": ["case", ["get", "active"], 3, 2],
+        },
+      });
+      map.addLayer({
+        id: "run-labels", type: "symbol", source: "run-nodes", filter: ["has", "icon"],
+        layout: {
+          "icon-image": ["get", "icon"], "icon-anchor": "left", "icon-offset": [14, 0],
+          "icon-allow-overlap": true, "icon-ignore-placement": true,
+          "icon-pitch-alignment": "viewport", "icon-rotation-alignment": "viewport",
+        },
+      });
+      map.addLayer({
+        id: "user-accuracy", type: "fill", source: "run-position", filter: part("accuracy"),
+        paint: { "fill-color": "#3d8bfd", "fill-opacity": 0.12 },
+      });
+      map.addLayer({
+        id: "user-accuracy-edge", type: "line", source: "run-position", filter: part("accuracy"),
+        paint: { "line-color": "#3d8bfd", "line-width": 1 },
+      });
+      map.addLayer({
+        id: "user-dot", type: "circle", source: "run-position", filter: part("dot"),
+        paint: {
+          "circle-radius": 8, "circle-color": "#3d8bfd", "circle-stroke-color": "#fff",
+          "circle-stroke-width": 3,
+        },
+      });
+      // Rotated to the compass heading on the ground (not the screen), so it stays right when
+      // the map is turned or tilted.
+      map.addLayer({
+        id: "user-wedge", type: "symbol", source: "run-position", filter: part("wedge"),
+        layout: {
+          "icon-image": "heading-wedge", "icon-rotate": ["get", "heading"],
+          "icon-rotation-alignment": "map", "icon-pitch-alignment": "map",
+          "icon-allow-overlap": true, "icon-ignore-placement": true,
+        },
+      });
+    });
+
+    // A circle of `radius` metres around a point, as a polygon.
+    function circlePolygon(lon, lat, radius, steps = 48) {
+      const dLat = radius / 111320;
+      const dLon = dLat / Math.max(0.01, Math.cos((lat * Math.PI) / 180));
+      const ring = [];
+      for (let i = 0; i <= steps; i += 1) {
+        const a = (i / steps) * 2 * Math.PI;
+        ring.push([lon + dLon * Math.cos(a), lat + dLat * Math.sin(a)]);
+      }
+      return { type: "Polygon", coordinates: [ring] };
+    }
+
+    // The position, its accuracy circle and (with the compass on and a heading) the wedge.
+    function setUserSource(position) {
+      const heading = position && compassOn() ? currentHeading() : null;
+      const features = position ? [
+        { type: "Feature", properties: { part: "accuracy" },
+          geometry: circlePolygon(position.lon, position.lat, position.acc || 0) },
+        { type: "Feature", properties: { part: "dot" },
+          geometry: { type: "Point", coordinates: [position.lon, position.lat] } },
+        ...(heading === null ? [] : [{
+          type: "Feature", properties: { part: "wedge", heading },
+          geometry: { type: "Point", coordinates: [position.lon, position.lat] } }]),
+      ] : [];
+      whenStyleReady(() => map.getSource("run-position").setData({ type: "FeatureCollection", features }));
+    }
 
     let currentView = "canyons";
     let detail = null;            // canyon selected in the Canyons tab (loadCanyon result)
@@ -32,11 +134,7 @@
     let lastRecorded = 0;
     let watchId = null;
     let clock = null;
-    let userDot = null;
-    let userCircle = null;
-    let userWedge = null;
     let orientation = null;       // compass heading of the screen's "up", from the device sensor
-    let headingEl = null;         // rotating wedge on the position dot
     let headingFrame = 0;
     let ownMove = false;          // true while this code (not the user) moves the map
     let locateBox = null;
@@ -44,10 +142,11 @@
     const open = { notes: false, rappels: false };
     const refs = {};
 
-    const getStore = () => {
+    // The page shares one store with the forecast and GeoPackage-saving code (deps.getStore).
+    const getStore = deps.getStore || (() => {
       storePromise = storePromise || root.companionStore.openStore(lib);
       return storePromise;
-    };
+    });
     const running = () => Boolean(session && session.run.endedAt === null);
     const units = () => settings.get().units;
 
@@ -55,7 +154,7 @@
 
     // The map's slot changes height as the cards above and below it change.
     if (typeof ResizeObserver !== "undefined") {
-      new ResizeObserver(() => map.invalidateSize()).observe(slot);
+      new ResizeObserver(() => map.resize()).observe(slot);
     }
 
     // The map lives in the Map view, except while a run is active and this view is showing.
@@ -64,7 +163,7 @@
       slot.hidden = !here;
       const host = here ? slot : mapHome;
       if (mapEl.parentNode !== host) host.append(mapEl);
-      if (currentView === "companion" || currentView === "map") map.invalidateSize();
+      if (currentView === "companion" || currentView === "map") map.resize();
     }
 
     // Run a map move made by the app itself, so it is not mistaken for the user adjusting the map.
@@ -75,10 +174,10 @@
 
     function fitTrack() {
       if (!session) return;
-      const points = session.track ? session.track.coordinates.map(([lon, lat]) => [lat, lon])
-        : session.rappels.filter((r) => r.location).map((r) => [r.location.lat, r.location.lon]);
+      const points = session.track ? session.track.coordinates.map(([lon, lat]) => [lon, lat])
+        : session.rappels.filter((r) => r.location).map((r) => [r.location.lon, r.location.lat]);
       if (points.length) {
-        ownMapMove(() => map.fitBounds(points, { padding: [24, 24], maxZoom: 17, animate: false }));
+        ownMapMove(() => fitPoints(points, { padding: 24, maxZoom: 16, duration: 0 }));
       }
     }
 
@@ -90,29 +189,23 @@
       + '<circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="1.5" fill="currentColor"/>'
       + '<path d="M12 2v4M12 18v4M2 12h4M18 12h4"/></svg>';
 
-    const locateControl = L.control({ position: "bottomright" });
-    locateControl.onAdd = () => {
-      locateBox = el("div", { class: "locate-control leaflet-bar" });
-      locateBtn = el("button", {
-        type: "button", class: "locate-btn", title: "Follow my location",
-        "aria-label": "Follow my location", "aria-pressed": "false",
-      });
-      locateBtn.innerHTML = LOCATE_ICON; // fixed markup above, no user text
-      locateBtn.addEventListener("click", () => setFollow(!follow));
-      L.DomEvent.disableClickPropagation(locateBox);
-      locateBox.append(locateBtn);
-      locateBox.hidden = true;
-      return locateBox;
-    };
-    locateControl.addTo(map);
+    locateBox = el("div", { class: "locate-control maplibregl-ctrl map-bar" });
+    locateBtn = el("button", {
+      type: "button", class: "locate-btn", title: "Follow my location",
+      "aria-label": "Follow my location", "aria-pressed": "false",
+    });
+    locateBtn.innerHTML = LOCATE_ICON; // fixed markup above, no user text
+    locateBtn.addEventListener("click", () => setFollow(!follow));
+    locateBox.append(locateBtn);
+    locateBox.hidden = true;
+    map.addControl({ onAdd: () => locateBox, onRemove: () => locateBox.remove() }, "bottom-right");
 
     function setFollow(on) {
       follow = on && running();
       locateBtn.classList.toggle("active", follow);
       locateBtn.setAttribute("aria-pressed", String(follow));
       if (follow && fix) {
-        ownMapMove(() => map.setView([fix.lat, fix.lon], Math.max(map.getZoom(), 16),
-          { animate: false }));
+        ownMapMove(() => map.jumpTo({ center: [fix.lon, fix.lat], zoom: Math.max(map.getZoom(), 15) }));
       }
     }
 
@@ -122,57 +215,38 @@
     }
 
     map.on("dragstart", () => { if (follow) setFollow(false); });
-    map.on("zoomstart", () => { if (follow && !ownMove) setFollow(false); });
+    // A zoom by touch or wheel has an originalEvent; one made by the app does not.
+    map.on("zoomstart", (e) => { if (follow && !ownMove && e.originalEvent) setFollow(false); });
 
     function drawMap() {
-      layer.clearLayers();
-      userDot = null;
-      userCircle = null;
-      userWedge = null;
-      headingEl = null;
-      if (!session) return;
-      const active = activeRappel();
-      for (const r of session.rappels) {
-        const rec = recorded.get(r.id);
-        const pos = rec || r.location;
-        if (!pos) continue;
-        const isActive = active && r.id === active.id;
-        L.circleMarker([pos.lat, pos.lon], {
-          radius: isActive ? 9 : 6,
-          color: isActive ? "#ffd166" : "#7c3f1d",
-          weight: isActive ? 3 : 2,
-          fillColor: rec ? "#7bd88f" : "#f3e9dc",
-          fillOpacity: 1,
-        }).bindTooltip(r.name || `R${r.order}`, { permanent: Boolean(isActive), direction: "top" })
-          .addTo(layer);
+      setUserSource(null);
+      const nodes = [];
+      if (session) {
+        const active = activeRappel();
+        for (const r of session.rappels) {
+          const rec = recorded.get(r.id);
+          const pos = rec || r.location;
+          if (!pos) continue;
+          nodes.push({
+            name: r.name || `R${r.order}`, active: Boolean(active && r.id === active.id),
+            recorded: Boolean(rec), coordinates: [pos.lon, pos.lat],
+          });
+        }
       }
-      drawUser();
+      runNodeCount = nodes.length;
+      whenStyleReady(() => map.getSource("run-nodes").setData({
+        type: "FeatureCollection",
+        features: nodes.map(({ coordinates, ...properties }) => ({
+          type: "Feature",
+          properties: properties.active ? { ...properties, icon: labelImage(properties.name) } : properties,
+          geometry: { type: "Point", coordinates },
+        })),
+      }));
+      if (session) drawUser();
     }
 
     function drawUser() {
-      if (userDot) { layer.removeLayer(userDot); userDot = null; }
-      if (userCircle) { layer.removeLayer(userCircle); userCircle = null; }
-      if (userWedge) { layer.removeLayer(userWedge); userWedge = null; }
-      headingEl = null;
-      if (!fix || !running()) return;
-      userCircle = L.circle([fix.lat, fix.lon], {
-        radius: fix.acc, color: "#3d8bfd", weight: 1, fillOpacity: 0.12, interactive: false,
-      }).addTo(layer);
-      userDot = L.circleMarker([fix.lat, fix.lon], {
-        radius: 8, color: "#fff", weight: 3, fillColor: "#3d8bfd", fillOpacity: 1, interactive: false,
-      }).addTo(layer);
-      headingEl = null;
-      if (compassOn()) {
-        const icon = L.divIcon({
-          className: "heading-icon", iconSize: [44, 44], iconAnchor: [22, 22],
-          html: '<svg class="heading-wedge" viewBox="0 0 44 44" aria-hidden="true">'
-            + '<path d="M22 2 L31 17 L22 13 L13 17 Z" fill="#3d8bfd" stroke="#fff" stroke-width="2" '
-            + 'stroke-linejoin="round"/></svg>',
-        });
-        userWedge = L.marker([fix.lat, fix.lon], { icon, interactive: false, keyboard: false }).addTo(layer);
-        headingEl = userWedge.getElement().querySelector(".heading-wedge");
-        applyHeading();
-      }
+      setUserSource(fix && running() ? fix : null);
     }
 
     // ---- compass ---------------------------------------------------------------------------
@@ -191,10 +265,7 @@
 
     function applyHeading() {
       headingFrame = 0;
-      if (!headingEl) return;
-      const h = currentHeading();
-      headingEl.style.display = h === null ? "none" : "";
-      if (h !== null) headingEl.style.transform = `rotate(${h}deg)`;
+      if (compassOn()) drawUser();
     }
 
     function scheduleHeading() {
@@ -248,7 +319,7 @@
       }
       drawUser();
       if (follow && (currentView === "companion" || currentView === "map")) {
-        ownMapMove(() => map.panTo([f.lat, f.lon], { animate: true, duration: 0.5 }));
+        ownMapMove(() => map.jumpTo({ center: [f.lon, f.lat] }));
       }
       updateLive();
     }
@@ -416,11 +487,8 @@
     async function exportRun(runId) {
       const store = await getStore();
       const doc = await store.exportRun(runId);
-      const url = URL.createObjectURL(new Blob([JSON.stringify(doc, null, 2)],
-        { type: "application/json" }));
-      const a = el("a", { href: url, download: `run-${runId}.json` });
-      a.click();
-      setTimeout(() => URL.revokeObjectURL(url), 10_000);
+      await root.share.deliverFile(root.share.makeFile(
+        `run-${runId}.json`, JSON.stringify(doc, null, 2), "application/json"));
     }
 
     function leave() {
@@ -543,6 +611,7 @@
       refs.clock = el("span", { class: "mono" });
       refs.gps = el("div", { class: "gps" });
       refs.distance = el("div", { class: "distance" });
+      refs.weather = el("div", { class: "weather-icons" });
 
       let card;
       if (rappel) {
@@ -582,11 +651,15 @@
         ]);
       }
       fill(top, [
-        el("div", { class: "companion-head" }, [el("h2", {}, [session.title]), refs.clock]),
+        el("div", { class: "companion-head" }, [
+          el("h2", {}, [session.title]),
+          el("div", { class: "clock-col" }, [refs.clock, refs.weather]),
+        ]),
         refs.gps,
         card,
         session.track ? null : el("p", { class: "muted" }, ["No descent track: distances are straight-line."]),
       ]);
+      drawWeather();
 
       if (ended) {
         fill(actions, [
@@ -660,6 +733,16 @@
       }
     }
 
+    // Pictures for today's forecast (weather, and hot / cold) under the stopwatch.
+    function drawWeather() {
+      if (!session || !refs.weather) return;
+      const record = deps.getForecast ? deps.getForecast(session.title) : null;
+      const icons = root.forecast.iconsFor(
+        root.forecast.dayForToday(record), settings.get(), units());
+      refs.weather.replaceChildren(
+        ...icons.map((icon) => root.weatherIcons.element(icon.name, icon.label)));
+    }
+
     // ---- hooks for the page ----------------------------------------------------------------
 
     const controller = {
@@ -673,6 +756,8 @@
         syncCompass();
         render();
       },
+      // The forecast was loaded or updated.
+      refreshWeather: drawWeather,
       onViewChange(name) {
         currentView = name;
         placeMap();
@@ -680,7 +765,7 @@
       },
       // Read-only view of the run for tests and debugging.
       state: () => ({
-        session, recorded, fix, geoError, layers: layer.getLayers().length,
+        session, recorded, fix, geoError, nodes: runNodeCount,
       }),
     };
     root.companionUI.last = controller;

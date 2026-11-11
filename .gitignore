@@ -35,6 +35,7 @@ newout/
 out
 out*
 *.png
+!web/canyon-viewer/icons/*.png
 *.tif
 *.xml
 tmp
